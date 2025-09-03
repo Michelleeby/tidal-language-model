@@ -1,0 +1,8 @@
+torch
+spacy
+ruamel.yaml
+numpy
+matplotlib
+scipy
+networkx
+tqdm

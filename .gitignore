@@ -1,0 +1,59 @@
+# Byte-compiled / optimized / C files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+tidal/
+tidal-env/
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Project-specific generated files
+# Ignore all experiment outputs (models, logs, results)
+experiments/
+corpus/
+prompt.txt
+configs/
+
+# Ignore all cached data (datasets, vocabularies)
+cache/
+
+# Ignore the top-level log directory
+logs/
+*.log
+
+# IDE and editor configuration files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-generated files
+.DS_Store
+Thumbs.db
