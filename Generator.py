@@ -71,7 +71,15 @@ def run_generation(args):
         
     print(f"Loading model state from: {args.checkpoint}")
     device = "cuda" if torch.cuda.is_available() and config['DEVICE'] != 'cpu' else "cpu"
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    print(f"Loading model state from: {args.checkpoint}")
+    device = "cuda" if torch.cuda.is_available() and config['DEVICE'] != 'cpu' else "cpu"
+
+    # torch.compile() prefixes state_dict keys with 
+    # '_orig_mod.'; this removes the prefix to load 
+    # the state into the un-compiled inference model.
+    state_dict = torch.load(args.checkpoint, map_location=device)
+    clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+    model.load_state_dict(clean_state_dict)
     model.to(device)
     print("Model loaded successfully.")
 

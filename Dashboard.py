@@ -22,73 +22,89 @@ class TrainingDashboard:
         )
 
     @staticmethod
-    def _get_event_file_path(experiment_path):
-        """Finds the path to the main TensorBoard event file."""
-        log_dir = os.path.join(experiment_path, 'tensorboard_logs')
-        event_files = glob.glob(os.path.join(log_dir, 'events.out.tfevents.*'))
-        # Return the first match, as there should only be one main event file per run
-        return event_files[0] if event_files else None
-
-    @staticmethod
     @st.cache_data(ttl=300)
-    def _load_tensorboard_data(event_file_path, config, file_stats):
+    def _load_tensorboard_data(experiment_path, file_stats):
         """
-        Loads scalar and text data from a TensorBoard event file, parsing them into
-        pandas DataFrames organized by category.
-        The file_stats argument makes the cache aware of file changes.
+        Recursively finds and loads all TensorBoard event files, parsing directory
+        names to correctly identify and separate individual metrics.
         """
-        if not event_file_path:
+        log_dir = os.path.join(experiment_path, 'tensorboard_logs')
+        if not os.path.isdir(log_dir):
             return {}, None
-
-        try:
-            # Initialize the accumulator to load all data
-            ea = event_accumulator.EventAccumulator(
-                event_file_path,
-                size_guidance={
-                    event_accumulator.SCALARS: 0,
-                    event_accumulator.TENSORS: 0
-                }
-            )
-            ea.Reload()
-
-            # --- Process Scalar Data (for charts) ---
-            scalar_data = collections.defaultdict(list)
-            for tag in ea.Tags()['scalars']:
-                # Tags from `add_scalars` are like 'Category/Metric'
-                # Tags from `add_scalar` are just 'Category'
-                if '/' in tag:
-                    category, metric = tag.split('/', 1)
+    
+        all_event_files = glob.glob(os.path.join(log_dir, '**', 'events.out.tfevents.*'), recursive=True)
+        if not all_event_files:
+            return {}, None
+    
+        scalar_data = collections.defaultdict(list)
+    
+        for event_file in all_event_files:
+            try:
+                # --- PARSE DIRECTORY FOR METRIC NAME ---
+                parent_dir_path = os.path.dirname(event_file)
+                parent_dir_name = os.path.basename(parent_dir_path)
+    
+                ea = event_accumulator.EventAccumulator(event_file, size_guidance={event_accumulator.SCALARS: 0})
+                ea.Reload()
+                
+                if not ea.Tags()['scalars']:
+                    continue
+                
+                # The tag inside the file is the general CATEGORY (e.g., "Physics")
+                category_tag = ea.Tags()['scalars'][0]
+    
+                # Determine the specific METRIC name
+                if parent_dir_name == 'tensorboard_logs':
+                    # This is a top-level file (like Learning Rate)
+                    # The category and metric are the same
+                    metric_name = category_tag
                 else:
-                    category, metric = tag, tag
-
-                events = ea.Scalars(tag)
+                    # This is a subdirectory. The name is encoded in the directory.
+                    # e.g., directory "Physics_G" and category "Physics" -> metric "G"
+                    # We replace the category and the underscore to get the metric name.
+                    metric_name = parent_dir_name.replace(f"{category_tag}_", "", 1)
+    
+    
+                # --- DATA EXTRACTION ---
+                events = ea.Scalars(category_tag)
+                if not events:
+                    continue
+                
                 df = pd.DataFrame(
                     [(event.step, event.value) for event in events],
                     columns=['step', 'value']
                 )
-                df['metric'] = metric
-                scalar_data[category].append(df)
+                # Assign the CORRECT, specific metric name to the metric column
+                df['metric'] = metric_name
+                
+                # Group the DataFrame by its general category
+                scalar_data[category_tag].append(df)
+    
+            except Exception:
+                # Silently ignore corrupted or empty files
+                pass
             
-            # Combine the lists of DataFrames for each category into a single DataFrame
-            dataframes = {
-                category: pd.concat(dfs, ignore_index=True)
-                for category, dfs in scalar_data.items()
-            }
-
-            # --- Process Text Data (for cluster analysis) ---
-            cluster_text = None
-            if 'tensors' in ea.Tags() and 'Cluster_Analysis' in ea.Tags()['tensors']:
-                text_events = ea.Tensors('Cluster_Analysis')
-                if text_events:
-                    # Get the most recent text event and decode it
-                    latest_event = text_events[-1]
-                    cluster_text = latest_event.tensor_proto.string_val[0].decode('utf-8')
-
-            return dataframes, cluster_text
-
-        except Exception as e:
-            st.error(f"Error loading TensorBoard data from {os.path.basename(event_file_path)}: {e}")
-            return {}, None
+        # --- AGGREGATION AND FINALIZATION ---
+        dataframes = {
+            category: pd.concat(dfs, ignore_index=True)
+            for category, dfs in scalar_data.items()
+        }
+    
+        # (Text data loading remains the same)
+        cluster_text = None
+        for event_file in all_event_files:
+            try:
+                ea = event_accumulator.EventAccumulator(event_file, size_guidance={'tensors': 0})
+                ea.Reload()
+                if 'Cluster_Analysis' in ea.Tags()['tensors']:
+                    text_events = ea.Tensors('Cluster_Analysis')
+                    if text_events:
+                        cluster_text = text_events[-1].tensor_proto.string_val[0].decode('utf-8')
+                        break
+            except:
+                continue
+            
+        return dataframes, cluster_text
 
     @staticmethod
     def _get_experiment_dirs():
@@ -96,7 +112,6 @@ class TrainingDashboard:
         experiments_path = "experiments"
         if not os.path.isdir(experiments_path):
             return []
-        # Sort directories by modification time, newest first
         dirs = [os.path.join(experiments_path, d) for d in os.listdir(experiments_path)]
         dirs = sorted([d for d in dirs if os.path.isdir(d)], key=os.path.getmtime, reverse=True)
         return [os.path.basename(d) for d in dirs]
@@ -115,15 +130,24 @@ class TrainingDashboard:
     def _plot_chart(df, title):
         """Creates an Altair chart for a given DataFrame."""
         chart = alt.Chart(df).mark_line(interpolate='basis').encode(
+            # The x (horizontal) axis is the training step.
             x=alt.X('step:Q', title='Global Step'),
+            
+            # The y (vertical) axis is the value of the metric.
             y=alt.Y('value:Q', title='Value', scale=alt.Scale(zero=False)),
+            
+            # This is the corrected line:
+            # It tells Altair to create a separate colored line for each unique
+            # entry in the 'metric' column (e.g., 'G', 'Temperature', 'Total Loss').
             color=alt.Color('metric:N', title='Metric'),
+
+            # Tooltip for interactivity on hover.
             tooltip=['step', 'value', 'metric']
         ).properties(
             title=title
         ).interactive()
         return chart
-
+    
     def run(self):
         """
         The main method to run the Streamlit application.
@@ -131,7 +155,6 @@ class TrainingDashboard:
         st.title("🌊 Tidal Language Model - Training Dashboard")
         st.markdown("Monitor and analyze the training loop of the Tidal Language Model.")
 
-        # --- Sidebar for Experiment Selection ---
         st.sidebar.header("Experiment Controls")
         experiment_dirs = self._get_experiment_dirs()
 
@@ -139,12 +162,7 @@ class TrainingDashboard:
             st.error("No experiment directories found in the 'experiments' folder.")
             st.stop()
 
-        selected_experiment_id = st.sidebar.selectbox(
-            "Select an Experiment ID",
-            options=experiment_dirs,
-            index=0 # The list is now sorted, so the first one is the most recent
-        )
-
+        selected_experiment_id = st.sidebar.selectbox("Select an Experiment ID", options=experiment_dirs, index=0)
         selected_experiment_path = os.path.join("experiments", selected_experiment_id)
 
         if st.sidebar.button("Refresh Data"):
@@ -157,49 +175,49 @@ class TrainingDashboard:
             st.sidebar.subheader("Experiment Config")
             st.sidebar.json(config, expanded=False)
 
-        # --- Main Dashboard Area ---
         if selected_experiment_id:
             st.header(f"📊 Analysis for Experiment: `{selected_experiment_id}`")
 
-            event_file_path = self._get_event_file_path(selected_experiment_path)
-            file_stats = None
+            tags = (config.get("TENSORBOARD_TAGS", {}) if config else {})
+            # These keys now map to the *category* part of the tag, e.g., "Loss" from "Loss/Total"
+            loss_key = tags.get("LOSSES", "Losses")
+            lr_key = tags.get("LEARNING_RATE", "Learning Rate")
+            physics_key = tags.get("PHYSICS_PARAMS", "Physics Parameters")
+            hormone_key = tags.get("HORMONE_LEVELS", "Hormone Levels")
 
-            if event_file_path:
-                stat = os.stat(event_file_path)
-                file_stats = (stat.st_mtime, stat.st_size) # Use modification time and size
+            # We create a file_stats tuple from all found event files
+            # to ensure the cache invalidates if any of them change.
+            log_dir = os.path.join(selected_experiment_path, 'tensorboard_logs')
+            all_event_files = glob.glob(os.path.join(log_dir, '**', 'events.out.tfevents.*'), recursive=True)
+            file_stats = None
+            if all_event_files:
+                file_stats = tuple((os.path.getmtime(f), os.path.getsize(f)) for f in all_event_files)
             
-            with st.spinner("Loading TensorBoard data... This may take a moment for large experiments."):
-                all_data, cluster_text = self._load_tensorboard_data(event_file_path, config, file_stats)
+            with st.spinner("Loading all TensorBoard event files..."):
+                all_data, cluster_text = self._load_tensorboard_data(selected_experiment_path, file_stats)
 
             if not all_data:
-                st.warning("No TensorBoard data found for this experiment yet. Please wait for the training to start.")
+                st.warning("No TensorBoard data found for this experiment yet.")
                 st.stop()
 
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "📈 Key Metrics",
-                "🌌 2D Space Evolution",
-                "🧬 8D Cluster Analysis",
-                "⚡ Embedding Projector"
-            ])
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 Key Metrics", "🌌 2D Space Evolution", "🧬 8D Cluster Analysis", "⚡ Embedding Projector"])
 
             with tab1:
                 st.subheader("Training Performance")
                 col1, col2 = st.columns(2)
                 with col1:
-                    if 'Losses' in all_data:
-                        st.altair_chart(self._plot_chart(all_data['Losses'], 'Losses Over Time'), use_container_width=True)
-                    else: st.info("Loss data not available.")
+                    if loss_key in all_data:
+                        st.altair_chart(self._plot_chart(all_data[loss_key], 'Losses Over Time'), use_container_width=True)
+                    else: st.info(f"Loss data ('{loss_key}') not available.")
                 with col2:
-                    # Note: The key here matches the category set in Trainer.py
-                    lr_key = config.get("TENSORBOARD_TAGS", {}).get("LEARNING_RATE", "Learning Rate")
                     if lr_key in all_data:
                         st.altair_chart(self._plot_chart(all_data[lr_key], 'Learning Rate Schedule'), use_container_width=True)
-                    else: st.info("Learning Rate data not available.")
+                    else: st.info(f"Learning Rate data ('{lr_key}') not available.")
                 
                 st.subheader("Learnable Physics Parameters")
-                if 'Physics Parameters' in all_data:
-                     st.altair_chart(self._plot_chart(all_data['Physics Parameters'], 'Physics Parameter Evolution'), use_container_width=True)
-                else: st.info("Physics parameter data not available.")
+                if physics_key in all_data:
+                     st.altair_chart(self._plot_chart(all_data[physics_key], 'Physics Parameter Evolution'), use_container_width=True)
+                else: st.info(f"Physics parameter data ('{physics_key}') not available.")
 
             with tab2:
                 st.subheader("Evolution of 2D Semantic Space")
@@ -227,17 +245,17 @@ class TrainingDashboard:
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     st.subheader("Semantic Endocrine System")
-                    if 'Hormone Levels' in all_data:
-                        st.altair_chart(self._plot_chart(all_data['Hormone Levels'], 'Hormone Levels Over Time'), use_container_width=True)
+                    if hormone_key in all_data:
+                        st.altair_chart(self._plot_chart(all_data[hormone_key], 'Hormone Levels Over Time'), use_container_width=True)
                     else:
-                        st.info("Hormone level data not available.")
+                        st.info(f"Hormone level data ('{hormone_key}') not available.")
                 
                 with col2:
                     st.subheader("8D Cluster Centroid Analysis")
                     if cluster_text:
                         st.markdown(cluster_text)
                     else:
-                        st.info("Cluster analysis text not yet available. It is logged periodically during training.")
+                        st.info("Cluster analysis text not yet available.")
 
             with tab4:
                 st.subheader("🚀 Explore 8D Embeddings with TensorBoard Projector")

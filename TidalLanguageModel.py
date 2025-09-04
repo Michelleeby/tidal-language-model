@@ -243,7 +243,7 @@ class TidalLanguageModel(nn.Module):
         if self.training and self.tidal_level_override is None:
             self.global_step += 1
 
-    def generate(self, prompt_ids: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = 40, tidal_level: float = None):
+    def generate(self, prompt_ids: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = 40, tidal_level: float = None, repetition_penalty: float = 1.2):
         """
         Generates a sequence of tokens auto-regressively, maintaining the physics state.
         Args:
@@ -280,9 +280,8 @@ class TidalLanguageModel(nn.Module):
                 if len(generated_ids) > 0:
                     # Create a tensor of unique generated ids on the correct device.
                     recent_tokens = torch.tensor(list(set(generated_ids)), device=self.device, dtype=torch.long)
-                    # Use scatter_ to apply the penalty by division (in log space, this is subtraction).
-                    # We divide the logits for penalized tokens, making them less likely.
-                    logits.scatter_(1, recent_tokens.unsqueeze(1), logits.gather(1, recent_tokens.unsqueeze(1)) / repetition_penalty)
+                    # Use direct indexing to apply the penalty by dividing the logits for penalized tokens, making them less likely.
+                    logits[0, recent_tokens] /= repetition_penalty
                 
                 logits = logits / temperature
                 
