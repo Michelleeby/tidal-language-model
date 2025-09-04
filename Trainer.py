@@ -6,6 +6,7 @@ import re
 import glob
 import matplotlib.pyplot as plt
 import numpy as np
+import threading
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -22,9 +23,10 @@ class Trainer:
     Handles the entire training pipeline for the Tidal Language Model,
     including early stopping, checkpointing, and resuming from checkpoints.
     """
-    def __init__(self, config, experiment_dir):
+    def __init__(self, config, experiment_dir, shutdown_event: threading.Event):
         self.config = config
         self.exp_dir = experiment_dir
+        self.shutdown_event = shutdown_event
         self.device = self._get_device()
         self.logger = setup_logger('Training', os.path.join(self.exp_dir, 'training.log'), config)
         
@@ -112,6 +114,10 @@ class Trainer:
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
         viz_freq = self.config.get("VISUALIZATION_FREQUENCY", 100)
         for i, (center_words, context_words) in enumerate(progress_bar):
+            if self.shutdown_event.is_set():
+                self.logger.info("Shutdown detected, stopping training loop.")
+                break
+
             center_words_gpu = center_words.to(self.device)
             context_words_gpu = context_words.to(self.device)
             self.optimizer.zero_grad()
@@ -324,6 +330,14 @@ class Trainer:
         
         self._save_checkpoint(last_epoch_num, phase_name)
 
+    def shutdown(self):
+        """Shuts down the internal thread pool executor."""
+        self.logger.info("Shutting down visualization executor...")
+        self.visualization_executor.shutdown(wait=True, cancel_futures=False)
+        self.writer.close()
+        plt.close(self.fig) # Close the matplotlib figure
+        self.logger.info("Trainer cleanup complete.")
+
     def run(self):
         """Main function to orchestrate the model training pipeline."""
         self.logger.info("Building vocabulary...")
@@ -395,23 +409,21 @@ class Trainer:
         self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
         torch.save(self.model.state_dict(), final_model_path)
 
-        self.logger.info("Saving final embeddings for TensorBoard Projector.")
-        # Get all position embeddings from the model
-        final_embeddings_512d = self.model.position_embeddings.weight.detach()
-        # Project them to the 8D semantic space
-        final_embeddings_8d = self.model.projection_layer(final_embeddings_512d).cpu()
+        if not self.shutdown_event.is_set():
+            self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
+            torch.save(self.model.state_dict(), final_model_path)
 
-        # Create a metadata file with the word for each embedding
-        idx_to_word = {v: k for k, v in vocab.items()}
-        metadata = [idx_to_word.get(i, '<UNK>') for i in range(len(vocab))]
-
-        # The add_embedding method writes the data to the log_dir for the projector
-        self.writer.add_embedding(
-            mat=final_embeddings_8d,
-            metadata=metadata,
-            tag='Semantic_Space_8D'
-        )
-        self.writer.close()
-        self.visualization_executor.shutdown() # Cleanly shut down the background thread.
-
-        return final_model_path
+            self.logger.info("Saving final embeddings for TensorBoard Projector.")
+            final_embeddings_512d = self.model.position_embeddings.weight.detach()
+            final_embeddings_8d = self.model.projection_layer(final_embeddings_512d).cpu()
+            idx_to_word = {v: k for k, v in vocab.items()}
+            metadata = [idx_to_word.get(i, '<UNK>') for i in range(len(vocab))]
+            self.writer.add_embedding(
+                mat=final_embeddings_8d,
+                metadata=metadata,
+                tag='Semantic_Space_8D'
+            )
+            return final_model_path
+        else:
+            self.logger.info("\n--- Training interrupted. Final model not saved. ---")
+            return None

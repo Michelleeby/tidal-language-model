@@ -34,7 +34,7 @@ class TrainingDashboard:
             event_file[0],
             size_guidance={
                 event_accumulator.SCALARS: 0,
-                event_accumulator.TEXT: 0,
+                event_accumulator.TENSORS: 0,
             }
         )
         ea.Reload()

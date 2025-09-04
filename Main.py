@@ -76,7 +76,7 @@ def launch_dashboard(logger):
     global dashboard_process
     try:
         logger.info("Attempting to launch Streamlit dashboard...")
-        command = ["streamlit", "run", "Dashboard.py", "--server.runOnSave", "true"]
+        command = ["streamlit", "run", "Dashboard.py", "--server.runOnSave", "true", "--server.address", "0.0.0.0"]
         dashboard_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         logger.error(f"DASHBOARD THREAD CRASHED: {e}", exc_info=True)
