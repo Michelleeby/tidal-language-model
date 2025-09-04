@@ -9,3 +9,5 @@ networkx
 tqdm
 tensorboard
 streamlit
+pandas
+altair

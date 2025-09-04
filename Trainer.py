@@ -10,6 +10,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 from AssociativeDataset import load_or_create_dataset, load_vocab
 from Utils import setup_logger, plot_semantic_space, format_cluster_analysis_text
@@ -41,7 +42,36 @@ class Trainer:
             os.makedirs(self.frames_dir, exist_ok=True)
 
         self.current_epoch_num = 0
+        # Initialize a thread pool with one worker for async I/O operations.
+        # This prevents plotting and file saving from blocking the main training thread.
+        self.visualization_executor = ThreadPoolExecutor(max_workers=1)
 
+    def _log_and_save_visuals_async(self, viz_data, global_step, center_words, vocab, tide_name):
+        """
+        Handles all slow I/O (plotting, file saving, text formatting) in a separate thread.
+        """
+        # Perform expensive, synchronous operations in the background.
+        kmeans = plot_semantic_space(
+            self.fig, self.ax,
+            viz_data,           # viz_data is already detached in the model's forward pass.
+            center_words,       # center_words are on CPU.
+            vocab,
+            self.probe_words,
+            self.current_epoch_num,
+            global_step % len(self.current_dataloader), # Get batch number
+            title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
+            config=self.config
+        )
+        
+        # Save frame to disk
+        frame_path = os.path.join(self.frames_dir, f'frame_{global_step:06d}.png')
+        self.fig.savefig(frame_path, dpi=100)
+        
+        # Log the figure and text summary to TensorBoard
+        self.writer.add_figure('Semantic_Space', self.fig, global_step)
+        cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
+        self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
+    
     def _get_device(self):
         """Determines the torch device based on config and availability."""
         if self.config['DEVICE'] == 'auto':
@@ -77,13 +107,15 @@ class Trainer:
     def _train_epoch(self, data_loader, tide_name=None, vocab=None):
         """Generic training function for one epoch."""
         self.model.train()
+        self.current_dataloader = data_loader
         total_loss = 0
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
         viz_freq = self.config.get("VISUALIZATION_FREQUENCY", 100)
         for i, (center_words, context_words) in enumerate(progress_bar):
-            center_words, context_words = center_words.to(self.device), context_words.to(self.device)
+            center_words_gpu = center_words.to(self.device)
+            context_words_gpu = context_words.to(self.device)
             self.optimizer.zero_grad()
-            logits, physics_loss, viz_data = self.model(center_words, context_words)
+            logits, physics_loss, viz_data = self.model(center_words_gpu, context_words_gpu)
             prediction_loss = self.criterion(logits, context_words)
             # Prepare scalar versions of losses for logging before combining for backprop
             scalar_physics_loss = physics_loss.mean().item()
@@ -101,45 +133,37 @@ class Trainer:
     
             if self.viz_enabled and i % viz_freq == 0:
                 global_step = self.current_epoch_num * len(data_loader) + i
-
-                # 1. Plot Semantic Space
-                kmeans = plot_semantic_space(
-                    self.fig, self.ax,
-                    viz_data,
-                    center_words,
-                    vocab,
-                    self.probe_words,
-                    self.current_epoch_num,
-                    i,
-                    title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
-                    config=self.config
-                )
-                self.writer.add_figure('Semantic_Space', self.fig, global_step)
                 
-                # 2. Save Frame to Disk for Video Generation
-                frame_path = os.path.join(self.frames_dir, f'frame_{global_step:06d}.png')
-                self.fig.savefig(frame_path, dpi=100)
+                # 1. Log fast, scalar metrics synchronously
+                loss_metrics = {
+                    'Total': loss.item(), 
+                    'Prediction': prediction_loss_item, 
+                    'Physics': scalar_physics_loss
+                }
+                self.writer.add_scalars('Losses', loss_metrics, global_step)
                 
-                # 3. Log Deconstructed Loss Components
-                self.writer.add_scalar('Loss/Total_Loss', loss.item(), global_step)
-                self.writer.add_scalar('Loss/Prediction_Loss', prediction_loss_item, global_step)
-                self.writer.add_scalar('Loss/Physics_Loss', scalar_physics_loss, global_step)
-
-                # 4. Log Hormone Levels
                 if self.model.enable_endocrine_system:
-                    hormone_state = self.model.endocrine_system.get_hormone_state()
-                    for hormone_name, level in hormone_state.items():
-                        self.writer.add_scalar(f'Hormones/{hormone_name}', level, global_step)
-
-                # 5. Log Learnable Physics Parameters
-                self.writer.add_scalar('Physics_Params/G', self.model.physics_simulator.G.item(), global_step)
-                self.writer.add_scalar('Physics_Params/Repulsion_Strength', self.model.physics_simulator.repulsion_strength.item(), global_step)
-                self.writer.add_scalar('Physics_Params/Well_Attraction', self.model.physics_simulator.well_attraction_strength.item(), global_step)
-                self.writer.add_scalar('Physics_Params/Temperature', self.model.physics_simulator.temperature.item(), global_step)
+                    self.writer.add_scalars('Hormone_Levels', self.model.endocrine_system.get_hormone_state(), global_step)
                 
-                # 6. Log Cluster Analysis Text
-                cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
-                self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
+                physics_params = {
+                    'G': self.model.physics_simulator.G.item(), 
+                    'Repulsion_Strength': self.model.physics_simulator.repulsion_strength.item(), 
+                    'Well_Attraction': self.model.physics_simulator.well_attraction_strength.item(), 
+                    'Temperature': self.model.physics_simulator.temperature.item()
+                }
+                self.writer.add_scalars('Physics_Parameters', physics_params, global_step)
+
+                # 2. Submit the slow I/O tasks to the background thread. This call returns immediately.
+                # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
+                # This avoids issues with GPU contexts and to prevent holding onto the computation graph.
+                self.visualization_executor.submit(
+                    self._log_and_save_visuals_async,
+                    viz_data,              # Already detached in the model forward pass.
+                    global_step,
+                    center_words.cpu(),    # Pass the CPU version of the token IDs.
+                    vocab,
+                    tide_name
+                )
                 
             current_lr = self.optimizer.param_groups[0]['lr']
             self.writer.add_scalar('Learning_Rate', current_lr, self.scheduler.current_step)
@@ -388,6 +412,6 @@ class Trainer:
             tag='Semantic_Space_8D'
         )
         self.writer.close()
-
+        self.visualization_executor.shutdown() # Cleanly shut down the background thread.
 
         return final_model_path
