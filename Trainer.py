@@ -124,7 +124,8 @@ class Trainer:
             logits, physics_loss, viz_data = self.model(center_words_gpu, context_words_gpu)
             prediction_loss = self.criterion(logits, context_words_gpu)
             # Prepare scalar versions of losses for logging before combining for backprop
-            scalar_physics_loss = physics_loss.mean().item()
+            mean_physics_loss = physics_loss.mean()
+            scalar_physics_loss = mean_physics_loss.item()
             prediction_loss_item = prediction_loss.item()
             loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * physics_loss.mean()
             loss.backward()
@@ -140,16 +141,18 @@ class Trainer:
             if self.viz_enabled and i % viz_freq == 0:
                 global_step = self.current_epoch_num * len(data_loader) + i
                 
+                tags = self.config["TENSORBOARD_TAGS"]
+
                 # 1. Log fast, scalar metrics synchronously
                 loss_metrics = {
                     'Total': loss.item(), 
                     'Prediction': prediction_loss_item, 
                     'Physics': scalar_physics_loss
                 }
-                self.writer.add_scalars('Losses', loss_metrics, global_step)
-                
+                self.writer.add_scalars(tags["LOSSES"], loss_metrics, global_step)
+
                 if self.model.enable_endocrine_system:
-                    self.writer.add_scalars('Hormone_Levels', self.model.endocrine_system.get_hormone_state(), global_step)
+                    self.writer.add_scalars(tags["HORMONE_LEVELS"], self.model.endocrine_system.get_hormone_state(), global_step)
                 
                 physics_params = {
                     'G': self.model.physics_simulator.G.item(), 
@@ -157,7 +160,7 @@ class Trainer:
                     'Well_Attraction': self.model.physics_simulator.well_attraction_strength.item(), 
                     'Temperature': self.model.physics_simulator.temperature.item()
                 }
-                self.writer.add_scalars('Physics_Parameters', physics_params, global_step)
+                self.writer.add_scalars(tags["PHYSICS_PARAMS"], physics_params, global_step)
 
                 # 2. Submit the slow I/O tasks to the background thread. This call returns immediately.
                 # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
@@ -172,7 +175,7 @@ class Trainer:
                 )
                 
             current_lr = self.optimizer.param_groups[0]['lr']
-            self.writer.add_scalar('Learning_Rate', current_lr, self.scheduler.current_step)
+            self.writer.add_scalar(tags["LEARNING_RATE"], current_lr, self.scheduler.current_step)
         
         avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0
         self.current_epoch_num += 1
@@ -241,8 +244,6 @@ class Trainer:
             last_epoch_num = epoch_num
             avg_loss = self._train_epoch(data_loader, vocab=vocab)
             self.logger.info(f"{phase_name} Epoch {epoch_num}/{max_epochs} - Average Loss: {avg_loss:.4f}")
-            # Log the average loss to TensorBoard
-            self.writer.add_scalar(f'Loss/{phase_name}', avg_loss, epoch_num)
 
             if best_loss - avg_loss > min_delta:
                 best_loss = avg_loss
@@ -406,8 +407,6 @@ class Trainer:
             self._tidal_fine_tuning_loop(vocab, tidal_tune_phase_name, max_finetune_epochs, start_epoch_tidal)
 
         final_model_path = os.path.join(self.exp_dir, f"{self.config['TIDAL_MODEL_NAME']}_v{self.config['TIDAL_MODEL_VERSION']}.pth")
-        self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
-        torch.save(self.model.state_dict(), final_model_path)
 
         if not self.shutdown_event.is_set():
             self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")

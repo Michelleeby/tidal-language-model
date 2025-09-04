@@ -48,11 +48,19 @@ class TrainingDashboard:
             values = [e.value for e in events]
             df = pd.DataFrame({'step': steps, 'value': values, 'tag': tag})
             
-            if tag.startswith('Losses'): group, metric = 'Losses', tag.split('/')[-1]
-            elif tag.startswith('Hormone_Levels'): group, metric = 'Hormone Levels', tag.split('/')[-1]
-            elif tag.startswith('Physics_Parameters'): group, metric = 'Physics Parameters', tag.split('/')[-1]
-            elif tag == 'Learning_Rate': group, metric = 'Learning Rate', 'Learning Rate'
-            else: group, metric = 'Other', tag
+            # These need to match how `Trainer.py` tags scalers.
+            group, metric = None, None
+            if tag.startswith('Losses/'): 
+                group, metric = 'Losses', tag.split('/')[-1]
+            elif tag.startswith('Hormone_Levels/'): 
+                group, metric = 'Hormone Levels', tag.split('/')[-1]
+            elif tag.startswith('Physics_Parameters/'): 
+                group, metric = 'Physics Parameters', tag.split('/')[-1]
+            elif tag == 'Learning_Rate': 
+                group, metric = 'Learning Rate', 'Learning Rate'
+            else: 
+                # This will catch any tags that don't match the above patterns.
+                group, metric = 'Other', tag
             
             df['metric'] = metric
             if group not in dataframes: dataframes[group] = []
