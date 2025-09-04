@@ -39,14 +39,14 @@ def build_vocab(corpus_path: str, config: dict) -> dict:
     with open(corpus_path, 'r', encoding=encoding) as f:
         text = f.read()
 
-    # Ensure the global nlp model is initialized
+    # Ensure the global nlp model is initialized.
     if nlp is None:
         raise RuntimeError("spaCy model is not initialized. Call initialize_nlp() first.")
 
-    nlp.max_length = len(text) + config.get("NLP_PADDING_SIZE", 100)
-    doc = nlp(text)
+    lemmas = []
+    for doc in nlp.pipe(text.splitlines(), batch_size=config.get("NLP_BATCH_SIZE", 1000)):
+        lemmas.extend([token.lemma_.lower() for token in doc if not token.is_punct and not token.is_space])
 
-    lemmas = [token.lemma_.lower() for token in doc if not token.is_punct and not token.is_space]
     word_counts = Counter(lemmas)
 
     frequent_words = [word for word, count in word_counts.items() if count >= min_freq]
@@ -79,15 +79,15 @@ def preprocess_corpora(config_path: str):
     cache_dir = config.get("CACHE_DIR", "cache")
     encoding = config.get("CORPUS_ENCODING", "utf-8")
 
-    # 1. Initialize spaCy once
+    # 1. Initialize spaCy once.
     initialize_nlp(config)
 
-    # 2. Build one shared vocabulary from the foundational corpus
+    # 2. Build one shared vocabulary from the foundational corpus.
     foundational_corpus_path = config["FOUNDATIONAL_CORPUS_PATH"]
     vocab = build_vocab(foundational_corpus_path, config)
     print(f"--- Vocabulary loaded with {len(vocab)} words ---")
 
-    # 3. Process each corpus to generate training pairs using the shared vocabulary
+    # 3. Process each corpus to generate training pairs using the shared vocabulary.
     print("\n--- Starting Training Pair Generation ---")
     for name, corpus_path in corpora_paths.items():
         print(f"\n>>> Processing corpus: '{name}'")
@@ -99,17 +99,15 @@ def preprocess_corpora(config_path: str):
             continue
         
         print(f"Reading and tokenizing {corpus_path}...")
+        token_ids = []
         with open(corpus_path, 'r', encoding=encoding) as f:
-            text = f.read()
-        
-        nlp.max_length = len(text) + config.get("NLP_PADDING_SIZE", 100)
-        doc = nlp(text)
-        
-        token_ids = [
-            vocab[token.lemma_.lower()]
-            for token in doc
-            if not token.is_punct and not token.is_space and token.lemma_.lower() in vocab
-        ]
+            # Process the file in batches of lines instead of all at once.
+            for doc in nlp.pipe(f, batch_size=1000):
+                token_ids.extend([
+                    vocab[token.lemma_.lower()]
+                    for token in doc
+                    if not token.is_punct and not token.is_space and token.lemma_.lower() in vocab
+                ])
         print(f"Corpus processed into {len(token_ids)} tokens.")
 
         print("Generating training pairs...")

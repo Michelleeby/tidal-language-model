@@ -65,6 +65,7 @@ class SemanticEndocrineSystem(nn.Module):
             [self.hormone_map['catalyst_hormone'], self.trigger_map['synthesis_mood_trigger']],
         ], dtype=torch.long), requires_grad=False)
 
+        self.trigger_configs = self.config.get("TRIGGER_THRESHOLDS", {})
         self.activation_sensitivity = self.config.get("ACTIVATION_SENSITIVITY", 2.5)
         self.decay_rate = self.config.get("HORMONE_DECAY_RATE", 0.5)
         
@@ -108,12 +109,18 @@ class SemanticEndocrineSystem(nn.Module):
         synthesis_mood = (abstraction_strength + (1.0 - _normalize(embeddings[:, x]))) / 2
 
         # Repetition Trigger.
-        if len(token_ids) > self.config["REPETITION_TRIGGER_TOKEN_SEQUENCE_THRESHOLD"]:
-            repetition_ratio = 1.0 - (torch.unique(token_ids).size(0) / len(token_ids))
-            threshold = self.trigger_configs['repetition_trigger']
-            repetition_trigger = torch.relu((repetition_ratio - threshold) / (1.0 - threshold + 1e-6))
-        else:
-            repetition_trigger = torch.tensor(0.0, device=self.device)
+        total_count = len(token_ids)
+        unique_count = torch.unique(token_ids).size(0)
+        repetition_ratio = 1.0 - (torch.tensor(unique_count, device=self.device) / (total_count + 1e-6))
+        threshold = self.trigger_configs['repetition_trigger']
+        base_trigger_strength = torch.relu((repetition_ratio - threshold) / (1.0 - threshold + 1e-6))
+        sequence_length_threshold = self.config["REPETITION_TRIGGER_TOKEN_SEQUENCE_THRESHOLD"]
+        is_long_enough_mask = torch.tensor(float(total_count > sequence_length_threshold), device=self.device)
+        repetition_trigger = base_trigger_strength * is_long_enough_mask
+
+        # NOTE: The following if/else blocks are deliberate safety checks. Vectorized masking is not used here
+        # because calculating norms or standard deviations on sequences with fewer than two elements produces
+        # `NaN` (Not a Number). This guard is critical to prevent numerical instability that would corrupt model training.
 
         # Conceptual Leap Trigger.
         if embeddings.shape[0] < 2:
@@ -160,7 +167,7 @@ class SemanticEndocrineSystem(nn.Module):
         strengths = trigger_strengths[trigger_indices]
 
         # Gather thresholds using the trigger names list
-        threshold_values = torch.stack([self.trigger_configs[name] for name in self.trigger_names])
+        threshold_values = torch.tensor([self.trigger_configs[name] for name in self.trigger_names], device=self.device)
         thresholds = threshold_values[trigger_indices]
 
         # 2. Apply tidal bias

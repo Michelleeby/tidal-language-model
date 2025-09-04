@@ -5,12 +5,14 @@ import os
 import re
 import glob
 import matplotlib.pyplot as plt
+import numpy as np
 
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from AssociativeDataset import load_or_create_dataset, load_vocab
-from Utils import setup_logger, plot_semantic_space
+from Utils import setup_logger, plot_semantic_space, format_cluster_analysis_text
 from TidalLanguageModel import TidalLanguageModel
 from DynamicLRScheduler import DynamicLRScheduler
 
@@ -29,10 +31,14 @@ class Trainer:
         self.optimizer = None
         self.criterion = None
 
+        # Add the TensorBoard SummaryWriter
+        self.writer = SummaryWriter(log_dir=os.path.join(self.exp_dir, 'tensorboard_logs'))
+
         self.viz_enabled = self.config.get("ENABLE_VISUALIZATION", True)
         if self.viz_enabled:
-            plt.ion() # Turn on interactive mode
-            self.fig, self.ax = plt.subplots(figsize=(8, 8))
+            self.fig, self.ax = plt.subplots(figsize=self.config.get("TRAINING_PLOT_FIGSIZE", (8, 8)))
+            self.frames_dir = os.path.join(self.exp_dir, self.config.get("TRAINING_FRAMES_SUBDIR", "semantic_space_frames"))
+            os.makedirs(self.frames_dir, exist_ok=True)
 
         self.current_epoch_num = 0
 
@@ -68,7 +74,7 @@ class Trainer:
             persistent_workers=True
         )
     
-    def _train_epoch(self, data_loader, tide_name=None):
+    def _train_epoch(self, data_loader, tide_name=None, vocab=None):
         """Generic training function for one epoch."""
         self.model.train()
         total_loss = 0
@@ -79,9 +85,12 @@ class Trainer:
             self.optimizer.zero_grad()
             logits, physics_loss, viz_data = self.model(center_words, context_words)
             prediction_loss = self.criterion(logits, context_words)
+            # Prepare scalar versions of losses for logging before combining for backprop
+            scalar_physics_loss = physics_loss.mean().item()
+            prediction_loss_item = prediction_loss.item()
             loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * physics_loss.mean()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"]) # Clip gradients to prevent exploding gradients.
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
             self.optimizer.step()
             
             # Update learning rate on each step
@@ -89,17 +98,51 @@ class Trainer:
                 self.scheduler.step(tide_name=tide_name)
 
             total_loss += loss.item()
-
+    
             if self.viz_enabled and i % viz_freq == 0:
-                plot_semantic_space(
-                    self.ax,
-                    viz_data['positions_2d'],
-                    viz_data['forces_2d'],
+                global_step = self.current_epoch_num * len(data_loader) + i
+
+                # 1. Plot Semantic Space
+                kmeans = plot_semantic_space(
+                    self.fig, self.ax,
+                    viz_data,
+                    center_words,
+                    vocab,
+                    self.probe_words,
                     self.current_epoch_num,
                     i,
-                    title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else ""
+                    title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
+                    config=self.config
                 )
-                plt.pause(0.001) # Give the plot a moment to update and process events
+                self.writer.add_figure('Semantic_Space', self.fig, global_step)
+                
+                # 2. Save Frame to Disk for Video Generation
+                frame_path = os.path.join(self.frames_dir, f'frame_{global_step:06d}.png')
+                self.fig.savefig(frame_path, dpi=100)
+                
+                # 3. Log Deconstructed Loss Components
+                self.writer.add_scalar('Loss/Total_Loss', loss.item(), global_step)
+                self.writer.add_scalar('Loss/Prediction_Loss', prediction_loss_item, global_step)
+                self.writer.add_scalar('Loss/Physics_Loss', scalar_physics_loss, global_step)
+
+                # 4. Log Hormone Levels
+                if self.model.enable_endocrine_system:
+                    hormone_state = self.model.endocrine_system.get_hormone_state()
+                    for hormone_name, level in hormone_state.items():
+                        self.writer.add_scalar(f'Hormones/{hormone_name}', level, global_step)
+
+                # 5. Log Learnable Physics Parameters
+                self.writer.add_scalar('Physics_Params/G', self.model.physics_simulator.G.item(), global_step)
+                self.writer.add_scalar('Physics_Params/Repulsion_Strength', self.model.physics_simulator.repulsion_strength.item(), global_step)
+                self.writer.add_scalar('Physics_Params/Well_Attraction', self.model.physics_simulator.well_attraction_strength.item(), global_step)
+                self.writer.add_scalar('Physics_Params/Temperature', self.model.physics_simulator.temperature.item(), global_step)
+                
+                # 6. Log Cluster Analysis Text
+                cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
+                self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
+                
+            current_lr = self.optimizer.param_groups[0]['lr']
+            self.writer.add_scalar('Learning_Rate', current_lr, self.scheduler.current_step)
         
         avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0
         self.current_epoch_num += 1
@@ -151,7 +194,7 @@ class Trainer:
             
         return None, 0
 
-    def _training_loop(self, data_loader, phase_name, max_epochs, start_epoch=0, cache_freq=None, cache_milestones=None):
+    def _training_loop(self, data_loader, phase_name, max_epochs, start_epoch=0, cache_freq=None, cache_milestones=None, vocab=None):
         """
         Manages a standard training loop for a given phase with early stopping.
         """
@@ -166,8 +209,10 @@ class Trainer:
         for epoch in range(start_epoch, max_epochs):
             epoch_num = epoch + 1
             last_epoch_num = epoch_num
-            avg_loss = self._train_epoch(data_loader)
+            avg_loss = self._train_epoch(data_loader, vocab=vocab)
             self.logger.info(f"{phase_name} Epoch {epoch_num}/{max_epochs} - Average Loss: {avg_loss:.4f}")
+            # Log the average loss to TensorBoard
+            self.writer.add_scalar(f'Loss/{phase_name}', avg_loss, epoch_num)
 
             if best_loss - avg_loss > min_delta:
                 best_loss = avg_loss
@@ -234,7 +279,7 @@ class Trainer:
                 tidal_level_map = {"high": 1.0, "low": -1.0, "storm": 0.0}
                 self.model.set_tidal_level(tidal_level_map.get(tide_name))
                 self.logger.info(f"Training on {tide_name} tide...")
-                avg_loss = self._train_epoch(loader, tide_name=tide_name)
+                avg_loss = self._train_epoch(loader, tide_name=tide_name, vocab=vocab)
                 self.logger.info(f"  > {tide_name.capitalize()} Tide Loss: {avg_loss:.4f}")
 
                 if state['best_loss'] - avg_loss > min_delta:
@@ -259,6 +304,7 @@ class Trainer:
         """Main function to orchestrate the model training pipeline."""
         self.logger.info("Building vocabulary...")
         vocab = load_vocab(self.config)
+        self.probe_words = self.config.get("PROBE_WORDS", [])
         vocab_size = len(vocab)
 
         # This is an estimate, but it's crucial for the cosine annealing schedule.
@@ -285,7 +331,7 @@ class Trainer:
         else:
             dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], vocab, self.config)
             loader = self._get_data_loader(dataset)
-            self._training_loop(loader, foundational_phase_name, max_foundational_epochs, start_epoch_foundational, cache_milestones=[max_foundational_epochs // 2])
+            self._training_loop(loader, foundational_phase_name, max_foundational_epochs, start_epoch_foundational, cache_milestones=[max_foundational_epochs // 2], vocab=vocab)
 
         # Fine-tuning
         self.logger.info("Re-enabling endocrine system and resonance for fine-tuning.")
@@ -306,7 +352,7 @@ class Trainer:
                 if corpus_path:
                     dataset = load_or_create_dataset(corpus_path, vocab, self.config)
                     loader = self._get_data_loader(dataset)
-                    self._training_loop(loader, early_tune_phase_name, early_tune_epochs, start_epoch_early)
+                    self._training_loop(loader, early_tune_phase_name, early_tune_epochs, start_epoch_early, vocab=vocab)
                 else:
                     self.logger.warning("EARLY_TUNE_EPOCHS specified but no corpus path found. Skipping.")
 
@@ -324,11 +370,24 @@ class Trainer:
         final_model_path = os.path.join(self.exp_dir, f"{self.config['TIDAL_MODEL_NAME']}_v{self.config['TIDAL_MODEL_VERSION']}.pth")
         self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
         torch.save(self.model.state_dict(), final_model_path)
-        
-        if self.viz_enabled:
-            self.logger.info("Training finished. Displaying final semantic space.")
-            plt.ioff() # Turn off interactive mode
-            self.fig.savefig(os.path.join(self.exp_dir, "final_semantic_space.png")) # Save the final plot
-            plt.show() # Show the plot and wait for user to close
-    
+
+        self.logger.info("Saving final embeddings for TensorBoard Projector.")
+        # Get all position embeddings from the model
+        final_embeddings_512d = self.model.position_embeddings.weight.detach()
+        # Project them to the 8D semantic space
+        final_embeddings_8d = self.model.projection_layer(final_embeddings_512d).cpu()
+
+        # Create a metadata file with the word for each embedding
+        idx_to_word = {v: k for k, v in vocab.items()}
+        metadata = [idx_to_word.get(i, '<UNK>') for i in range(len(vocab))]
+
+        # The add_embedding method writes the data to the log_dir for the projector
+        self.writer.add_embedding(
+            mat=final_embeddings_8d,
+            metadata=metadata,
+            tag='Semantic_Space_8D'
+        )
+        self.writer.close()
+
+
         return final_model_path

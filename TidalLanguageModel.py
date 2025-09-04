@@ -341,6 +341,7 @@ class TidalLanguageModel(nn.Module):
         # Using .detach() is important to avoid holding onto the computation graph.
         viz_data = {
             'positions_2d': new_pos_2d.detach(),
+            'positions_8d': pos_8d.detach(),
             'forces_2d': final_forces_2d.detach(),
             'masses': effective_masses.detach()
         }

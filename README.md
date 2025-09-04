@@ -116,13 +116,9 @@ On Windows, WSL2 is recommended with any Linux distro, the default Ubuntu instal
 ```bash
 python3 -m venv tidal-env && \
 source tidal-env/bin/activate && \
-pip install -r requirements.txt
-```
-
-You may need to install `python3.12-venv`:
-
-```bash
-sudo apt-get install python3.12-venv
+sudo apt-get update && \
+sudo apt-get install build-essential python3.12-venv python3.12-dev && \
+pip3 install -r requirements.txt
 ```
 
 Then install these remaining dependencies:
@@ -164,7 +160,19 @@ CONFIG_FILE="configs/base_config.yaml"
 Then train the model:
 
 ```bash
-python Main.py --config "${CONFIG_FILE}"
+python3 Main.py --config "${CONFIG_FILE}"
+```
+
+To start the environment, run the following command:
+
+```bash
+source tidal-env/bin/activate
+```
+
+To deactivate the environment, run the following command:
+
+```bash
+deactivate
 ```
 
 ### Generate Text
@@ -184,7 +192,7 @@ TOP_K=50
 Then run the following command:
 
 ```bash
-python Generator.py --config "${CONFIG_FILE}" --checkpoint "${MODEL_PATH}" --prompt "${PROMPT}" --max_tokens ${MAX_TOKENS} --temperature ${TEMPERATURE} --top_k ${TOP_K}
+python3 Generator.py --config "${CONFIG_FILE}" --checkpoint "${MODEL_PATH}" --prompt "${PROMPT}" --max_tokens ${MAX_TOKENS} --temperature ${TEMPERATURE} --top_k ${TOP_K}
 ```
 
 This can be done while the model trains. Throughout the training, the model checkpoints will be saved to the `experiments` directory.

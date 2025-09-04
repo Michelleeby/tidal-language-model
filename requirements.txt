@@ -4,5 +4,8 @@ ruamel.yaml
 numpy
 matplotlib
 scipy
+scikit-learn
 networkx
 tqdm
+tensorboard
+streamlit

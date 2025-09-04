@@ -5,8 +5,13 @@ import hashlib
 import subprocess
 import shutil
 import multiprocessing
+import torch
+
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe')
+
+# Set matmul precision for better performance on Ampere GPUs and newer
+torch.set_float32_matmul_precision('high')
 
 from Trainer import Trainer
 from Evaluator import Evaluator
