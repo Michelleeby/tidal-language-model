@@ -19,6 +19,8 @@ from Trainer import Trainer
 from Evaluator import Evaluator
 from Utils import setup_logger
 
+dashboard_process = None
+
 def get_git_commit_hash():
     """Gets the current git commit hash."""
     try:
@@ -35,24 +37,28 @@ def get_file_hash(filepath):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()[:10]
 
-def run_training(config, experiment_dir, final_model_path_ref, logger):
+def run_training(trainer, shutdown_event, final_model_path_ref, logger):
     """Target function for the training thread."""
     try:
-        trainer = Trainer(config, experiment_dir)
+        # The trainer object is now created in main and passed in
         final_model_path = trainer.run()
-        final_model_path_ref[0] = final_model_path
+        if not shutdown_event.is_set():
+            final_model_path_ref[0] = final_model_path
     except Exception as e:
         logger.error(f"TRAINING THREAD CRASHED: {e}", exc_info=True)
         final_model_path_ref[0] = None
+        shutdown_event.set() # Signal other threads to stop if training fails
 
-
-def run_evaluation(config, experiment_dir, final_model_path_ref, logger):
+def run_evaluation(config, experiment_dir, final_model_path_ref, shutdown_event, logger):
     """Target function for the evaluation thread."""
-    # Wait until the training thread is no longer in its initial "training" state.
-    while final_model_path_ref[0] == "training":
-        time.sleep(5) 
+    # Wait for training to finish or for a shutdown signal
+    while final_model_path_ref[0] == "training" and not shutdown_event.is_set():
+        time.sleep(1) 
 
-    # Check if training produced a valid model path.
+    if shutdown_event.is_set():
+        logger.info("Shutdown signal received, skipping evaluation.")
+        return
+
     if final_model_path_ref[0]:
         logger.info("Evaluation thread started.")
         try:
@@ -65,18 +71,13 @@ def run_evaluation(config, experiment_dir, final_model_path_ref, logger):
     else:
         logger.warning("Skipping evaluation due to training failure.")
 
-
 def launch_dashboard(logger):
     """Target function for the dashboard thread."""
+    global dashboard_process
     try:
         logger.info("Attempting to launch Streamlit dashboard...")
         command = ["streamlit", "run", "Dashboard.py", "--server.runOnSave", "true"]
-        subprocess.run(command, check=True, capture_output=True, text=True)
-    except FileNotFoundError:
-        logger.error("DASHBOARD LAUNCH FAILED: `streamlit` command not found. Is it installed and in your system's PATH?")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"DASHBOARD THREAD ERROR: Streamlit process failed with exit code {e.returncode}.")
-        logger.error(f"Streamlit stderr: {e.stderr}")
+        dashboard_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         logger.error(f"DASHBOARD THREAD CRASHED: {e}", exc_info=True)
 
@@ -114,36 +115,57 @@ def main():
     # A mutable list to act as a reference for passing the model path between threads.
     final_model_path_ref = ["training"] 
 
-    # Create threads, passing the logger to each target function.
-    training_thread = threading.Thread(target=run_training, args=(config, experiment_dir, final_model_path_ref, logger))
-    evaluation_thread = threading.Thread(target=run_evaluation, args=(config, experiment_dir, final_model_path_ref, logger))
+    shutdown_event = threading.Event()
+    trainer = Trainer(config, experiment_dir, shutdown_event)
+    
+    final_model_path_ref = ["training"] 
+
+    training_thread = threading.Thread(target=run_training, args=(trainer, shutdown_event, final_model_path_ref, logger))
+    evaluation_thread = threading.Thread(target=run_evaluation, args=(config, experiment_dir, final_model_path_ref, shutdown_event, logger))
     
     dashboard_thread = None
     if not args.no_dashboard:
         dashboard_thread = threading.Thread(target=launch_dashboard, args=(logger,))
-        dashboard_thread.daemon = True 
+        dashboard_thread.daemon = False 
 
-    # Start threads
-    logger.info("="*20 + " LAUNCHING THREADS " + "="*20)
-    training_thread.start()
-    logger.info("🚀 Training thread started.")
-    
-    evaluation_thread.start()
-    logger.info("⏳ Evaluation thread started (will wait for training to finish).")
-    
-    if dashboard_thread:
-        dashboard_thread.start()
-        logger.info("🌊 Dashboard thread started.")
+    try:
+        logger.info("="*20 + " LAUNCHING THREADS " + "="*20)
+        training_thread.start()
+        logger.info("🚀 Training thread started.")
+        
+        evaluation_thread.start()
+        logger.info("⏳ Evaluation thread started.")
+        
+        if dashboard_thread:
+            dashboard_thread.start()
+            logger.info("🌊 Dashboard thread started.")
 
-    # Wait for Completion
-    training_thread.join() 
-    logger.info("✅ Training thread has finished.")
-    
-    evaluation_thread.join() 
-    logger.info("✅ Evaluation thread has finished.")
+        # Keep the main thread alive to listen for KeyboardInterrupt
+        while training_thread.is_alive():
+            training_thread.join(timeout=1)
 
-    logger.info(f"Experiment {experiment_id} finished.")
-    logger.info("Main orchestrator finished. Dashboard may still be running if launched.")
+    except KeyboardInterrupt:
+        logger.warning("\n" + "="*20 + " SHUTDOWN SIGNAL RECEIVED " + "="*20)
+        logger.warning("Please wait, cleaning up resources...")
+    
+    finally:
+        # The full shutdown sequence.
+        shutdown_event.set()
+
+        if dashboard_process:
+            logger.info("Terminating dashboard process...")
+            dashboard_process.terminate()
+            dashboard_process.wait() # Wait for the process to fully close.
+
+        logger.info("Waiting for threads to complete...")
+        training_thread.join()
+        evaluation_thread.join()
+        
+        # The Trainer's internal thread pool must also be shut down.
+        trainer.shutdown()
+        
+        logger.info(f"Experiment {experiment_id} finished.")
+        logger.info("Main orchestrator finished. Cleanup complete.")
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()

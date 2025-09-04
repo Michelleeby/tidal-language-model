@@ -116,7 +116,7 @@ class Trainer:
             context_words_gpu = context_words.to(self.device)
             self.optimizer.zero_grad()
             logits, physics_loss, viz_data = self.model(center_words_gpu, context_words_gpu)
-            prediction_loss = self.criterion(logits, context_words)
+            prediction_loss = self.criterion(logits, context_words_gpu)
             # Prepare scalar versions of losses for logging before combining for backprop
             scalar_physics_loss = physics_loss.mean().item()
             prediction_loss_item = prediction_loss.item()
