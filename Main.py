@@ -101,11 +101,13 @@ def main():
         config = yaml.load(f)
 
     # 2. Generate Experiment ID & Directory
-    experiment_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    base_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
+    experiment_id = f"{timestamp}-{base_id}"
     experiment_dir = os.path.join("experiments", experiment_id)
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, 'config.yaml'))
-    
+
     # 3. Setup Main Logger
     logger = setup_logger('MainOrchestrator', os.path.join(experiment_dir, 'main.log'), config)
     logger.info(f"Starting experiment: {experiment_id}")

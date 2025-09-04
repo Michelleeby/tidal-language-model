@@ -7,91 +7,88 @@ import subprocess
 import altair as alt
 from tensorboard.backend.event_processing import event_accumulator
 import re
+import collections
 
 class TrainingDashboard:
     """
     A Streamlit-based dashboard to visualize the training process of the Tidal Language Model.
     It reads and parses TensorBoard logs to display metrics, parameters, and visualizations.
     """
-    def __init__(self, config):
-        self.config = config
-        st.set_page_config(self.config.get("DASHBOARD_PAGE_CONFIG", { "page_title": "Tidal LM Training Dashboard", "page_icon": "🌊", "layout": "wide"}))
+    def __init__(self):
+        st.set_page_config(
+            page_title="Tidal LM Training Dashboard",
+            page_icon="🌊",
+            layout="wide"
+        )
 
     @staticmethod
     def _get_event_file_path(experiment_path):
-        """Finds the path to the TensorBoard event file."""
-        event_file = glob.glob(os.path.join(experiment_path, 'tensorboard_logs', 'events.out.tfevents.*'))
-        return event_file[0] if event_file else None
+        """Finds the path to the main TensorBoard event file."""
+        log_dir = os.path.join(experiment_path, 'tensorboard_logs')
+        event_files = glob.glob(os.path.join(log_dir, 'events.out.tfevents.*'))
+        # Return the first match, as there should only be one main event file per run
+        return event_files[0] if event_files else None
 
     @staticmethod
     @st.cache_data(ttl=300)
     def _load_tensorboard_data(event_file_path, config, file_stats):
         """
-        Loads scalar and text data from TensorBoard event files.
+        Loads scalar and text data from a TensorBoard event file, parsing them into
+        pandas DataFrames organized by category.
         The file_stats argument makes the cache aware of file changes.
         """
         if not event_file_path:
-            return {}, ""
+            return {}, None
 
-        ea = event_accumulator.EventAccumulator(
-            event_file_path,
-            size_guidance={
-                event_accumulator.SCALARS: 0,
-                event_accumulator.TENSORS: 0,
-            }
-        )
-        ea.Reload()
+        try:
+            # Initialize the accumulator to load all data
+            ea = event_accumulator.EventAccumulator(
+                event_file_path,
+                size_guidance={
+                    event_accumulator.SCALARS: 0,
+                    event_accumulator.TENSORS: 0
+                }
+            )
+            ea.Reload()
 
-        tags_config = config.get("TENSORBOARD_TAGS", {})
-        TAG_GROUPS = {
-            tags_config.get("LOSSES", "Losses"): "Losses",
-            tags_config.get("PHYSICS_PARAMS", "Physics_Parameters"): "Physics Parameters",
-            tags_config.get("HORMONE_LEVELS", "Hormone_Levels"): "Hormone Levels",
-            tags_config.get("LEARNING_RATE", "Learning_Rate"): "Learning Rate",
-        }
+            # --- Process Scalar Data (for charts) ---
+            scalar_data = collections.defaultdict(list)
+            for tag in ea.Tags()['scalars']:
+                # Tags from `add_scalars` are like 'Category/Metric'
+                # Tags from `add_scalar` are just 'Category'
+                if '/' in tag:
+                    category, metric = tag.split('/', 1)
+                else:
+                    category, metric = tag, tag
 
-        scalar_tags = ea.Tags().get('scalars', [])
-        all_scalar_data = []
-
-        for tag in scalar_tags:
-            group_name = "Other"
-            metric_name = tag
-
-            # Find the correct group by iterating through our mapping.
-            for prefix, name in TAG_GROUPS.items():
-                if tag == prefix:  # Handles exact matches like 'Learning_Rate'
-                    group_name = name
-                    metric_name = name
-                    break
-                elif tag.startswith(prefix + '/'):  # Handles grouped tags like 'Losses/Total'
-                    group_name = name
-                    metric_name = tag.split('/')[-1]
-                    break
+                events = ea.Scalars(tag)
+                df = pd.DataFrame(
+                    [(event.step, event.value) for event in events],
+                    columns=['step', 'value']
+                )
+                df['metric'] = metric
+                scalar_data[category].append(df)
             
-            # Add all data points for this tag to our master list.
-            for event in ea.Scalars(tag):
-                all_scalar_data.append({
-                    "group": group_name,
-                    "metric": metric_name,
-                    "step": event.step,
-                    "value": event.value
-                })
-        
-        if not all_scalar_data:
-            dataframes = {}
-        else:
-            master_df = pd.DataFrame(all_scalar_data)
-            dataframes = {name: group_df for name, group_df in master_df.groupby("group")}
+            # Combine the lists of DataFrames for each category into a single DataFrame
+            dataframes = {
+                category: pd.concat(dfs, ignore_index=True)
+                for category, dfs in scalar_data.items()
+            }
 
-        cluster_analysis_text = ""
-        if 'tensors' in ea.Tags():
-            if 'Cluster_Analysis' in ea.Tags()['tensors']:
+            # --- Process Text Data (for cluster analysis) ---
+            cluster_text = None
+            if 'tensors' in ea.Tags() and 'Cluster_Analysis' in ea.Tags()['tensors']:
                 text_events = ea.Tensors('Cluster_Analysis')
                 if text_events:
-                    latest_text_event = text_events[-1]
-                    cluster_analysis_text = latest_text_event.tensor_proto.string_val[0].decode('utf-8')
+                    # Get the most recent text event and decode it
+                    latest_event = text_events[-1]
+                    cluster_text = latest_event.tensor_proto.string_val[0].decode('utf-8')
 
-        return dataframes, cluster_analysis_text
+            return dataframes, cluster_text
+
+        except Exception as e:
+            st.error(f"Error loading TensorBoard data from {os.path.basename(event_file_path)}: {e}")
+            return {}, None
 
     @staticmethod
     def _get_experiment_dirs():
@@ -172,7 +169,7 @@ class TrainingDashboard:
                 file_stats = (stat.st_mtime, stat.st_size) # Use modification time and size
             
             with st.spinner("Loading TensorBoard data... This may take a moment for large experiments."):
-                all_data, cluster_text = self._load_tensorboard_data(event_file_path, file_stats)
+                all_data, cluster_text = self._load_tensorboard_data(event_file_path, config, file_stats)
 
             if not all_data:
                 st.warning("No TensorBoard data found for this experiment yet. Please wait for the training to start.")
@@ -193,8 +190,10 @@ class TrainingDashboard:
                         st.altair_chart(self._plot_chart(all_data['Losses'], 'Losses Over Time'), use_container_width=True)
                     else: st.info("Loss data not available.")
                 with col2:
-                    if 'Learning Rate' in all_data:
-                        st.altair_chart(self._plot_chart(all_data['Learning Rate'], 'Learning Rate Schedule'), use_container_width=True)
+                    # Note: The key here matches the category set in Trainer.py
+                    lr_key = config.get("TENSORBOARD_TAGS", {}).get("LEARNING_RATE", "Learning Rate")
+                    if lr_key in all_data:
+                        st.altair_chart(self._plot_chart(all_data[lr_key], 'Learning Rate Schedule'), use_container_width=True)
                     else: st.info("Learning Rate data not available.")
                 
                 st.subheader("Learnable Physics Parameters")
@@ -267,20 +266,5 @@ class TrainingDashboard:
                     st.info("TensorBoard is running in a background process. You can close this browser tab, and it will continue to run in your terminal.")
 
 if __name__ == '__main__':
-    # Find the most recent experiment directory to load its config for initialization.
-    experiment_dirs = TrainingDashboard._get_experiment_dirs()
-    if not experiment_dirs:
-        st.error("No experiment directories found in 'experiments'. Please run a training first.")
-        st.stop()
-    
-    # Load the config from the most recent experiment.
-    latest_experiment_path = os.path.join("experiments", experiment_dirs[0])
-    config = TrainingDashboard._load_config(latest_experiment_path)
-
-    if not config:
-        st.error(f"Could not load config.yaml from the latest experiment: {latest_experiment_path}")
-        st.stop()
-        
-    # Now, instantiate the dashboard with the loaded config.
-    dashboard = TrainingDashboard(config)
+    dashboard = TrainingDashboard()
     dashboard.run()

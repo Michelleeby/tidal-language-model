@@ -151,7 +151,7 @@ class Trainer:
                 loss_metrics = {
                     'Total': loss.item(), 
                     'Prediction': prediction_loss_item, 
-                    'Physics': scalar_physics_loss
+                    'Physics': scalar_physics_loss,
                 }
                 self.writer.add_scalars(tags["LOSSES"], loss_metrics, global_step)
 
@@ -181,10 +181,10 @@ class Trainer:
                     vocab,
                     tide_name
                 )
-                
+
             current_lr = self.optimizer.param_groups[0]['lr']
             self.writer.add_scalar(tags["LEARNING_RATE"], current_lr, self.scheduler.current_step)
-        
+
         avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0
         self.current_epoch_num += 1
         return avg_loss

@@ -152,7 +152,7 @@ def plot_semantic_space(fig, ax, viz_data, token_ids, vocab, probe_words, epoch_
 
 def format_cluster_analysis_text(cluster_centers, config):
     """Generates a markdown-formatted string analyzing cluster centroids."""
-    md_string = "# 8D Cluster Centroid Analysis\n"
+    md_string = "# Semantic Space 8D Cluster Centroid Analysis\n"
     axis_mapping = {v: k for k, v in config["SEMANTIC_AXIS_MAPPING"].items()}
     planes = {
         "Core Conceptual": config["SEMANTIC_SPACE_SLICES"]["core_conceptual"],
