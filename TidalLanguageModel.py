@@ -75,50 +75,49 @@ class TidalLanguageModel(nn.Module):
         self.config = config
         self.experiment_dir = experiment_dir
         self.vocab_size = vocab_size
-        self.embed_dim = self.config["EMBED_DIM"]
+        self.embed_dim = self.config.get("EMBED_DIM", 512)
+        self.gru_hidden_size = self.config.get("GRU_HIDDEN_SIZE", 512)
         
-        # Determine device
         device_str = self.config.get("DEVICE", "auto")
         if device_str == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device_str)
-
+        
         self.enable_resonance = self.config["ENABLE_RESONANCE"]
         self.enable_endocrine_system = self.config["ENABLE_ENDORCRINE_SYSTEM"]
         
-        # Physics Simulator
         self.physics_simulator = Physics2D(self.config, self.vocab_size, device=self.device)
         self.G = self.physics_simulator.G # Share the learnable parameter
         
-        # Model components.
         self.position_embeddings = nn.Embedding(vocab_size, self.embed_dim)
         self.velocity_embeddings = nn.Embedding(vocab_size, 2) # For 2D physical space
         self.mass_embeddings = nn.Embedding(vocab_size, self.config["MASS_EMBEDDING_DIM"])
         self._initialize_embeddings()
-        
-        # Projection Layers.
-        # Project from real-world space to 8D semantic space.
-        self.projection_layer = nn.Linear(self.embed_dim, self.config["SEMANTIC_AXIS_COUNT"])
-        # Project from 8D semantic space to 2D physical space.
-        self.projection_to_2d = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], 2)
-        # Project from 8D semantic space to real-world space.
-        self.inverse_projection_layer = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], self.embed_dim)
-        # Project forces from 2D physical space back to 8D semantic space.
-        self.inverse_projection_from_2d = nn.Linear(2, self.config["SEMANTIC_AXIS_COUNT"])
-        # Project to real-world space.
-        self.output_projection = nn.Linear(self.embed_dim, vocab_size)
 
-        # Endocrine System
+        # To efficiently simulate our embedding space,
+        # first we project to our 8D semantic space. Then,
+        # this is projected to a 2D physical space where the 
+        # physics simulation is applied. Then, we project back
+        # to the 8D semantic space. Here the endocrine and tide
+        # systems affect the space. We project this to 512D where
+        # we finally pass through a GRU for sequential memory.
+        self.projection_layer = nn.Linear(self.embed_dim, self.config["SEMANTIC_AXIS_COUNT"])
+        self.projection_to_2d = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], 2)
+        self.inverse_projection_layer = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], self.embed_dim)
+        self.inverse_projection_from_2d = nn.Linear(2, self.config["SEMANTIC_AXIS_COUNT"])
+        # Takes the full sequence of physics-updated embeddings as input.
+        # batch_first=True is crucial for handling [batch_size, sequence_length, embed_dim] tensors.
+        self.gru = nn.GRU(self.embed_dim, self.gru_hidden_size, batch_first=True)
+        self.output_projection = nn.Linear(self.gru_hidden_size, vocab_size)
+
         if self.enable_endocrine_system:
             self.endocrine_system = SemanticEndocrineSystem(config=self.config, experiment_dir=self.experiment_dir, device=self.device)
 
-        # Resonance Components
         if self.enable_resonance:
             self.resonance_strength = nn.Parameter(torch.tensor(self.config["RESONANCE_STRENGTH"]))
             self.pattern_embeddings = nn.Embedding(vocab_size, self.embed_dim)
 
-        # Internal state for tides
         self.register_buffer('global_step', torch.tensor(0, dtype=torch.float))
         self.circadian_period = self.config["CIRCADIAN_PERIOD"]
         self.tidal_level_override = None
@@ -132,6 +131,7 @@ class TidalLanguageModel(nn.Module):
         """Applies semantic resonance to reinforce repeated concepts, modulated by tides."""
         if not self.enable_resonance: return positions
 
+        positions_with_resonance = positions.clone()
         tidal_level = self.get_tidal_level()
         low_res = self.config["LOW_TIDE_RESONANCE_MASK"]
         high_res = self.config["HIGH_TIDE_RESONANCE_MASK"]
@@ -143,8 +143,9 @@ class TidalLanguageModel(nn.Module):
         for token_id in repeated_tokens:
             pattern_emb = self.pattern_embeddings(token_id)
             mask = (token_ids == token_id)
-            positions[mask] += resonance_mask * self.resonance_strength * pattern_emb * 0.1
-        return positions
+            positions_with_resonance[mask] += resonance_mask * self.resonance_strength * pattern_emb * 0.1
+            
+        return positions_with_resonance
 
     def get_tidal_level(self):
         """Calculates the current tidal level based on the internal clock."""
@@ -241,7 +242,7 @@ class TidalLanguageModel(nn.Module):
     def _update_global_step(self):
         """Updates the global step of the simulation."""
         if self.training and self.tidal_level_override is None:
-            self.global_step += 1
+            self.global_step = self.global_step + 1
 
     def generate(self, prompt_ids: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = 40, tidal_level: float = None, repetition_penalty: float = 1.2):
         """
@@ -255,46 +256,59 @@ class TidalLanguageModel(nn.Module):
                                             If None, uses the internal clock. Defaults to None.
         """
         self.eval()
-        if tidal_level is not None:
-            self.set_tidal_level(tidal_level)
-
+        if tidal_level is not None: self.set_tidal_level(tidal_level)
+        
         prompt_ids = prompt_ids.to(self.device).view(-1)
-        generated_ids = list(prompt_ids.cpu().numpy())
+        generated_ids_list = list(prompt_ids.cpu().numpy())
         
         with torch.no_grad():
+            # Initialize state from the prompt.
             positions, velocities_2d, masses = self._get_initial_state(prompt_ids)
 
+            hidden_state = None
+
+            if len(prompt_ids) > 0:
+                new_pos_2d, new_velocities_2d, pos_2d, _, _, _ = self._run_physics_simulation(
+                    positions, 
+                    velocities_2d, 
+                    masses
+                )
+                prompt_embeddings = self._calculate_new_positions(positions, pos_2d, new_pos_2d)
+                _, hidden_state = self.gru(prompt_embeddings.unsqueeze(0), hidden_state)
+
             for _ in range(max_new_tokens):
-                current_sequence_ids = torch.tensor(generated_ids, dtype=torch.long, device=self.device)
+                current_sequence_ids = torch.tensor(generated_ids_list, dtype=torch.long, device=self.device)
                 self._update_endocrine_system(current_sequence_ids)
 
                 new_pos_2d, new_velocities_2d, pos_2d, _, _, effective_masses = self._run_physics_simulation(
-                    positions, velocities_2d, masses
+                    positions, 
+                    velocities_2d, 
+                    masses
                 )
                 new_positions = self._calculate_new_positions(positions, pos_2d, new_pos_2d)
 
-                last_token_position = new_positions[-1:]
-                logits = self.output_projection(last_token_position)
-
-                # Prevent semantic space collapse. (When concepts get too close, they repel).
-                if len(generated_ids) > 0:
-                    # Create a tensor of unique generated ids on the correct device.
-                    recent_tokens = torch.tensor(list(set(generated_ids)), device=self.device, dtype=torch.long)
-                    # Use direct indexing to apply the penalty by dividing the logits for penalized tokens, making them less likely.
+                last_token_embedding = new_positions[-1:] # Shape: [1, embed_dim]
+                # GRU expects a sequence, so add a sequence dimension: [1, 1, embed_dim]
+                gru_input = last_token_embedding.unsqueeze(1)
+                # Get output and UPDATED hidden state from GRU
+                gru_output, hidden_state = self.gru(gru_input, hidden_state)
+                # Project the GRU output to get logits
+                logits = self.output_projection(gru_output.squeeze(1)) # Shape: [1, vocab_size]
+                # Apply repetition penalty
+                if len(generated_ids_list) > 0:
+                    recent_tokens = torch.tensor(list(set(generated_ids_list)), device=self.device, dtype=torch.long)
                     logits[0, recent_tokens] /= repetition_penalty
                 
                 logits = logits / temperature
-                
                 probs = torch.nn.functional.softmax(logits, dim=-1)
-                
                 top_k_val = min(top_k, self.vocab_size)
                 top_k_probs, top_k_indices = torch.topk(probs, k=top_k_val)
-                
                 next_token_idx = torch.multinomial(top_k_probs, num_samples=1)
                 next_token_id = torch.gather(top_k_indices, 1, next_token_idx).squeeze()
 
-                generated_ids.append(next_token_id.item())
+                generated_ids_list.append(next_token_id.item())
                 
+                # Append the new token's initial state for the next iteration's simulation
                 new_position_embedding = self.position_embeddings(next_token_id.unsqueeze(0))
                 new_velocity_embedding = self.velocity_embeddings(next_token_id.unsqueeze(0))
                 new_mass_embedding = self.mass_embeddings(next_token_id.unsqueeze(0))
@@ -302,47 +316,53 @@ class TidalLanguageModel(nn.Module):
                 positions = torch.cat((new_positions, new_position_embedding), dim=0)
                 velocities_2d = torch.cat((new_velocities_2d, new_velocity_embedding), dim=0)
                 masses = torch.cat((effective_masses, new_mass_embedding), dim=0)
-
-                # Optional: Add velocity decay to prevent runaway energy.
-                velocities_2d *= 0.98 
+                velocities_2d = velocities_2d * 0.98
                 
-                if tidal_level is None:
-                    self._update_global_step()
+                if tidal_level is None: self._update_global_step()
 
         self.set_tidal_level(None)
         self.train() 
-        return generated_ids
+        return generated_ids_list
 
-    def forward(self, token_ids: torch.Tensor, context_word_ids: torch.Tensor = None):
+    def forward(self, input_ids: torch.Tensor, target_ids: torch.Tensor = None):
         """Orchestrates the full forward pass of the model."""
-        # 1. Update bio-inspired systems.
-        self._update_endocrine_system(token_ids)
+        batch_size, seq_len = input_ids.shape
 
-        # 2. Run core physics simulation.
-        positions, velocities_2d, masses = self._get_initial_state(token_ids)
-        new_pos_2d, new_velocities_2d, pos_2d, pos_8d, final_forces_2d, effective_masses = self._run_physics_simulation(
+        # 1. Update bio-inspired systems.
+        self._update_endocrine_system(input_ids)
+
+        # 2. Get initial physics state for the entire batch of sequences.
+        positions, velocities_2d, masses = self._get_initial_state(input_ids)
+
+        # 3. Run core physics simulation on the entire batch of sequences.
+        new_pos_2d, new_velocities_2d, pos_2d, pos_8d, forces_2d, effective_masses = self._run_physics_simulation(
             positions, velocities_2d, masses
         )
         new_positions = self._calculate_new_positions(positions, pos_2d, new_pos_2d)
 
-        # 3. Predict next token.
-        final_batch_positions = self._apply_local_resonance(new_positions, token_ids)
-        logits = self.output_projection(final_batch_positions)
+        # 4. Apply resonance on the flattened version for simplicity, as it's a sparse operation.
+        final_positions_flat = self._apply_local_resonance(new_positions.view(-1, self.embed_dim), input_ids.view(-1))
+        final_embeddings = final_positions_flat.view(batch_size, seq_len, self.embed_dim)
 
-        # 4. Calculate physics-based training loss.
-        sim_data_for_loss = (pos_2d, new_velocities_2d, pos_8d, effective_masses)
-        physics_loss, _ = self._calculate_physics_loss(token_ids, context_word_ids, sim_data_for_loss)
+        # 5. Feed the entire sequence of physics-aware embeddings into the GRU.
+        gru_output, _ = self.gru(final_embeddings)
 
-        # 5. Update global clock.
+        # 6. Project GRU output to vocabulary space to get logits.
+        logits = self.output_projection(gru_output)
+
+        # 7. Calculate physics-based training loss.
+        # The loss function still requires flattened tensors to process pairs.
+        sim_data_for_loss = (pos_2d.view(-1, 2), new_velocities_2d.view(-1, 2), pos_8d.view(-1, self.config["SEMANTIC_AXIS_COUNT"]), effective_masses.view(-1, self.config["MASS_EMBEDDING_DIM"]))
+        physics_loss, _ = self._calculate_physics_loss(input_ids.view(-1), target_ids.view(-1) if target_ids is not None else None, sim_data_for_loss)
+        
         self._update_global_step()
 
-        # 6. Prepare visualization data.
-        # Using .detach() is important to avoid holding onto the computation graph.
+        # 7. Prepare visualization data (flatten for consistency).
         viz_data = {
-            'positions_2d': new_pos_2d.detach(),
-            'positions_8d': pos_8d.detach(),
-            'forces_2d': final_forces_2d.detach(),
-            'masses': effective_masses.detach()
+            'positions_2d': new_pos_2d.view(-1, 2).detach(),
+            'positions_8d': pos_8d.view(-1, self.config["SEMANTIC_AXIS_COUNT"]).detach(),
+            'forces_2d': forces_2d.view(-1, 2).detach(),
+            'masses': effective_masses.view(-1, self.config["MASS_EMBEDDING_DIM"]).detach()
         }
 
         return logits, physics_loss, viz_data

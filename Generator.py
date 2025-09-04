@@ -7,7 +7,7 @@ from ruamel.yaml import YAML
 
 # Import the model class and other necessary components from your project structure
 from TidalLanguageModel import TidalLanguageModel
-from AssociativeDataset import load_vocab
+from SequentialDataset import load_vocab
 from Preprocess import initialize_nlp
 
 # Global spaCy model
@@ -68,18 +68,12 @@ def run_generation(args):
     if not os.path.exists(args.checkpoint):
         print(f"Error: Checkpoint file not found at {args.checkpoint}")
         return
-        
     print(f"Loading model state from: {args.checkpoint}")
     device = "cuda" if torch.cuda.is_available() and config['DEVICE'] != 'cpu' else "cpu"
     print(f"Loading model state from: {args.checkpoint}")
     device = "cuda" if torch.cuda.is_available() and config['DEVICE'] != 'cpu' else "cpu"
-
-    # torch.compile() prefixes state_dict keys with 
-    # '_orig_mod.'; this removes the prefix to load 
-    # the state into the un-compiled inference model.
     state_dict = torch.load(args.checkpoint, map_location=device)
-    clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-    model.load_state_dict(clean_state_dict)
+    model.load_state_dict(state_dict)
     model.to(device)
     print("Model loaded successfully.")
 

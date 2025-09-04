@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 
-from AssociativeDataset import load_or_create_dataset, load_vocab
+from SequentialDataset import load_or_create_dataset, load_vocab
 from Utils import setup_logger, plot_semantic_space, format_cluster_analysis_text
 from TidalLanguageModel import TidalLanguageModel
 from DynamicLRScheduler import DynamicLRScheduler
@@ -49,15 +49,17 @@ class Trainer:
         # Making it a single worker is important for sequential queuing.
         self.visualization_executor = ThreadPoolExecutor(max_workers=1)
 
-    def _log_and_save_visuals_async(self, viz_data, global_step, center_words, vocab, tide_name):
+    def _log_and_save_visuals_async(self, viz_data, global_step, batch_tokens, vocab, tide_name):
         """
         Handles all slow I/O (plotting, file saving, text formatting) in a separate thread.
         """
-        # Perform expensive, synchronous operations in the background.
+        # The batch_tokens are sequences [B, S], we can take the first one for visualization.
+        token_ids_for_viz = batch_tokens[0]
+
         kmeans = plot_semantic_space(
             self.fig, self.ax,
-            viz_data,           # viz_data is already detached in the model's forward pass.
-            center_words,       # center_words are on CPU.
+            viz_data,
+            token_ids_for_viz,
             vocab,
             self.probe_words,
             self.current_epoch_num,
@@ -65,12 +67,10 @@ class Trainer:
             title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
             config=self.config
         )
-        
-        # Save frame to disk
+
         frame_path = os.path.join(self.frames_dir, f'frame_{global_step:06d}.png')
         self.fig.savefig(frame_path, dpi=100)
         
-        # Log the figure and text summary to TensorBoard
         self.writer.add_figure('Semantic_Space', self.fig, global_step)
         cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
         self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
@@ -114,16 +114,19 @@ class Trainer:
         total_loss = 0
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
         viz_freq = self.config.get("VISUALIZATION_FREQUENCY", 100)
-        for i, (center_words, context_words) in enumerate(progress_bar):
+        for i, (input_sequence, target_sequence) in enumerate(progress_bar):
             if self.shutdown_event.is_set():
                 self.logger.info("Shutdown detected, stopping training loop.")
                 break
-
-            center_words_gpu = center_words.to(self.device)
-            context_words_gpu = context_words.to(self.device)
+            
+            input_sequence_gpu = input_sequence.to(self.device)
+            target_sequence_gpu = target_sequence.to(self.device)
             self.optimizer.zero_grad()
-            logits, physics_loss, viz_data = self.model(center_words_gpu, context_words_gpu)
-            prediction_loss = self.criterion(logits, context_words_gpu)
+            logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
+            # Logits shape: [B, S, Vocab_Size] -> [B * S, Vocab_Size]
+            # Target shape: [B, S] -> [B * S]
+            vocab_size = logits.shape[-1]
+            prediction_loss = self.criterion(logits.view(-1, vocab_size), target_sequence_gpu.view(-1))
             # Prepare scalar versions of losses for logging before combining for backprop.
             mean_physics_loss = physics_loss.mean()
             scalar_physics_loss = mean_physics_loss.item()
@@ -177,7 +180,7 @@ class Trainer:
                     self._log_and_save_visuals_async,
                     viz_data,              # Already detached in the model forward pass.
                     global_step,
-                    center_words.cpu(),    # Pass the CPU version of the token IDs.
+                    input_sequence.cpu(),
                     vocab,
                     tide_name
                 )
@@ -195,13 +198,15 @@ class Trainer:
         checkpoint_name = f"checkpoint_{phase_name_slug}_epoch_{epoch}.pth"
         checkpoint_path = os.path.join(self.exp_dir, checkpoint_name)
         self.logger.info(f"Caching progress. Saving checkpoint to {checkpoint_path}")
-        torch.save(self.model.state_dict(), checkpoint_path)
+        state_dict = self.model._orig_mod.state_dict() if hasattr(self.model, '_orig_mod') else self.model.state_dict()
+        torch.save(state_dict, checkpoint_path)
 
     def _load_checkpoint(self, checkpoint_path):
         """Loads a model state from a checkpoint file."""
         self.logger.info(f"Loading model from checkpoint: {checkpoint_path}")
         try:
-            self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+            model_to_load = self.model._orig_mod if hasattr(self.model, '_orig_mod') else self.model
+            model_to_load.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
             self.logger.info("Successfully loaded checkpoint.")
         except FileNotFoundError:
             self.logger.warning(f"Checkpoint file not found: {checkpoint_path}")
@@ -284,7 +289,7 @@ class Trainer:
         }
 
         tidal_loaders = {
-            name: self._get_data_loader(load_or_create_dataset(path, vocab, self.config))
+            name: self._get_data_loader(load_or_create_dataset(path, self.config))
             for name, path in tide_paths.items() if path and os.path.exists(path)
         }
 
@@ -357,7 +362,7 @@ class Trainer:
         # This is an estimate, but it's crucial for the cosine annealing schedule.
         max_foundational_epochs = self.config["NUM_EPOCHS"]
         # Use a dummy dataset to find the number of batches.
-        temp_dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], vocab, self.config)
+        temp_dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], self.config)
         num_batches = len(temp_dataset) // self.config["BATCH_SIZE"]
         total_foundational_steps = max_foundational_epochs * num_batches
 
@@ -376,7 +381,7 @@ class Trainer:
         if start_epoch_foundational >= max_foundational_epochs:
             self.logger.info("Foundational training already completed. Skipping.")
         else:
-            dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], vocab, self.config)
+            dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], self.config)
             loader = self._get_data_loader(dataset)
             self._training_loop(loader, foundational_phase_name, max_foundational_epochs, start_epoch_foundational, cache_milestones=[max_foundational_epochs // 2], vocab=vocab)
 
@@ -397,7 +402,7 @@ class Trainer:
             else:
                 corpus_path = self.config.get("EARLY_TUNE_CORPUS_PATH") or self.config.get("HIGH_TIDE_CORPUS_PATH")
                 if corpus_path:
-                    dataset = load_or_create_dataset(corpus_path, vocab, self.config)
+                    dataset = load_or_create_dataset(corpus_path, self.config)
                     loader = self._get_data_loader(dataset)
                     self._training_loop(loader, early_tune_phase_name, early_tune_epochs, start_epoch_early, vocab=vocab)
                 else:

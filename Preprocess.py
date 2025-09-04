@@ -75,11 +75,11 @@ def preprocess_corpora(config_path: str):
         "storm": config["STORM_TIDE_CORPUS_PATH"]
     }
 
-    window_size = config.get("DEFAULT_WINDOW_SIZE", 2)
+    sequence_length = config.get("SEQUENCE_LENGTH", 50)
     cache_dir = config.get("CACHE_DIR", "cache")
     encoding = config.get("CORPUS_ENCODING", "utf-8")
 
-    # 1. Initialize spaCy once.
+    # 1. Initialize spaCy model once.
     initialize_nlp(config)
 
     # 2. Build one shared vocabulary from the foundational corpus.
@@ -92,7 +92,7 @@ def preprocess_corpora(config_path: str):
     for name, corpus_path in corpora_paths.items():
         print(f"\n>>> Processing corpus: '{name}'")
 
-        data_path = os.path.join(cache_dir, f"{os.path.basename(corpus_path)}_ws{window_size}.pt")
+        data_path = os.path.join(cache_dir, f"{os.path.basename(corpus_path)}_seqlen{sequence_length}.pt")
 
         if os.path.exists(data_path):
             print(f"Pre-processed data already exists at {data_path}. Skipping.")
@@ -101,7 +101,6 @@ def preprocess_corpora(config_path: str):
         print(f"Reading and tokenizing {corpus_path}...")
         token_ids = []
         with open(corpus_path, 'r', encoding=encoding) as f:
-            # Process the file in batches of lines instead of all at once.
             for doc in nlp.pipe(f, batch_size=1000):
                 token_ids.extend([
                     vocab[token.lemma_.lower()]
@@ -110,24 +109,21 @@ def preprocess_corpora(config_path: str):
                 ])
         print(f"Corpus processed into {len(token_ids)} tokens.")
 
-        print("Generating training pairs...")
-        data_pairs = []
-        for i, center_word_id in enumerate(token_ids):
-            for w in range(1, window_size + 1):
-                if i - w >= 0:
-                    context_word_id = token_ids[i - w]
-                    data_pairs.append((center_word_id, context_word_id))
-                if i + w < len(token_ids):
-                    context_word_id = token_ids[i + w]
-                    data_pairs.append((center_word_id, context_word_id))
+        print("Generating training sequences...")
+        sequences = []
+        if len(token_ids) >= sequence_length:
+            for i in range(len(token_ids) - sequence_length + 1):
+                chunk = token_ids[i:i + sequence_length]
+                sequences.append(chunk)
 
-        if not data_pairs:
-            print("Warning: No training pairs were generated for this corpus.")
+        if not sequences:
+            print(f"Warning: No sequences were generated for this corpus (not enough tokens for sequence length {sequence_length}).")
             continue
 
-        data_tensor = torch.tensor(data_pairs, dtype=torch.long)
+        # Cache the tensor of sequences
+        data_tensor = torch.tensor(sequences, dtype=torch.long)
         torch.save(data_tensor, data_path)
-        print(f"Saved {len(data_tensor)} pairs to {data_path}")
+        print(f"Saved {len(data_tensor)} sequences to {data_path}")
 
     print("\n--- Pre-processing complete! ---")
 

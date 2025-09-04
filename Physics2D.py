@@ -42,48 +42,52 @@ class Physics2D(nn.Module):
 
     def calculate_forces(self, positions_2d: torch.Tensor, masses: torch.Tensor) -> torch.Tensor:
         """ 
-        Calculates gravitational forces using a direct, vectorized O(N^2) method.
-        This is efficient on GPUs for moderate N and avoids Python loops.
+        Calculates gravitational forces for a BATCH of sequences.
+        This batched version prevents memory overflow by computing interactions
+        only WITHIN each sequence, not between them.
+        Shape of positions_2d: [Batch, Sequence, 2]
+        Shape of masses: [Batch, Sequence, 1]
         """
-        # Expand dimensions to calculate pairwise differences
-        # pos_expanded_a shape: (N, 1, 2)
-        # pos_expanded_b shape: (1, N, 2)
-        pos_expanded_a = positions_2d.unsqueeze(1)
-        pos_expanded_b = positions_2d.unsqueeze(0)
+        # B = Batch Size, S = Sequence Length
+        # pos_expanded_a shape: [B, S, 1, 2]
+        # pos_expanded_b shape: [B, 1, S, 2]
+        pos_expanded_a = positions_2d.unsqueeze(2)
+        pos_expanded_b = positions_2d.unsqueeze(1)
 
         # Calculate pairwise differences and squared distances
-        # diff shape: (N, N, 2)
-        # dist_sq shape: (N, N)
+        # diff shape: [B, S, S, 2]
+        # dist_sq shape: [B, S, S]
         diff = pos_expanded_b - pos_expanded_a
         dist_sq = torch.sum(diff.pow(2), dim=-1) + self.softening
         dist = torch.sqrt(dist_sq)
         
-        # Create a boolean mask to identify the diagonal
-        diag_mask = torch.eye(positions_2d.shape[0], device=self.device, dtype=torch.bool)
+        # Create a boolean mask for the diagonal, batched for each sequence
+        # diag_mask shape: [S, S]
+        diag_mask = torch.eye(positions_2d.shape[1], device=self.device, dtype=torch.bool)
 
-        # Use torch.where for an out-of-place operation. This creates new "safe" tensors
-        # for calculation, leaving the original `dist` and `dist_sq` unmodified for autograd.
+        # Use torch.where to avoid division by zero on the diagonal
         dist_safe = torch.where(diag_mask, torch.ones_like(dist), dist)
         dist_sq_safe = torch.where(diag_mask, torch.ones_like(dist_sq), dist_sq)
        
         # Calculate pairwise force magnitude: F = G * (m1 * m2) / r^2
-        # masses_a shape: (N, 1)
-        # masses_b shape: (1, N)
-        masses_a = masses.unsqueeze(1)
-        masses_b = masses.unsqueeze(0)
-        attractive_force_mag = torch.relu(self.G) * (masses_a * masses_b).squeeze() / dist_sq_safe
+        # masses_a shape: [B, S, 1, 1]
+        # masses_b shape: [B, 1, S, 1]
+        masses_a = masses.unsqueeze(2)
+        masses_b = masses.unsqueeze(1)
         
-        # This force is strong at very short distances and zero otherwise.
-        # We use a simple 1/r^3 formulation for repulsion which is stronger than 1/r^2 gravity.
-        # `torch.relu` ensures the force is only active below the cutoff distance.
+        # Squeeze to match dimensions for broadcasting with [B, S, S] dist_sq_safe
+        attractive_force_mag = torch.relu(self.G) * (masses_a * masses_b).squeeze(-1) / dist_sq_safe
+        
+        # Repulsive force calculation
         positive_repulsion_strength = torch.relu(self.repulsion_strength)
         repulsive_force_mag = positive_repulsion_strength * torch.relu(1 - (dist_safe / self.repulsion_cutoff)) / (dist_sq_safe * dist_safe + self.epsilon)
 
-        # 3. Combine forces
-        # Attraction is negative (pulls together), repulsion is positive (pushes apart)
+        # Combine forces
         total_force_mag = repulsive_force_mag - attractive_force_mag 
         force_vectors = total_force_mag.unsqueeze(-1) * diff / (dist_safe.unsqueeze(-1) + self.epsilon)
-        total_forces = torch.sum(force_vectors, dim=1)
+        
+        # Sum forces over the second sequence dimension (dim=2) to get the net force on each particle
+        total_forces = torch.sum(force_vectors, dim=2)
         
         return total_forces
     
