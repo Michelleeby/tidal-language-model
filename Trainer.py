@@ -46,6 +46,7 @@ class Trainer:
         self.current_epoch_num = 0
         # Initialize a thread pool with one worker for async I/O operations.
         # This prevents plotting and file saving from blocking the main training thread.
+        # Making it a single worker is important for sequential queuing.
         self.visualization_executor = ThreadPoolExecutor(max_workers=1)
 
     def _log_and_save_visuals_async(self, viz_data, global_step, center_words, vocab, tide_name):
@@ -123,7 +124,7 @@ class Trainer:
             self.optimizer.zero_grad()
             logits, physics_loss, viz_data = self.model(center_words_gpu, context_words_gpu)
             prediction_loss = self.criterion(logits, context_words_gpu)
-            # Prepare scalar versions of losses for logging before combining for backprop
+            # Prepare scalar versions of losses for logging before combining for backprop.
             mean_physics_loss = physics_loss.mean()
             scalar_physics_loss = mean_physics_loss.item()
             prediction_loss_item = prediction_loss.item()
@@ -143,7 +144,10 @@ class Trainer:
                 
                 tags = self.config["TENSORBOARD_TAGS"]
 
-                # 1. Log fast, scalar metrics synchronously
+                # Fast, synchronous logging remains on the main thread, 
+                # as the negligible performance impact is a worthwhile trade-off 
+                # for ensuring the sequential integrity of the log data without 
+                # introducing asynchronous complexity.
                 loss_metrics = {
                     'Total': loss.item(), 
                     'Prediction': prediction_loss_item, 
@@ -162,7 +166,11 @@ class Trainer:
                 }
                 self.writer.add_scalars(tags["PHYSICS_PARAMS"], physics_params, global_step)
 
-                # 2. Submit the slow I/O tasks to the background thread. This call returns immediately.
+                # Force the writer to save the buffered data to disk immediately.
+                # This ensures the dashboard always has access to the freshest data.
+                self.writer.flush()
+
+                # Slow I/O tasks are offloaded to the background thread, so this call returns immediately.
                 # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
                 # This avoids issues with GPU contexts and to prevent holding onto the computation graph.
                 self.visualization_executor.submit(
