@@ -267,5 +267,20 @@ class TrainingDashboard:
                     st.info("TensorBoard is running in a background process. You can close this browser tab, and it will continue to run in your terminal.")
 
 if __name__ == '__main__':
-    dashboard = TrainingDashboard()
+    # Find the most recent experiment directory to load its config for initialization.
+    experiment_dirs = TrainingDashboard._get_experiment_dirs()
+    if not experiment_dirs:
+        st.error("No experiment directories found in 'experiments'. Please run a training first.")
+        st.stop()
+    
+    # Load the config from the most recent experiment.
+    latest_experiment_path = os.path.join("experiments", experiment_dirs[0])
+    config = TrainingDashboard._load_config(latest_experiment_path)
+
+    if not config:
+        st.error(f"Could not load config.yaml from the latest experiment: {latest_experiment_path}")
+        st.stop()
+        
+    # Now, instantiate the dashboard with the loaded config.
+    dashboard = TrainingDashboard(config)
     dashboard.run()
