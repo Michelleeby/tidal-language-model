@@ -30,27 +30,25 @@ class Trainer:
         self.shutdown_event = shutdown_event
         
         self.device = self._get_device()
-        self.logger = setup_logger('Training', os.path.join(self.exp_dir, 'training.log'), config)
-        self.logger_visualization = setup_logger('Visualization', os.path.join(self.exp_dir, 'visualization.log'), config)
+        self.logger, self.logger_visualization = self._setup_loggers(config.copy())
+        self.writer = SummaryWriter(log_dir=os.path.join(self.exp_dir, 'tensorboard_logs'))
+        
+        self.viz_enabled = self.config.get("ENABLE_VISUALIZATION", True)
+        if self.viz_enabled:
+            self.frames_dir = os.path.join(self.exp_dir, self.config.get("TRAINING_FRAMES_SUBDIR", "semantic_space_frames"))
+            os.makedirs(self.frames_dir, exist_ok=True)
+            # Initialize a thread pool with one worker for async I/O operations.
+            # This prevents plotting and file saving from blocking the main training thread.
+            # Making it a single worker is important for sequential queuing.
+            self.visualization_executor = ThreadPoolExecutor(max_workers=1)
+            self.last_viz_time = 0
         
         self.model = None
         self.optimizer = None
         self.criterion = None
 
-        # Add the TensorBoard SummaryWriter
-        self.writer = SummaryWriter(log_dir=os.path.join(self.exp_dir, 'tensorboard_logs'))
-
-        self.viz_enabled = self.config.get("ENABLE_VISUALIZATION", True)
-        if self.viz_enabled:
-            self.frames_dir = os.path.join(self.exp_dir, self.config.get("TRAINING_FRAMES_SUBDIR", "semantic_space_frames"))
-            os.makedirs(self.frames_dir, exist_ok=True)
-
         self.current_epoch_num = 0
-        # Initialize a thread pool with one worker for async I/O operations.
-        # This prevents plotting and file saving from blocking the main training thread.
-        # Making it a single worker is important for sequential queuing.
-        self.visualization_executor = ThreadPoolExecutor(max_workers=1)
-        self.last_viz_time = 0
+        
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
     def _log_and_save_visuals_async(self, viz_data, global_step, batch_tokens, seq_len, vocab, tide_name):
@@ -111,6 +109,22 @@ class Trainer:
         if self.config['DEVICE'] == 'auto':
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.config['DEVICE']
+
+    def _setup_loggers(self, config):
+        logger_types = config.get('TRAINER_LOGGER_TYPES', ['training', 'visualization'])
+        logger_configs = {
+            logger_type: {
+                'log_file': os.path.join(self.exp_dir, f'{logger_type.lower()}.log'),
+                'config': config.copy()
+            }
+            for logger_type in logger_types
+        }
+        logger_configs['training']['config']['ENABLE_CONSOLE_LOGGING'] = True
+        loggers = {
+            logger_type: setup_logger(logger_type.capitalize(), logger_configs[logger_type]['log_file'], logger_configs[logger_type]['config'])
+            for logger_type in logger_types
+        }
+        return loggers['training'], loggers['visualization']
 
     def _setup_model(self, vocab_size, total_foundational_steps=1):
         """Instantiates the model, loss function, optimizer, and scheduler."""
@@ -175,8 +189,8 @@ class Trainer:
             tags = self.tags
             current_time = time.time()
             if self.viz_enabled and (current_time - self.last_viz_time > viz_interval_seconds):
-                self.last_viz_time = current_time # Update the timer immediately
-
+                self.last_viz_time = current_time
+                
                 global_step = self.current_epoch_num * len(data_loader) + i
 
                 # Fast, synchronous logging remains on the main thread, 
@@ -190,9 +204,6 @@ class Trainer:
                 }
                 self.writer.add_scalars(tags["LOSSES"], loss_metrics, global_step)
 
-                if self.model.enable_endocrine_system:
-                    self.writer.add_scalars(tags["HORMONE_LEVELS"], self.model.endocrine_system.get_hormone_state(), global_step)
-                
                 physics_params = {
                     'G': self.model.physics_simulator.G.item(), 
                     'Repulsion_Strength': self.model.physics_simulator.repulsion_strength.item(), 
@@ -201,11 +212,14 @@ class Trainer:
                 }
                 self.writer.add_scalars(tags["PHYSICS_PARAMS"], physics_params, global_step)
 
+                if self.model.enable_endocrine_system:
+                    self.writer.add_scalars(tags["HORMONE_LEVELS"], self.model.endocrine_system.get_hormone_state(), global_step)
+                
                 # Force the writer to save the buffered data to disk immediately.
                 # This ensures the dashboard always has access to the freshest data.
                 self.writer.flush()
 
-                # Slow I/O tasks are offloaded to the background thread, so this call returns immediately.
+                # Slow I/O tasks are offloaded to the background visualization thread, so this call returns immediately.
                 # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
                 # This avoids issues with GPU contexts and to prevent holding onto the computation graph.
                 self.visualization_executor.submit(
