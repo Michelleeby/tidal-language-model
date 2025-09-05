@@ -11,3 +11,4 @@ tensorboard
 streamlit
 pandas
 altair
+streamlit-autorefresh

@@ -102,12 +102,22 @@ class TidalLanguageModel(nn.Module):
         # to the 8D semantic space. Here the endocrine and tide
         # systems affect the space. We project this to 512D where
         # we finally pass through a GRU for sequential memory.
+        # 
+        # We can imagine this like:
+        #
+        # -> Input -- 
+        # -> Embedding Space 512D --[projection to 8D]-- 
+        # -> Semantic Space 8D --[projection to 2D]-- 
+        # -> Physical Space 2D --[apply physics simulation]---> --[inverse projection from 2D to 8D]-- 
+        # -> Semantic Space 8D --[apply endocrine and tide systems]---> --[inverse projection from 8D to 512D]-- 
+        # -> Embedding Space 512D --[Sequential Memory (GRU)]---> --[output projection]-- 
+        # -> Output --
+
         self.projection_layer = nn.Linear(self.embed_dim, self.config["SEMANTIC_AXIS_COUNT"])
         self.projection_to_2d = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], 2)
         self.inverse_projection_layer = nn.Linear(self.config["SEMANTIC_AXIS_COUNT"], self.embed_dim)
         self.inverse_projection_from_2d = nn.Linear(2, self.config["SEMANTIC_AXIS_COUNT"])
-        # Takes the full sequence of physics-updated embeddings as input.
-        # batch_first=True is crucial for handling [batch_size, sequence_length, embed_dim] tensors.
+        # NOTE: batch_first=True is crucial for handling [batch_size, sequence_length, embed_dim] tensors.
         self.gru = nn.GRU(self.embed_dim, self.gru_hidden_size, batch_first=True)
         self.output_projection = nn.Linear(self.gru_hidden_size, vocab_size)
 

@@ -7,6 +7,7 @@ import glob
 import matplotlib.pyplot as plt
 import numpy as np
 import threading
+import time
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -27,8 +28,10 @@ class Trainer:
         self.config = config
         self.exp_dir = experiment_dir
         self.shutdown_event = shutdown_event
+        
         self.device = self._get_device()
         self.logger = setup_logger('Training', os.path.join(self.exp_dir, 'training.log'), config)
+        self.logger_visualization = setup_logger('Visualization', os.path.join(self.exp_dir, 'visualization.log'), config)
         
         self.model = None
         self.optimizer = None
@@ -39,7 +42,6 @@ class Trainer:
 
         self.viz_enabled = self.config.get("ENABLE_VISUALIZATION", True)
         if self.viz_enabled:
-            self.fig, self.ax = plt.subplots(figsize=self.config.get("TRAINING_PLOT_FIGSIZE", (8, 8)))
             self.frames_dir = os.path.join(self.exp_dir, self.config.get("TRAINING_FRAMES_SUBDIR", "semantic_space_frames"))
             os.makedirs(self.frames_dir, exist_ok=True)
 
@@ -48,32 +50,61 @@ class Trainer:
         # This prevents plotting and file saving from blocking the main training thread.
         # Making it a single worker is important for sequential queuing.
         self.visualization_executor = ThreadPoolExecutor(max_workers=1)
+        self.last_viz_time = 0
+        self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
-    def _log_and_save_visuals_async(self, viz_data, global_step, batch_tokens, vocab, tide_name):
+    def _log_and_save_visuals_async(self, viz_data, global_step, batch_tokens, seq_len, vocab, tide_name):
         """
         Handles all slow I/O (plotting, file saving, text formatting) in a separate thread.
         """
-        # The batch_tokens are sequences [B, S], we can take the first one for visualization.
+        self.logger_visualization.info(f"Logging and saving visuals for global step {global_step}...")
+
+        fig, ax = plt.subplots(figsize=self.config.get("TRAINING_PLOT_FIGSIZE", (8, 8)))
+        viz_data_sliced = {
+            'positions_2d': viz_data['positions_2d'][:seq_len],
+            'positions_8d': viz_data['positions_8d'][:seq_len],
+            'forces_2d': viz_data['forces_2d'][:seq_len],
+            'masses': viz_data['masses'][:seq_len]
+        }
         token_ids_for_viz = batch_tokens[0]
 
-        kmeans = plot_semantic_space(
-            self.fig, self.ax,
-            viz_data,
-            token_ids_for_viz,
-            vocab,
-            self.probe_words,
-            self.current_epoch_num,
-            global_step % len(self.current_dataloader), # Get batch number
-            title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
-            config=self.config
-        )
+        kmeans = None
+        try:
+            kmeans = plot_semantic_space(
+                fig, 
+                ax,
+                viz_data_sliced,
+                token_ids_for_viz,
+                vocab,
+                self.probe_words,
+                self.current_epoch_num,
+                global_step % len(self.current_dataloader),
+                title_suffix=f"({tide_name.capitalize()} Tide)" if tide_name else "",
+                config=self.config
+            )
+        except Exception as e:
+            self.logger_visualization.error(f"Error plotting semantic space: {e}")
+            plt.close(fig)
+            return
+
+        if kmeans is None:
+            self.logger_visualization.error("KMeans clustering failed. Skipping visualization.")
+            return
 
         frame_path = os.path.join(self.frames_dir, f'frame_{global_step:06d}.png')
-        self.fig.savefig(frame_path, dpi=100)
+        fig.savefig(frame_path, dpi=100)
+        self.writer.add_figure('Semantic_Space', fig, global_step)
+        plt.close(fig)
+        self.logger_visualization.info("Successfully saved visualization.")
         
-        self.writer.add_figure('Semantic_Space', self.fig, global_step)
-        cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
-        self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
+        try:
+            cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
+            self.writer.add_text('Cluster_Analysis', cluster_text, global_step)
+        except Exception as e:
+            self.logger_visualization.error(f"Error saving cluster analysis: {e}")
+            return
+
+        self.logger_visualization.info("Successfully saved cluster analysis.")
     
     def _get_device(self):
         """Determines the torch device based on config and availability."""
@@ -113,7 +144,7 @@ class Trainer:
         self.current_dataloader = data_loader
         total_loss = 0
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
-        viz_freq = self.config.get("VISUALIZATION_FREQUENCY", 100)
+        viz_interval_seconds = self.config.get("VISUALIZATION_INTERVAL_SECONDS", 60)
         for i, (input_sequence, target_sequence) in enumerate(progress_bar):
             if self.shutdown_event.is_set():
                 self.logger.info("Shutdown detected, stopping training loop.")
@@ -141,11 +172,12 @@ class Trainer:
                 self.scheduler.step(tide_name=tide_name)
 
             total_loss += loss.item()
-    
-            if self.viz_enabled and i % viz_freq == 0:
+            tags = self.tags
+            current_time = time.time()
+            if self.viz_enabled and (current_time - self.last_viz_time > viz_interval_seconds):
+                self.last_viz_time = current_time # Update the timer immediately
+
                 global_step = self.current_epoch_num * len(data_loader) + i
-                
-                tags = self.config["TENSORBOARD_TAGS"]
 
                 # Fast, synchronous logging remains on the main thread, 
                 # as the negligible performance impact is a worthwhile trade-off 
@@ -181,6 +213,7 @@ class Trainer:
                     viz_data,              # Already detached in the model forward pass.
                     global_step,
                     input_sequence.cpu(),
+                    input_sequence.shape[1],
                     vocab,
                     tide_name
                 )
@@ -349,7 +382,6 @@ class Trainer:
         self.logger.info("Shutting down visualization executor...")
         self.visualization_executor.shutdown(wait=True, cancel_futures=False)
         self.writer.close()
-        plt.close(self.fig) # Close the matplotlib figure
         self.logger.info("Trainer cleanup complete.")
 
     def run(self):

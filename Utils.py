@@ -45,6 +45,8 @@ def setup_logger(name: str, log_file: str, config: dict):
         # Add the handlers to the logger
         logger.addHandler(fh)
         logger.addHandler(ch)
+
+        logger.propagate = config.get("LOGGER_PROPAGATE", False)
         
     return logger
 

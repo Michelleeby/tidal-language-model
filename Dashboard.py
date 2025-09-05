@@ -5,9 +5,53 @@ import glob
 from ruamel.yaml import YAML
 import subprocess
 import altair as alt
-from tensorboard.backend.event_processing import event_accumulator
 import re
 import collections
+import subprocess
+import logging
+
+# Set up a generic logger for debugging the video compilation
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+from streamlit_autorefresh import st_autorefresh
+from tensorboard.backend.event_processing import event_accumulator
+
+@st.cache_data(ttl=60)
+def _compile_video(frames_path, video_output_path, frame_count_mtime_tuple):
+    """
+    Compiles PNG frames into an MP4 video using FFmpeg.
+    This function is cached and only reruns if the number or last-modified time of frames changes.
+    """
+    if not os.path.isdir(frames_path) or frame_count_mtime_tuple[0] == 0:
+        return None, "No frames found to compile."
+
+    logger.info(f"Compiling {frame_count_mtime_tuple[0]} frames into video...")
+    
+    # This command tells FFmpeg to:
+    # -y: Overwrite output file if it exists
+    # -framerate 10: Assume 10 frames per second for the input
+    # -i ...: Read the PNG files in sequence
+    # -c:v libx264: Use the efficient H.264 video codec
+    # -pix_fmt yuv420p: Use a pixel format compatible with most web players
+    command = [
+        'ffmpeg',
+        '-y',
+        '-framerate', '30',
+        '-i', os.path.join(frames_path, 'frame_%06d.png'),
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        video_output_path
+    ]
+    try:
+        # We use DEVNULL to hide the verbose ffmpeg output from the console
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        logger.info(f"Video compilation successful: {video_output_path}")
+        return video_output_path, None
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        error_msg = f"FFmpeg error: {e}. Is FFmpeg installed and in your PATH?"
+        logger.error(error_msg)
+        return None, error_msg
 
 class TrainingDashboard:
     """
@@ -154,7 +198,12 @@ class TrainingDashboard:
         """
         st.title("🌊 Tidal Language Model - Training Dashboard")
         st.markdown("Monitor and analyze the training loop of the Tidal Language Model.")
-
+        
+        # Set the refresh interval to 15 seconds. This will trigger a script rerun.
+        # Thanks to caching, this is very efficient.
+        refresh_interval_seconds = 15
+        st_autorefresh(interval=refresh_interval_seconds * 1000, key="data_refresher")
+        
         st.sidebar.header("Experiment Controls")
         experiment_dirs = self._get_experiment_dirs()
 
@@ -193,16 +242,18 @@ class TrainingDashboard:
             if all_event_files:
                 file_stats = tuple((os.path.getmtime(f), os.path.getsize(f)) for f in all_event_files)
             
-            with st.spinner("Loading all TensorBoard event files..."):
+            with st.spinner("Checking for new TensorBoard data..."):
                 all_data, cluster_text = self._load_tensorboard_data(selected_experiment_path, file_stats)
 
             if not all_data:
-                st.warning("No TensorBoard data found for this experiment yet.")
+                st.warning("No TensorBoard data found for this experiment yet. Waiting for logs...")
                 st.stop()
 
             tab1, tab2, tab3, tab4 = st.tabs(["📈 Key Metrics", "🌌 2D Space Evolution", "🧬 8D Cluster Analysis", "⚡ Embedding Projector"])
 
             with tab1:
+                # This code only runs if tab1 is active. The data is already loaded and cached,
+                # so rendering the chart is extremely fast.
                 st.subheader("Training Performance")
                 col1, col2 = st.columns(2)
                 with col1:
@@ -222,24 +273,24 @@ class TrainingDashboard:
             with tab2:
                 st.subheader("Evolution of 2D Semantic Space")
                 frames_path = os.path.join(selected_experiment_path, "semantic_space_frames")
-                if os.path.isdir(frames_path) and glob.glob(os.path.join(frames_path, "frame_*.png")):
-                    frame_files = sorted(glob.glob(os.path.join(frames_path, "frame_*.png")))
-                    
-                    def get_step_from_frame(f):
-                        match = re.search(r'frame_(\d+).png', os.path.basename(f))
-                        return int(match.group(1)) if match else 0
+                video_output_path = os.path.join(frames_path, "evolution.mp4")
+                # Get a list of all frame files
+                frame_files = sorted(glob.glob(os.path.join(frames_path, "frame_*.png")))
+                frame_count = len(frame_files)
+                # Get the modification time of the newest frame, or 0 if none exist
+                latest_mtime = os.path.getmtime(frame_files[-1]) if frame_files else 0
+                # This tuple is our cache key. If it changes, the video is recompiled.
+                frame_count_mtime_tuple = (frame_count, latest_mtime)
+                # Call the cached compilation function
+                compiled_path, error = _compile_video(frames_path, video_output_path, frame_count_mtime_tuple)
 
-                    frame_steps = [get_step_from_frame(f) for f in frame_files]
-
-                    selected_step = st.select_slider(
-                        "Scrub through training frames (by global step):",
-                        options=frame_steps,
-                        value=frame_steps[-1]
-                    )
-                    selected_frame_path = os.path.join(frames_path, f'frame_{selected_step:06d}.png')
-                    st.image(selected_frame_path)
+                if compiled_path:
+                    st.video(compiled_path)
+                    st.caption(f"Live-updated video compiled from {frame_count} frames. Last updated: {pd.to_datetime(latest_mtime, unit='s').strftime('%Y-%m-%d %H:%M:%S')}")
+                elif error:
+                    st.error(error)
                 else:
-                    st.info("No semantic space visualizations found for this experiment.")
+                    st.info("No semantic space visualizations found yet. Waiting for frames...")
 
             with tab3:
                 col1, col2 = st.columns([1, 1])
