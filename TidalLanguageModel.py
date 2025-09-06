@@ -220,14 +220,14 @@ class TidalLanguageModel(nn.Module):
         neg_pos_2d = self._project(neg_pos_8d, plan_name="down_8_to_2")
         neg_masses = self.mass_embeddings(neg_ids)
 
-        loss = self.physics_simulator.calculate_grand_unifying_loss(
+        loss, loss_components = self.physics_simulator.calculate_grand_unifying_loss(
             positions_2d, velocities_2d, positions_8d, masses,
             pos_pos_2d, pos_pos_8d, positive_masses,
             neg_pos_2d, neg_pos_8d, neg_masses,
             masses.repeat_interleave(num_neg, dim=0)
         )
 
-        return loss, None
+        return loss, loss_components
 
     def _update_global_step(self):
         """Updates the global step of the simulation."""
@@ -376,7 +376,7 @@ class TidalLanguageModel(nn.Module):
                              new_velocities_2d.view(-1, 2), 
                              positions_8d.view(-1, self.config["SEMANTIC_AXIS_COUNT"]), 
                              effective_masses.view(-1, self.config["MASS_EMBEDDING_DIM"]))
-        physics_loss, _ = self._calculate_physics_loss(input_ids.view(-1), target_ids.view(-1) if target_ids is not None else None, sim_data_for_loss)
+        physics_loss, physics_loss_components = self._calculate_physics_loss(input_ids.view(-1), target_ids.view(-1) if target_ids is not None else None, sim_data_for_loss)
         
         self._update_global_step()
 
@@ -387,4 +387,4 @@ class TidalLanguageModel(nn.Module):
             'masses': effective_masses.view(-1, self.config["MASS_EMBEDDING_DIM"]).detach()
         }
 
-        return logits, physics_loss, viz_data
+        return logits, (physics_loss, physics_loss_components), viz_data

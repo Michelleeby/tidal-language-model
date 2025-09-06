@@ -96,6 +96,8 @@ class Trainer:
             "Losses/Total": data['total_loss'],
             "Losses/Prediction": data['prediction_loss'],
             "Losses/Physics": data['physics_loss'],
+            "Energy/F_pos": data['physics_loss_components']['F_pos'],
+            "Energy/F_neg": data['physics_loss_components']['F_neg'],
             "Physics/G": self.model.physics_simulator.G.item(),
             "Physics/Repulsion_Strength": self.model.physics_simulator.repulsion_strength.item(),
             "Physics/Well_Attraction": self.model.physics_simulator.well_attraction_strength.item(),
@@ -186,14 +188,15 @@ class Trainer:
             target_sequence_gpu = target_sequence.to(self.device)
             self.optimizer.zero_grad()
             logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
-            
+            final_physics_loss, physics_loss_components = physics_loss
+
             vocab_size = logits.shape[-1]
             prediction_loss = self.criterion(logits.view(-1, vocab_size), target_sequence_gpu.view(-1))
             
-            mean_physics_loss = physics_loss.mean()
+            mean_physics_loss = final_physics_loss.mean()
             scalar_physics_loss = mean_physics_loss.item()
             prediction_loss_item = prediction_loss.item()
-            loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * physics_loss.mean()
+            loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * mean_physics_loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
             
@@ -208,6 +211,10 @@ class Trainer:
                 'total_loss': loss.item(), 
                 'prediction_loss': prediction_loss_item, 
                 'physics_loss': scalar_physics_loss,
+                'physics_loss_components': {
+                    'F_pos': physics_loss_components['F_pos'].item(),
+                    'F_neg': physics_loss_components['F_neg'].item()
+                },
                 'viz_data': viz_data,
                 'input_sequence': input_sequence.cpu(),
                 'input_sequence_shape': input_sequence.shape[1],

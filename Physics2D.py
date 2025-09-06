@@ -164,4 +164,10 @@ class Physics2D(nn.Module):
         ke_pos = 0.5 * masses * torch.sum(vel_2d.pow(2), dim=-1)
         ke_loss = self.ke_penalty_factor * ke_pos.mean()
         
-        return free_energy_loss + ke_loss
+        # Create a dictionary to hold the loss components
+        loss_components = {
+            'F_pos': F_pos,
+            'F_neg': F_neg
+        }
+
+        return free_energy_loss + ke_loss, loss_components
