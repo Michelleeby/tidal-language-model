@@ -14,7 +14,7 @@ class SemanticEndocrineSystem(nn.Module):
     sequence and cognitive mood triggers detected in the input.
     """
     
-    def __init__(self, config: dict, experiment_dir: str = None, device: torch.device = None):
+    def __init__(self, config: dict, experiment_dir: str = None, device: torch.device = None, log_buffer: list = None):
         super().__init__()
         self.config = config
 
@@ -154,7 +154,7 @@ class SemanticEndocrineSystem(nn.Module):
 
     # Endocrine Cycle Methods.
 
-    def release_hormones(self, trigger_strengths: torch.Tensor, current_tidal_level: torch.Tensor):
+    def release_hormones(self, trigger_strengths: torch.Tensor, current_tidal_level: torch.Tensor, token_ids: torch.Tensor):
         """
         Vectorized method for releasing hormones based on trigger strengths.
         """
@@ -169,6 +169,53 @@ class SemanticEndocrineSystem(nn.Module):
         # Gather thresholds using the trigger names list
         threshold_values = torch.tensor([self.trigger_configs[name] for name in self.trigger_names], device=self.device)
         thresholds = threshold_values[trigger_indices]
+
+        if self.log_buffer is not None:
+            # 1. Find active triggers on the GPU.
+            active_mask = strengths > thresholds
+            active_indices = torch.where(active_mask)[0]
+            num_active = active_indices.shape[0]
+
+            if num_active > 0:
+                # 2. Gather all relevant data for active triggers using tensor indexing (still on GPU).
+                active_hormone_idxs = hormone_indices[active_indices]
+                active_trigger_idxs = trigger_indices[active_indices]
+                active_strengths = strengths[active_indices]
+                active_thresholds = thresholds[active_indices]
+
+                # 3. Expand context tensors to match the number of active triggers (on GPU)
+                # This creates views, not copies, so it's memory-efficient.
+                expanded_token_ids = token_ids.expand(num_active, -1)
+                expanded_tidal_level = current_tidal_level.expand(num_active)
+
+                # 4. Move data to the CPU in a single, consolidated block.
+                active_hormone_idxs_cpu = active_hormone_idxs.cpu()
+                active_trigger_idxs_cpu = active_trigger_idxs.cpu()
+                active_strengths_cpu = active_strengths.cpu()
+                active_thresholds_cpu = active_thresholds.cpu()
+                expanded_token_ids_cpu = expanded_token_ids.cpu().tolist()
+                expanded_tidal_level_cpu = expanded_tidal_level.cpu()
+
+                # 5. Assemble log entries on the CPU using the transferred data
+                log_entries = [
+                    {
+                        "token_ids": tokens,
+                        "trigger_name": self.trigger_names[trigger_idx],
+                        "hormone_name": self.hormone_types[hormone_idx],
+                        "strength": strength.item(),
+                        "threshold": threshold.item(),
+                        "tidal_level": tidal_level.item()
+                    }
+                    for tokens, trigger_idx, hormone_idx, strength, threshold, tidal_level in zip(
+                        expanded_token_ids_cpu,
+                        active_trigger_idxs_cpu,
+                        active_hormone_idxs_cpu,
+                        active_strengths_cpu,
+                        active_thresholds_cpu,
+                        expanded_tidal_level_cpu
+                    )
+                ]
+                self.log_buffer.extend(log_entries)
 
         # 2. Apply tidal bias
         tidal_bias = torch.ones_like(strengths)
@@ -266,9 +313,16 @@ class SemanticEndocrineSystem(nn.Module):
             self.hormone_levels.mul_(self.decay_rate).add_(baselines * (1 - self.decay_rate))
 
     def get_hormone_state(self) -> Dict[str, float]:
-        return {h: self.hormone_levels[self.hormone_map[h]].item() for h in self.hormone_types}
+        """
+        Returns the current hormone levels as a dictionary.
+        Optimized to minimize GPU-CPU synchronization.
+        """
+        # Move the entire tensor to CPU at once.
+        levels_on_cpu = self.hormone_levels.cpu().tolist()
+        # Zip with names on the CPU.
+        return dict(zip(self.hormone_types, levels_on_cpu))
     
     def forward(self, token_ids: torch.Tensor, semantic_positions: torch.Tensor, current_tidal_level: torch.Tensor) -> None:
         trigger_strengths = self.detect_triggers(token_ids, semantic_positions)
-        self.release_hormones(trigger_strengths, current_tidal_level)
+        self.release_hormones(trigger_strengths, current_tidal_level, token_ids)
         self.decay_hormones()

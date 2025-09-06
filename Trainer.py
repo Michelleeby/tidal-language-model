@@ -45,6 +45,43 @@ class Trainer:
         
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
+    def _log_qualitative_events_async(self, log_entries, idx_to_word, global_step):
+        """Processes a batch of trigger events and logs them as a wandb.Table."""
+        if not log_entries:
+            return
+
+        try:
+            columns = [
+                "Global Step", "Sequence Text", "Trigger Name", "Hormone", 
+                "Strength", "Threshold", "Status", "Tidal Level"
+            ]
+            table_data = []
+
+            for entry in log_entries:
+                tokens = [idx_to_word.get(idx, "<UNK>") for idx in entry["token_ids"]]
+                text = " ".join(tokens)
+                strength = entry["strength"]
+                threshold = entry["threshold"]
+                status = "🔥 ACTIVE" if strength > threshold else "dormant"
+                
+                table_data.append([
+                    global_step,
+                    text,
+                    entry["trigger_name"],
+                    entry["hormone_name"],
+                    f"{strength:.4f}",
+                    f"{threshold:.2f}",
+                    status,
+                    f"{entry['tidal_level']:.2f}"
+                ])
+            
+            wandb.log({
+                "Trigger Analysis Events": wandb.Table(data=table_data, columns=columns)
+            }, step=global_step)
+
+        except Exception as e:
+            self.logger_visualization.error(f"Error during async qualitative logging: {e}", exc_info=True)
+
     def _log_visuals_async(self, viz_data, global_step, batch_tokens, seq_len, vocab, tide_name):
         """Logs visualizations to W&B in a separate thread to avoid blocking training."""
         try:
@@ -129,7 +166,21 @@ class Trainer:
                 data['vocab'], 
                 data['tide_name']
             )
-
+        
+        qualitative_log_interval = self.config.get("QUALITATIVE_LOG_INTERVAL_BATCHES", 100)
+        if global_step % qualitative_log_interval == 0 and self.qualitative_log_buffer:
+            # 1. Atomically copy and clear the buffer
+            logs_to_process = self.qualitative_log_buffer.copy()
+            self.qualitative_log_buffer.clear()
+            
+            # 2. Submit the processing task to the background thread
+            self.visualization_executor.submit(
+                self._log_qualitative_events_async,
+                logs_to_process,
+                self.idx_to_word,
+                data['vocab'],
+                global_step
+            )
 
     def _get_device(self):
         """Determines the torch device based on config and availability."""
@@ -385,6 +436,10 @@ class Trainer:
         try:  
             self.logger.info("Building vocabulary...")
             vocab = load_vocab(self.config)
+
+            # Create and static cache the reverse mapping.
+            self.idx_to_word = {v: k for k, v in vocab.items()}
+
             self.probe_words = self.config.get("PROBE_WORDS", [])
             vocab_size = len(vocab)
 

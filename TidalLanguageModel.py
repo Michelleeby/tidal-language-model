@@ -70,13 +70,14 @@ class TidalLanguageModel(nn.Module):
         * Low T: Past-Oriented (history, memory, yesterday)  
         * High T: Future-Oriented (plan, hope, tomorrow)
     """
-    def __init__(self, vocab_size: int, config: dict, experiment_dir: str = None):
+    def __init__(self, vocab_size: int, config: dict, experiment_dir: str = None, log_buffer: list = None):
         super().__init__()
         self.config = config
         self.experiment_dir = experiment_dir
         self.vocab_size = vocab_size
+        self.log_buffer = log_buffer
         self.embed_dim = self.config.get("EMBED_DIM", 512)
-        
+
         device_str = self.config.get("DEVICE", "auto")
         if device_str == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,7 +114,12 @@ class TidalLanguageModel(nn.Module):
         self.output_projection = nn.Linear(self.embed_dim, vocab_size)
 
         if self.enable_endocrine_system:
-            self.endocrine_system = SemanticEndocrineSystem(config=self.config, experiment_dir=self.experiment_dir, device=self.device)
+            self.endocrine_system = SemanticEndocrineSystem(
+                config=self.config, 
+                experiment_dir=self.experiment_dir, 
+                device=self.device,
+                log_buffer=self.log_buffer 
+            )
 
         if self.enable_resonance:
             self.resonance_strength = nn.Parameter(torch.tensor(self.config["RESONANCE_STRENGTH"]))
