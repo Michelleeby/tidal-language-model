@@ -108,7 +108,6 @@ tidal-language-model/
 ├── Utils.py
 ```
 
-
 ### Setup Environment
 
 On Windows, WSL2 is recommended with any Linux distro, the default Ubuntu installation is fine. Use a WSL2 Terminal instance and run the following commands from the root directory of the project:
@@ -151,13 +150,19 @@ python3 -m spacy download en_core_web_sm
 
 ### Train the Model
 
-Set the configuration for the training run.
+First, preprocess the vocabulary and cache the training pairs:
+
+```bash
+python3 Preprocess.py
+```
+
+Then, set the configuration for the training run:
 
 ```bash
 CONFIG_FILE="configs/base_config.yaml"
 ```
 
-Then train the model:
+Finally, train the model:
 
 ```bash
 python3 Main.py --config "${CONFIG_FILE}"
@@ -181,7 +186,8 @@ Set the following variables, replacing the values with the ones you want to use.
 
 ```bash
 CONFIG_FILE="configs/base_config.yaml" && \
-CHECKPOINT_ID="checkpoint_tidal_fine_tuning_epoch_25" && \
+EXPERIMENT_ID="20250905-170823-commit_05ef08d-config_196aafedf3" && \
+CHECKPOINT_ID="checkpoint_foundational_epoch_1" && \
 MODEL_PATH="experiments/${EXPERIMENT_ID}/${CHECKPOINT_ID}.pth" && \
 PROMPT="the ocean reflects the" && \
 MAX_TOKENS=50 && \

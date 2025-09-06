@@ -278,11 +278,23 @@ class TidalLanguageModel(nn.Module):
             hidden_state = None
 
             if len(prompt_ids) > 0:
-                new_pos_2d, new_velocities_2d, pos_2d, _, _, _ = self._run_physics_simulation(
-                    positions, 
-                    velocities_2d, 
-                    masses
+                # Physics2D expects [batch_size, sequence_length, embed_dim] tensors.
+                # So we add a batch dimension to the initial state,
+                # and remove it from the results.
+                b_positions = positions.unsqueeze(0)
+                b_velocities_2d = velocities_2d.unsqueeze(0)
+                b_masses = masses.unsqueeze(0)
+
+                b_new_pos_2d, b_new_velocities_2d, b_pos_2d, _, _, _ = self._run_physics_simulation(
+                    b_positions, 
+                    b_velocities_2d, 
+                    b_masses
                 )
+
+                new_pos_2d = b_new_pos_2d.squeeze(0)
+                new_velocities_2d = b_new_velocities_2d.squeeze(0)
+                pos_2d = b_pos_2d.squeeze(0)
+
                 prompt_embeddings = self._calculate_new_positions(positions, pos_2d, new_pos_2d)
                 _, hidden_state = self.gru(prompt_embeddings.unsqueeze(0), hidden_state)
 
@@ -290,11 +302,21 @@ class TidalLanguageModel(nn.Module):
                 current_sequence_ids = torch.tensor(generated_ids_list, dtype=torch.long, device=self.device)
                 self._update_endocrine_system(current_sequence_ids)
 
-                new_pos_2d, new_velocities_2d, pos_2d, _, _, effective_masses = self._run_physics_simulation(
-                    positions, 
-                    velocities_2d, 
-                    masses
+                b_positions = positions.unsqueeze(0)
+                b_velocities_2d = velocities_2d.unsqueeze(0)
+                b_masses = masses.unsqueeze(0)
+
+                b_new_pos_2d, b_new_velocities_2d, b_pos_2d, _, _, b_effective_masses = self._run_physics_simulation(
+                    b_positions, 
+                    b_velocities_2d, 
+                    b_masses
                 )
+                
+                new_pos_2d = b_new_pos_2d.squeeze(0)
+                new_velocities_2d = b_new_velocities_2d.squeeze(0)
+                pos_2d = b_pos_2d.squeeze(0)
+                effective_masses = b_effective_masses.squeeze(0)
+
                 new_positions = self._calculate_new_positions(positions, pos_2d, new_pos_2d)
 
                 last_token_embedding = new_positions[-1:] # Shape: [1, embed_dim]

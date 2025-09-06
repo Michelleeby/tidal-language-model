@@ -99,7 +99,8 @@ def run_generation(args):
             max_new_tokens=args.max_tokens,
             temperature=args.temperature,
             top_k=args.top_k,
-            tidal_level=level
+            tidal_level=level,
+            repetition_penalty=args.repetition_penalty
         )
         
         generated_text = detokenizer(generated_ids, idx_to_vocab)
@@ -125,6 +126,9 @@ if __name__ == '__main__':
                         
     parser.add_argument('--config', type=str, default='base_config.yaml',
                         help='Path to the base configuration YAML file.')
-                        
+
+    parser.add_argument('--repetition_penalty', type=float, default=1.2,
+                    help='Penalty for repeating tokens.')
+
     args = parser.parse_args()
     run_generation(args)
