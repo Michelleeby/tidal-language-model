@@ -12,6 +12,7 @@ import wandb
 from concurrent.futures import ThreadPoolExecutor
 
 from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from SequentialDataset import load_or_create_dataset, load_vocab
@@ -31,6 +32,7 @@ class Trainer:
         self.device = self._get_device()
         self.logger, self.logger_visualization = self._setup_loggers(config.copy())
         self.last_viz_time = 0
+        self.qualitative_log_buffer = []
 
         # Initialize a thread pool with one worker for async I/O operations.
         # This prevents plotting and file saving from blocking the main training thread.
@@ -40,7 +42,7 @@ class Trainer:
         self.model = None
         self.optimizer = None
         self.criterion = None
-
+        self.scaler = GradScaler()
         self.current_epoch_num = 0
         
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
@@ -230,37 +232,56 @@ class Trainer:
         """Generic training function for one epoch."""
         self.model.train()
         self.current_dataloader = data_loader
+        desired_batch_size = self.config.get("DESIRED_BATCH_SIZE", self.config["BATCH_SIZE"])
+        micro_batch_size = self.config["BATCH_SIZE"]
+        if desired_batch_size % micro_batch_size != 0:
+            raise ValueError("DESIRED_BATCH_SIZE must be divisible by BATCH_SIZE for gradient accumulation.")
+        accumulation_steps = desired_batch_size // micro_batch_size
 
         total_loss = 0
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
 
+        self.optimizer.zero_grad() # Zero gradients at the start of the epoch
+
         for i, (input_sequence, target_sequence) in enumerate(progress_bar):
             input_sequence_gpu = input_sequence.to(self.device)
             target_sequence_gpu = target_sequence.to(self.device)
-            self.optimizer.zero_grad()
-            logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
-            final_physics_loss, physics_loss_components = physics_loss
-
-            vocab_size = logits.shape[-1]
-            prediction_loss = self.criterion(logits.view(-1, vocab_size), target_sequence_gpu.view(-1))
             
-            mean_physics_loss = final_physics_loss.mean()
-            scalar_physics_loss = mean_physics_loss.item()
-            prediction_loss_item = prediction_loss.item()
-            loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * mean_physics_loss
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
-            
-            self.optimizer.step()
-            if self.scheduler:
-                self.scheduler.step(tide_name=tide_name)
+            with autocast():
+                logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
+                final_physics_loss, physics_loss_components = physics_loss
 
-            total_loss += loss.item()
+                vocab_size = logits.shape[-1]
+                prediction_loss = self.criterion(logits.view(-1, vocab_size), target_sequence_gpu.view(-1))
+
+                mean_physics_loss = final_physics_loss.mean()
+                scalar_physics_loss = mean_physics_loss.item()
+                loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * mean_physics_loss
+
+                # Normalize loss for accumulation
+                loss = loss / accumulation_steps
+            
+            self.scaler.scale(loss).backward()
+            if (i + 1) % accumulation_steps == 0:
+                # Unscale gradients before clipping
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
+
+                # Scaler steps the optimizer
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+
+                if self.scheduler:
+                    self.scheduler.step(tide_name=tide_name)
+
+                self.optimizer.zero_grad() # Reset gradients after update
+
+            total_loss += loss.item() * accumulation_steps # Un-normalize for logging
             global_step = self.current_epoch_num * len(data_loader) + i
-            
+
             log_data_dict = {
-                'total_loss': loss.item(), 
-                'prediction_loss': prediction_loss_item, 
+                'total_loss': loss.item() * accumulation_steps, 
+                'prediction_loss': prediction_loss.item(), 
                 'physics_loss': scalar_physics_loss,
                 'physics_loss_components': {
                     'F_pos': physics_loss_components['F_pos'].item(),
