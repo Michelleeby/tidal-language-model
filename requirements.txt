@@ -12,3 +12,4 @@ streamlit
 pandas
 altair
 streamlit-autorefresh
+wandb

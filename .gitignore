@@ -40,6 +40,7 @@ experiments/
 corpus/
 prompt.txt
 configs/
+wandb/
 
 # Ignore all cached data (datasets, vocabularies)
 cache/
