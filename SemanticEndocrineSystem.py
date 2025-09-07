@@ -20,7 +20,8 @@ class SemanticEndocrineSystem(nn.Module):
 
         log_dir = experiment_dir if experiment_dir else "."
         log_file_training = os.path.join(log_dir, self.config.get("LOG_FILE_TRAINING_ENDORCRINE_SYSTEM", "endocrine-training.log"))
-        log_file_evaluation = os.path.join(log_dir, self.config.get("LOG_FILE_EVALUATION_ENDOCRINE_SYSTEM", "endocrine-evaluation.log")) 
+        log_file_evaluation = os.path.join(log_dir, self.config.get("LOG_FILE_EVALUATION_ENDOCRINE_SYSTEM", "endocrine-evaluation.log"))
+        self.log_buffer = log_buffer
         self.logger = setup_logger('TrainingEndocrineSystem', log_file_training, config)
         self.logger_evaluation = setup_logger('EvaluationEndocrineSystem', log_file_evaluation, config)
 

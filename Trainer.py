@@ -12,7 +12,8 @@ import wandb
 from concurrent.futures import ThreadPoolExecutor
 
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
 from tqdm import tqdm
 
 from SequentialDataset import load_or_create_dataset, load_vocab
@@ -33,6 +34,7 @@ class Trainer:
         self.logger, self.logger_visualization = self._setup_loggers(config.copy())
         self.last_viz_time = 0
         self.qualitative_log_buffer = []
+        self.pending_viz_futures = []
 
         # Initialize a thread pool with one worker for async I/O operations.
         # This prevents plotting and file saving from blocking the main training thread.
@@ -77,9 +79,11 @@ class Trainer:
                     f"{entry['tidal_level']:.2f}"
                 ])
             
-            wandb.log({
+            log_dict = {
                 "Trigger Analysis Events": wandb.Table(data=table_data, columns=columns)
-            }, step=global_step)
+            },
+
+            return log_dict
 
         except Exception as e:
             self.logger_visualization.error(f"Error during async qualitative logging: {e}", exc_info=True)
@@ -114,11 +118,12 @@ class Trainer:
 
             cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
             
-            # Log both image and text to W&B
-            wandb.log({
+            log_dict = {
                 "Semantic Space": wandb.Image(fig),
                 "Cluster Analysis": cluster_text
-            }, step=global_step)
+            }
+
+            return log_dict
 
         except Exception as e:
             self.logger_visualization.error(f"Error during async visualization: {e}", exc_info=True)
@@ -149,6 +154,27 @@ class Trainer:
             hormone_logs = {f"Hormones/{k}": v for k, v in hormone_state.items()}
             metrics_dict.update(hormone_logs)
 
+        # Create a new list to hold futures that are not yet complete.
+        still_pending_futures = []
+        # Process all pending futures in a single loop.
+        for future in self.pending_viz_futures:
+            
+            # If a future is not done, keep it for the next check.
+            if not future.done():
+                still_pending_futures.append(future)
+                continue
+            
+            # If the future is done, try to get its result and log it.
+            try:
+                result = future.result()
+                if result:
+                    metrics_dict.update(result)
+            except Exception as e:
+                self.logger_visualization.error(f"Async logging task failed: {e}", exc_info=True)
+
+        # Atomically replace the old list with the new one.
+        self.pending_viz_futures = still_pending_futures
+
         wandb.log(metrics_dict, step=global_step)
 
         current_time = time.time()
@@ -159,7 +185,7 @@ class Trainer:
             # Slow I/O tasks are offloaded to the background visualization thread, so this call returns immediately.
             # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
             # This avoids issues with GPU contexts and to prevent holding onto the computation graph.
-            self.visualization_executor.submit(
+            future = self.visualization_executor.submit(
                 self._log_visuals_async,
                 data['viz_data'], 
                 global_step, 
@@ -168,21 +194,23 @@ class Trainer:
                 data['vocab'], 
                 data['tide_name']
             )
+            self.pending_viz_futures.append(future)
         
         qualitative_log_interval = self.config.get("QUALITATIVE_LOG_INTERVAL_BATCHES", 100)
         if global_step % qualitative_log_interval == 0 and self.qualitative_log_buffer:
-            # 1. Atomically copy and clear the buffer
+            # 1. Atomically copy and clear the buffer.
             logs_to_process = self.qualitative_log_buffer.copy()
             self.qualitative_log_buffer.clear()
             
-            # 2. Submit the processing task to the background thread
-            self.visualization_executor.submit(
+            # 2. Submit the processing task to the background thread.
+            future = self.visualization_executor.submit(
                 self._log_qualitative_events_async,
                 logs_to_process,
                 self.idx_to_word,
                 data['vocab'],
                 global_step
             )
+            self.pending_viz_futures.append(future)
 
     def _get_device(self):
         """Determines the torch device based on config and availability."""
@@ -247,7 +275,7 @@ class Trainer:
             input_sequence_gpu = input_sequence.to(self.device)
             target_sequence_gpu = target_sequence.to(self.device)
             
-            with autocast():
+            with autocast(self.device):
                 logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
                 final_physics_loss, physics_loss_components = physics_loss
 
