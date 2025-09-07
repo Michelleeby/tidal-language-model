@@ -83,7 +83,7 @@ class Physics2D(nn.Module):
         repulsive_force_mag = positive_repulsion_strength * torch.relu(1 - (dist_safe / self.repulsion_cutoff)) / (dist_sq_safe * dist_safe + self.epsilon)
 
         # Combine forces
-        total_force_mag = repulsive_force_mag - attractive_force_mag 
+        total_force_mag = attractive_force_mag - repulsive_force_mag 
         force_vectors = total_force_mag.unsqueeze(-1) * diff / (dist_safe.unsqueeze(-1) + self.epsilon)
         
         # Sum forces over the second sequence dimension (dim=2) to get the net force on each particle
@@ -120,20 +120,22 @@ class Physics2D(nn.Module):
         Calculates contrastive loss based on Helmholtz Free Energy (F = U - T*S).
         """
         epsilon = self.config["FORCE_CALCULATION_EPSILON"]
+        loss_softening = self.config.get("LOSS_SOFTENING_PARAM", 1e-4)
 
-        # 1. Calculate Pairwise Potential Energy (U_pair) in 2D space
-        dist_pos_2d = torch.norm(pos_2d - pos_pos_2d, dim=-1) + epsilon
-        pe_pairwise_pos = -torch.relu(self.G) * (masses * positive_masses).squeeze() / dist_pos_2d
+        # 1. Calculate Pairwise Potential Energy (U_pair) in 2D space.
+        dist_sq_pos = torch.sum((pos_2d - pos_pos_2d).pow(2), dim=-1)
+        stable_dist_pos = torch.sqrt(dist_sq_pos + loss_softening)
+        pe_pairwise_pos = -torch.relu(self.G) * (masses * positive_masses).squeeze() / stable_dist_pos
+        dist_sq_neg = torch.sum((pos_2d.repeat_interleave(self.config["NUM_NEGATIVE_SAMPLES"], dim=0) - neg_pos_2d).pow(2), dim=-1)
+        stable_dist_neg = torch.sqrt(dist_sq_neg + loss_softening)
+        pe_pairwise_neg = -torch.relu(self.G) * (exp_masses * neg_masses).squeeze() / stable_dist_neg
 
-        dist_neg_2d = torch.norm(pos_2d.repeat_interleave(self.config["NUM_NEGATIVE_SAMPLES"], dim=0) - neg_pos_2d, dim=-1) + epsilon
-        pe_pairwise_neg = -torch.relu(self.G) * (exp_masses * neg_masses).squeeze() / dist_neg_2d
-
-        # 2. Calculate Well Potential Energy (U_well) in 8D space
+        # 2. Calculate Well Potential Energy (U_well) in 8D space.
         all_pos_8d = torch.cat([pos_8d, pos_pos_8d], dim=0)
         dist_to_wells_pos = torch.cdist(all_pos_8d, self.semantic_well_centers)
         min_dist_pos, _ = torch.min(dist_to_wells_pos, dim=1)
 
-        # Constrain learnable parameters to be non-negative
+        # Constrain learnable parameters to be non-negative.
         positive_well_strength = torch.relu(self.well_attraction_strength)
         positive_temperature = torch.relu(self.temperature)
         positive_entropy_coeff = torch.relu(self.entropy_coefficient)
@@ -144,27 +146,27 @@ class Physics2D(nn.Module):
         min_dist_neg, _ = torch.min(dist_to_wells_neg, dim=1)
         pe_well_neg = positive_well_strength * min_dist_neg.pow(2)
 
-        # 3. Combine for Total Internal Energy (U)
+        # 3. Combine for Total Internal Energy (U).
         U_pos = pe_pairwise_pos.mean() + pe_well_pos.mean()
         U_neg = pe_pairwise_neg.mean() + pe_well_neg.mean()
 
-        # 4. Calculate Entropy Term (T*S) in 8D space
+        # 4. Calculate Entropy Term (T*S) in 8D space.
         batch_variance_8d = torch.mean(torch.var(all_pos_8d, dim=0))
         entropy_term = positive_temperature * positive_entropy_coeff * batch_variance_8d
 
-        # 5. Calculate Helmholtz Free Energy (F = U - T*S)
+        # 5. Calculate Helmholtz Free Energy (F = U - T*S).
         F_pos = U_pos - entropy_term
         F_neg = U_neg - entropy_term
 
-        # 6. Calculate Contrastive Loss
+        # 6. Calculate Contrastive Loss.
         margin = self.config["PHYSICS_LOSS_MARGIN"]
         free_energy_loss = torch.relu(margin + F_pos - F_neg)
 
-        # 7. (Optional) Add Kinetic Energy Penalty in 2D space
+        # 7. (Optional) Add Kinetic Energy Penalty in 2D space.
         ke_pos = 0.5 * masses * torch.sum(vel_2d.pow(2), dim=-1)
         ke_loss = self.ke_penalty_factor * ke_pos.mean()
         
-        # Create a dictionary to hold the loss components
+        # Create a dictionary to hold the loss components.
         loss_components = {
             'F_pos': F_pos,
             'F_neg': F_neg

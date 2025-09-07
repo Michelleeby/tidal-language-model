@@ -78,66 +78,59 @@ class SemanticEndocrineSystem(nn.Module):
 
     def detect_triggers(self, token_ids: torch.Tensor, embeddings_8d: torch.Tensor) -> torch.Tensor:
         """Calculates all trigger strengths in a single vectorized operation."""
-        # Ensure embeddings are on the correct device, which they should be.
-        # Detach to prevent gradients from flowing back through this logic.
+        # B = Batch size, S = Sequence length
+        # embeddings_8d shape: [B, S, 8]
+        # token_ids shape: [B, S]
         embeddings = embeddings_8d.detach()
+        B, S, _ = embeddings.shape
 
         def _normalize(axis_values: torch.Tensor) -> torch.Tensor:
-            return (axis_values.mean() + 1) / 2
+            # axis_values shape: [B, S] -> output shape: [B]
+            return (axis_values.mean(dim=1) + 1) / 2
 
         # Pre-calculate common values.
-        mean_axes = embeddings.mean(dim=0)
-        std_axes = torch.std(embeddings, dim=0)
+        mean_axes = embeddings.mean(dim=1) # -> [B, 8]
+        std_axes = torch.std(embeddings, dim=1) # -> [B, 8]
 
         # Map axis names to their indices from config.
         g, x, v, a, h, s, f, t = [self.config["SEMANTIC_AXIS_MAPPING"][f"{axis}_AXIS"] for axis in "GXVHASFT"]
 
-        # Define all of our triggers.
-
-        # Cognitive Mood Triggers.
-        grounding_strength = 1.0 - _normalize(embeddings[:, g])
-        homeostasis_strength = _normalize(embeddings[:, h])
+        # Cognitive Mood Triggers (all result in shape [B]).
+        grounding_strength = 1.0 - _normalize(embeddings[:, :, g])
+        homeostasis_strength = _normalize(embeddings[:, :, h])
         grounding_mood = (grounding_strength + homeostasis_strength) / 2
-        valence_strength = _normalize(embeddings[:, v])
-        arousal_strength = _normalize(embeddings[:, a])
+        valence_strength = _normalize(embeddings[:, :, v])
+        arousal_strength = _normalize(embeddings[:, :, a])
         creative_mood = (valence_strength + arousal_strength) / 2
-        agency_mood = (arousal_strength + _normalize(embeddings[:, s])) / 2
+        agency_mood = (arousal_strength + _normalize(embeddings[:, :, s])) / 2
         relational_mood = (valence_strength + (1.0 - arousal_strength)) / 2
-        articulation_mood = 1.0 - torch.abs(mean_axes[f])
-        abstraction_strength = _normalize(embeddings[:, g])
-        specificity_variance = torch.std(embeddings[:, x])
+        articulation_mood = 1.0 - torch.abs(mean_axes[:, f])
+        abstraction_strength = _normalize(embeddings[:, :, g])
+        specificity_variance = torch.std(embeddings[:, :, x], dim=1)
         insight_mood = (abstraction_strength + specificity_variance) / 2
-        synthesis_mood = (abstraction_strength + (1.0 - _normalize(embeddings[:, x]))) / 2
+        synthesis_mood = (abstraction_strength + (1.0 - _normalize(embeddings[:, :, x]))) / 2
 
-        # Repetition Trigger.
-        total_count = len(token_ids)
-        unique_count = torch.unique(token_ids).size(0)
-        repetition_ratio = 1.0 - (torch.tensor(unique_count, device=self.device) / (total_count + 1e-6))
+        # Repetition Trigger
+        total_count = S
+        # This part is not easily vectorized across batches; list comprehension is a good compromise.
+        unique_counts = torch.tensor([torch.unique(token_ids[i]).size(0) for i in range(B)], device=self.device)
+        repetition_ratio = 1.0 - (unique_counts / (total_count + 1e-6))
         threshold = self.trigger_configs['repetition_trigger']
         base_trigger_strength = torch.relu((repetition_ratio - threshold) / (1.0 - threshold + 1e-6))
         sequence_length_threshold = self.config["REPETITION_TRIGGER_TOKEN_SEQUENCE_THRESHOLD"]
         is_long_enough_mask = torch.tensor(float(total_count > sequence_length_threshold), device=self.device)
         repetition_trigger = base_trigger_strength * is_long_enough_mask
 
-        # NOTE: The following if/else blocks are deliberate safety checks. Vectorized masking is not used here
-        # because calculating norms or standard deviations on sequences with fewer than two elements produces
-        # `NaN` (Not a Number). This guard is critical to prevent numerical instability that would corrupt model training.
-
-        # Conceptual Leap Trigger.
-        if embeddings.shape[0] < 2:
-            conceptual_leap = torch.tensor(0.0, device=self.device)
+        # NOTE: The following if/else blocks are deliberate safety checks for sequence length.
+        if S < 2:
+            conceptual_leap = torch.zeros(B, device=self.device)
+            semantic_diversity = torch.zeros(B, device=self.device)
         else:
-            distances = torch.norm(embeddings[1:] - embeddings[:-1], p=2, dim=1)
-            conceptual_leap = torch.mean(distances)
+            distances = torch.norm(embeddings[:, 1:] - embeddings[:, :-1], p=2, dim=2)
+            conceptual_leap = torch.mean(distances, dim=1)
+            semantic_diversity = torch.mean(std_axes, dim=1)
 
-        # Semantic Diversity Trigger.
-        if embeddings.shape[0] < 2:
-            semantic_diversity = torch.tensor(0.0, device=self.device)
-        else:
-            semantic_diversity = torch.mean(std_axes)
-
-        # Stack all defined triggers into a single tensor in the correct order.
-        # NOTE: The order here MUST match the order in `self.trigger_names` from the `__init__` method.
+        # Stack all defined triggers into a single tensor, ordered correctly.
         trigger_strengths = torch.stack([
             repetition_trigger,
             conceptual_leap,
@@ -149,7 +142,7 @@ class SemanticEndocrineSystem(nn.Module):
             articulation_mood,
             insight_mood,
             synthesis_mood
-        ])
+        ], dim=1) # -> shape [B, num_triggers]
 
         return trigger_strengths
 
@@ -157,66 +150,22 @@ class SemanticEndocrineSystem(nn.Module):
 
     def release_hormones(self, trigger_strengths: torch.Tensor, current_tidal_level: torch.Tensor, token_ids: torch.Tensor):
         """
-        Vectorized method for releasing hormones based on trigger strengths.
+        Vectorized method for releasing hormones. It now averages triggers across a batch.
         """
         if trigger_strengths is None: return
+
+        # Average the trigger strengths across the batch to get a single update vector
+        mean_trigger_strengths = trigger_strengths.mean(dim=0)
 
         # 1. Gather the strengths and thresholds for each hormone-trigger pair
         hormone_indices = self.trigger_to_hormone_map[:, 0]
         trigger_indices = self.trigger_to_hormone_map[:, 1]
 
-        strengths = trigger_strengths[trigger_indices]
+        strengths = mean_trigger_strengths[trigger_indices]
 
         # Gather thresholds using the trigger names list
         threshold_values = torch.tensor([self.trigger_configs[name] for name in self.trigger_names], device=self.device)
         thresholds = threshold_values[trigger_indices]
-
-        if self.log_buffer is not None:
-            # 1. Find active triggers on the GPU.
-            active_mask = strengths > thresholds
-            active_indices = torch.where(active_mask)[0]
-            num_active = active_indices.shape[0]
-
-            if num_active > 0:
-                # 2. Gather all relevant data for active triggers using tensor indexing (still on GPU).
-                active_hormone_idxs = hormone_indices[active_indices]
-                active_trigger_idxs = trigger_indices[active_indices]
-                active_strengths = strengths[active_indices]
-                active_thresholds = thresholds[active_indices]
-
-                # 3. Expand context tensors to match the number of active triggers (on GPU)
-                # This creates views, not copies, so it's memory-efficient.
-                expanded_token_ids = token_ids.expand(num_active, -1)
-                expanded_tidal_level = current_tidal_level.expand(num_active)
-
-                # 4. Move data to the CPU in a single, consolidated block.
-                active_hormone_idxs_cpu = active_hormone_idxs.cpu()
-                active_trigger_idxs_cpu = active_trigger_idxs.cpu()
-                active_strengths_cpu = active_strengths.cpu()
-                active_thresholds_cpu = active_thresholds.cpu()
-                expanded_token_ids_cpu = expanded_token_ids.cpu().tolist()
-                expanded_tidal_level_cpu = expanded_tidal_level.cpu()
-
-                # 5. Assemble log entries on the CPU using the transferred data
-                log_entries = [
-                    {
-                        "token_ids": tokens,
-                        "trigger_name": self.trigger_names[trigger_idx],
-                        "hormone_name": self.hormone_types[hormone_idx],
-                        "strength": strength.item(),
-                        "threshold": threshold.item(),
-                        "tidal_level": tidal_level.item()
-                    }
-                    for tokens, trigger_idx, hormone_idx, strength, threshold, tidal_level in zip(
-                        expanded_token_ids_cpu,
-                        active_trigger_idxs_cpu,
-                        active_hormone_idxs_cpu,
-                        active_strengths_cpu,
-                        active_thresholds_cpu,
-                        expanded_tidal_level_cpu
-                    )
-                ]
-                self.log_buffer.extend(log_entries)
 
         # 2. Apply tidal bias
         tidal_bias = torch.ones_like(strengths)
@@ -250,6 +199,8 @@ class SemanticEndocrineSystem(nn.Module):
         # 6. Update hormone levels and clamp
         self.hormone_levels += total_release
         torch.clamp_(self.hormone_levels, 0.0, 1.0)
+
+        return dict(zip(self.hormone_types, self.hormone_levels.cpu().tolist()))
 
     def apply_hormonal_effects(self, forces_8d: torch.Tensor, masses: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -324,6 +275,11 @@ class SemanticEndocrineSystem(nn.Module):
         return dict(zip(self.hormone_types, levels_on_cpu))
     
     def forward(self, token_ids: torch.Tensor, semantic_positions: torch.Tensor, current_tidal_level: torch.Tensor) -> None:
+        is_batched = token_ids.dim() == 2
+        if not is_batched:
+            token_ids = token_ids.unsqueeze(0)
+            semantic_positions = semantic_positions.unsqueeze(0)
+
         trigger_strengths = self.detect_triggers(token_ids, semantic_positions)
         self.release_hormones(trigger_strengths, current_tidal_level, token_ids)
         self.decay_hormones()

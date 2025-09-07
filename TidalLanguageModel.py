@@ -254,15 +254,17 @@ class TidalLanguageModel(nn.Module):
         self.eval()
         if tidal_level is not None: self.set_tidal_level(tidal_level)
         
-        prompt_ids = prompt_ids.to(self.device).view(-1)
-        generated_ids_list = list(prompt_ids.cpu().numpy())
+        # Start with the prompt and keep the tensor on the GPU.
+        generated_tokens = prompt_ids.to(self.device).view(-1)
         
         with torch.no_grad():
-            positions_512d, velocities_2d, masses = self._get_initial_state(prompt_ids)
+            # Initial state from prompt
+            positions_512d, velocities_2d, masses = self._get_initial_state(generated_tokens)
             positions_8d = self._project(positions_512d, "down_512_to_8")
             hidden_state = None
 
-            if len(prompt_ids) > 0:
+            # "Prime" the GRU with the full prompt sequence
+            if len(generated_tokens) > 0:
                 b_positions_8d = positions_8d.unsqueeze(0)
                 b_velocities_2d = velocities_2d.unsqueeze(0)
                 b_masses = masses.unsqueeze(0)
@@ -280,62 +282,68 @@ class TidalLanguageModel(nn.Module):
                 prompt_embeddings_8d = self._project_delta(positions_8d, pos_2d, new_pos_2d, plan_name="up_2_to_8")
                 _, hidden_state = self.gru(prompt_embeddings_8d.unsqueeze(0), hidden_state)
 
+            # Autoregressive generation loop
             for _ in range(max_new_tokens):
-                current_sequence_ids = torch.tensor(generated_ids_list, dtype=torch.long, device=self.device)
-                self._update_endocrine_system(current_sequence_ids)
+                self._update_endocrine_system(generated_tokens)
 
-                b_positions_8d = positions_8d.unsqueeze(0)
-                b_velocities_2d = velocities_2d.unsqueeze(0)
-                b_masses = masses.unsqueeze(0)
+                # Get the state of the last token to predict the next one
+                last_pos_8d = positions_8d[-1:].unsqueeze(0)
+                last_vel_2d = velocities_2d[-1:].unsqueeze(0)
+                last_mass = masses[-1:].unsqueeze(0)
 
-                b_positions_2d = self._project(b_positions_8d, plan_name="down_8_to_2")
-                b_raw_forces_2d = self.physics_simulator.calculate_forces(b_positions_2d, b_masses)
-                b_final_forces_2d, b_effective_masses = self._apply_biological_effects(b_raw_forces_2d, b_masses)
+                # Simulate physics for the single last token
+                b_positions_2d = self._project(last_pos_8d, plan_name="down_8_to_2")
+                # Force calculation needs context, so we use the full sequence here.
+                full_pos_2d = self._project(positions_8d.unsqueeze(0), plan_name="down_8_to_2")
+                full_masses = masses.unsqueeze(0)
+                b_raw_forces_2d = self.physics_simulator.calculate_forces(full_pos_2d, full_masses)[:, -1:]
+                
+                b_final_forces_2d, b_effective_masses = self._apply_biological_effects(b_raw_forces_2d, last_mass)
+                
                 b_new_pos_2d, b_new_velocities_2d = self.physics_simulator.verlet_integration(
-                    b_positions_2d, b_velocities_2d, b_effective_masses, b_final_forces_2d, self.get_tidal_level()
+                    b_positions_2d, last_vel_2d, b_effective_masses, b_final_forces_2d, self.get_tidal_level()
                 )
 
-                new_pos_2d = b_new_pos_2d.squeeze(0)
-                new_velocities_2d = b_new_velocities_2d.squeeze(0)
-                pos_2d = b_positions_2d.squeeze(0)
-                effective_masses = b_effective_masses.squeeze(0)
-
-                new_positions_8d = self._project_delta(positions_8d, pos_2d, new_pos_2d, plan_name="up_2_to_8")
-                last_token_embedding_8d = new_positions_8d[-1:].unsqueeze(1) # Shape: [1, 1, 8]
+                # Project delta and update GRU state
+                new_pos_8d_last = self._project_delta(last_pos_8d.squeeze(0), b_positions_2d.squeeze(0), b_new_pos_2d.squeeze(0), plan_name="up_2_to_8")
+                gru_output_8d, hidden_state = self.gru(new_pos_8d_last.unsqueeze(0), hidden_state)
                 
-                gru_output_8d, hidden_state = self.gru(last_token_embedding_8d, hidden_state)
-                
+                # Get logits for the next token
                 gru_output_512d = self._project(gru_output_8d, plan_name="up_8_to_512")
                 logits = self.output_projection(gru_output_512d.squeeze(1))
 
-                if len(generated_ids_list) > 0:
-                    recent_tokens = torch.tensor(list(set(generated_ids_list)), device=self.device, dtype=torch.long)
-                    logits[0, recent_tokens] /= repetition_penalty
+                # Apply repetition penalty
+                if len(generated_tokens) > 0:
+                    unique_tokens = torch.unique(generated_tokens)
+                    logits[0, unique_tokens] /= repetition_penalty
                 
+                # Sampling
                 logits = logits / temperature
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 top_k_val = min(top_k, self.vocab_size)
                 top_k_probs, top_k_indices = torch.topk(probs, k=top_k_val)
                 next_token_idx = torch.multinomial(top_k_probs, num_samples=1)
-                next_token_id = torch.gather(top_k_indices, 1, next_token_idx).squeeze()
+                next_token_id = torch.gather(top_k_indices, 1, next_token_idx).squeeze().view(1)
 
-                generated_ids_list.append(next_token_id.item())
+                # Append the new token and its state to our running tensors on the GPU
+                generated_tokens = torch.cat((generated_tokens, next_token_id))
                 
-                new_pos_512d = self.position_embeddings(next_token_id.unsqueeze(0))
-                new_pos_8d = self._project(new_pos_512d, "down_512_to_8")
-                new_vel_2d = self.velocity_embeddings(next_token_id.unsqueeze(0))
-                new_mass = self.mass_embeddings(next_token_id.unsqueeze(0))
+                new_pos_512d = self.position_embeddings(next_token_id)
+                new_pos_8d_next = self._project(new_pos_512d, "down_512_to_8")
+                new_vel_2d_next = self.velocity_embeddings(next_token_id)
+                new_mass_next = self.mass_embeddings(next_token_id)
                 
-                positions_8d = torch.cat((new_positions_8d, new_pos_8d), dim=0)
-                velocities_2d = torch.cat((new_velocities_2d, new_vel_2d), dim=0)
-                masses = torch.cat((effective_masses, new_mass), dim=0)
-                velocities_2d = velocities_2d * 0.98
+                # Update the full state tensors
+                positions_8d = torch.cat((positions_8d, new_pos_8d_next), dim=0)
+                velocities_2d = torch.cat((velocities_2d, new_vel_2d_next), dim=0)
+                masses = torch.cat((masses, new_mass_next), dim=0)
                 
                 if tidal_level is None: self._update_global_step()
 
         self.set_tidal_level(None)
         self.train() 
-        return generated_ids_list
+        # Convert to a standard Python list on the CPU only once at the end.
+        return generated_tokens.cpu().tolist()
 
     def forward(self, input_ids: torch.Tensor, target_ids: torch.Tensor = None):
         """
