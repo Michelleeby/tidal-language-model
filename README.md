@@ -57,8 +57,6 @@ See [`Physics2D.py`](Physics2D.py) for more details.
 
 ## Building the Vocabulary
 
-The vocabulary is built from the foundational corpus file using **lemmatization**, with the `spaCy` library. **Lemmatization** is the process of converting a word to its base form. For example, the word "running" would be converted to "run". This creates the "concepts" that the model will project into the *Semantic Space*. 
-
 See [`Preprocess.py`](Preprocess.py) for more details.
 
 ## Semantic Endocrine System
