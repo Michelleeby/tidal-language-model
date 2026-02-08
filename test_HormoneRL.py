@@ -1,0 +1,284 @@
+"""
+test_HormoneRL.py
+
+Unit tests for the RL Hormone Controller components.
+Tests each component in isolation and verifies integration.
+"""
+
+import torch
+import unittest
+import tempfile
+import os
+import sys
+
+# Ensure project root is in path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from HormoneModulator import HormoneModulator, HormoneEffects, RandomHormonePolicy, FixedHormonePolicy
+from RewardComputer import RewardComputer
+from HormoneRLAgent import HormoneRLAgent, GaussianHormoneRLAgent, create_agent
+
+
+class TestHormoneModulator(unittest.TestCase):
+    """Tests for HormoneModulator class."""
+
+    def setUp(self):
+        self.config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CATALYST_TEMP_MIN": 0.5,
+            "RL_CATALYST_TEMP_MAX": 1.5,
+            "RL_INHIBITOR_PENALTY_MIN": 1.0,
+            "RL_INHIBITOR_PENALTY_MAX": 2.5,
+            "RL_STRESS_ATTENTION_STRENGTH": 2.0
+        }
+        self.modulator = HormoneModulator(self.config)
+        self.device = torch.device("cpu")
+
+    def test_temperature_modulation(self):
+        """Test catalyst hormone affects temperature."""
+        # At catalyst=0, temp should be 0.5 * base
+        temp_low = self.modulator.compute_temperature(0.0)
+        self.assertAlmostEqual(temp_low, 0.5, places=4)
+
+        # At catalyst=1, temp should be 1.5 * base
+        temp_high = self.modulator.compute_temperature(1.0)
+        self.assertAlmostEqual(temp_high, 1.5, places=4)
+
+        # At catalyst=0.5, temp should be 1.0 * base
+        temp_mid = self.modulator.compute_temperature(0.5)
+        self.assertAlmostEqual(temp_mid, 1.0, places=4)
+
+    def test_repetition_penalty_modulation(self):
+        """Test inhibitor hormone affects repetition penalty."""
+        # The formula: base * (min + inhibitor * (max - min)) / base = min + inhibitor * (max - min)
+        # At inhibitor=0, penalty = 1.0
+        penalty_low = self.modulator.compute_repetition_penalty(0.0)
+        self.assertAlmostEqual(penalty_low, 1.0, places=4)
+
+        # At inhibitor=1, penalty = 2.5
+        penalty_high = self.modulator.compute_repetition_penalty(1.0)
+        self.assertAlmostEqual(penalty_high, 2.5, places=4)
+
+        # At inhibitor=0.5, penalty should be midpoint
+        penalty_mid = self.modulator.compute_repetition_penalty(0.5)
+        self.assertAlmostEqual(penalty_mid, 1.75, places=4)
+
+        # Verify penalty increases with inhibitor
+        self.assertGreater(penalty_high, penalty_low)
+
+    def test_attention_bias_shape(self):
+        """Test attention bias has correct shape."""
+        bias = self.modulator.compute_attention_bias(0.5, 10, self.device)
+        self.assertEqual(bias.shape, (10,))
+
+    def test_forward_returns_effects(self):
+        """Test forward returns HormoneEffects dataclass."""
+        hormones = torch.tensor([0.5, 0.5, 0.5])
+        effects = self.modulator(hormones, 20, self.device)
+
+        self.assertIsInstance(effects, HormoneEffects)
+        self.assertIsInstance(effects.temperature, float)
+        self.assertIsInstance(effects.repetition_penalty, float)
+        self.assertIsInstance(effects.attention_bias, torch.Tensor)
+
+    def test_baseline_policies(self):
+        """Test baseline policy classes."""
+        random_policy = RandomHormonePolicy(self.device)
+        action = random_policy.get_action()
+        self.assertEqual(action.shape, (3,))
+        self.assertTrue(torch.all(action >= 0))
+        self.assertTrue(torch.all(action <= 1))
+
+        fixed_policy = FixedHormonePolicy(0.3, 0.6, 0.9, self.device)
+        action = fixed_policy.get_action()
+        self.assertEqual(action.shape, (3,))
+        self.assertAlmostEqual(action[0].item(), 0.3, places=4)
+
+
+class TestRewardComputer(unittest.TestCase):
+    """Tests for RewardComputer class."""
+
+    def setUp(self):
+        self.config = {
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0
+        }
+        self.vocab_size = 1000
+        self.reward_computer = RewardComputer(self.config, self.vocab_size)
+
+    def test_diversity_reward_high_diversity(self):
+        """Test diversity reward for varied tokens."""
+        tokens = list(range(20))  # All unique
+        diversity = self.reward_computer.compute_diversity_reward(tokens)
+        self.assertGreater(diversity, 0.9)
+
+    def test_diversity_reward_low_diversity(self):
+        """Test diversity reward for repeated tokens."""
+        tokens = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]  # All same
+        diversity = self.reward_computer.compute_diversity_reward(tokens)
+        self.assertLess(diversity, 0.5)
+
+    def test_repetition_penalty(self):
+        """Test repetition penalty increases with repeats."""
+        tokens = [1, 2, 3, 4, 5]
+        penalty_new = self.reward_computer.compute_repetition_penalty(tokens, 6)
+        penalty_repeat = self.reward_computer.compute_repetition_penalty(tokens, 3)
+
+        self.assertLess(penalty_new, penalty_repeat)
+
+    def test_step_reward_shape(self):
+        """Test step reward returns correct format."""
+        logits = torch.randn(1000)  # vocab_size
+        tokens = [1, 2, 3, 4, 5]
+        new_token = 6
+
+        reward, components = self.reward_computer.compute_step_reward(
+            logits, tokens, new_token, normalize=False
+        )
+
+        self.assertIsInstance(reward, float)
+        self.assertIn("perplexity", components)
+        self.assertIn("diversity", components)
+        self.assertIn("repetition", components)
+        self.assertIn("coherence", components)
+
+
+class TestHormoneRLAgent(unittest.TestCase):
+    """Tests for HormoneRLAgent class."""
+
+    def setUp(self):
+        self.config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128
+        }
+        self.device = torch.device("cpu")
+        self.agent = HormoneRLAgent(self.config, self.device)
+
+    def test_forward_shapes(self):
+        """Test forward pass returns correct shapes."""
+        obs = torch.randn(4, 64)  # batch of 4
+        action_dist, value = self.agent.forward(obs)
+
+        self.assertEqual(value.shape, (4, 1))
+
+        # Sample actions
+        actions = action_dist.sample()
+        self.assertEqual(actions.shape, (4, 3))
+
+        # Actions should be in [0, 1]
+        self.assertTrue(torch.all(actions >= 0))
+        self.assertTrue(torch.all(actions <= 1))
+
+    def test_get_action_single(self):
+        """Test get_action with single observation."""
+        obs = torch.randn(64)
+        action = self.agent.get_action(obs)
+
+        self.assertEqual(action.shape, (3,))
+        self.assertTrue(torch.all(action >= 0))
+        self.assertTrue(torch.all(action <= 1))
+
+    def test_get_action_deterministic(self):
+        """Test deterministic action mode."""
+        obs = torch.randn(64)
+
+        # Deterministic should return same action
+        action1 = self.agent.get_action(obs, deterministic=True)
+        action2 = self.agent.get_action(obs, deterministic=True)
+
+        self.assertTrue(torch.allclose(action1, action2))
+
+    def test_evaluate_actions(self):
+        """Test evaluate_actions for PPO update."""
+        obs = torch.randn(32, 64)
+        actions = torch.rand(32, 3) * 0.98 + 0.01  # Avoid boundaries
+
+        log_probs, values, entropy = self.agent.evaluate_actions(obs, actions)
+
+        self.assertEqual(log_probs.shape, (32,))
+        self.assertEqual(values.shape, (32,))
+        self.assertEqual(entropy.shape, (32,))
+
+    def test_gaussian_agent(self):
+        """Test Gaussian agent alternative."""
+        agent = GaussianHormoneRLAgent(self.config, self.device)
+        obs = torch.randn(64)
+
+        action = agent.get_action(obs)
+        self.assertEqual(action.shape, (3,))
+        self.assertTrue(torch.all(action >= 0))
+        self.assertTrue(torch.all(action <= 1))
+
+    def test_create_agent_factory(self):
+        """Test agent factory function."""
+        self.config["RL_AGENT_TYPE"] = "beta"
+        agent_beta = create_agent(self.config, self.device)
+        self.assertIsInstance(agent_beta, HormoneRLAgent)
+
+        self.config["RL_AGENT_TYPE"] = "gaussian"
+        agent_gauss = create_agent(self.config, self.device)
+        self.assertIsInstance(agent_gauss, GaussianHormoneRLAgent)
+
+
+class TestIntegration(unittest.TestCase):
+    """Integration tests for RL components working together."""
+
+    def setUp(self):
+        self.config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CATALYST_TEMP_MIN": 0.5,
+            "RL_CATALYST_TEMP_MAX": 1.5,
+            "RL_INHIBITOR_PENALTY_MIN": 1.0,
+            "RL_INHIBITOR_PENALTY_MAX": 2.5,
+            "RL_STRESS_ATTENTION_STRENGTH": 2.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0
+        }
+        self.device = torch.device("cpu")
+
+    def test_agent_modulator_integration(self):
+        """Test agent output flows through modulator correctly."""
+        agent = HormoneRLAgent(self.config, self.device)
+        modulator = HormoneModulator(self.config)
+
+        # Simulate RL loop step
+        obs = torch.randn(64)
+        action = agent.get_action(obs)
+
+        effects = modulator(action, seq_len=20, device=self.device)
+
+        # Verify effects are valid
+        self.assertGreater(effects.temperature, 0)
+        self.assertGreater(effects.repetition_penalty, 0)
+        self.assertEqual(effects.attention_bias.shape[0], 20)
+
+    def test_reward_computation_integration(self):
+        """Test reward computer with simulated generation."""
+        reward_computer = RewardComputer(self.config, vocab_size=1000)
+
+        # Simulate generation trajectory
+        logits_history = [torch.randn(1000) for _ in range(10)]
+        tokens = [i % 100 for i in range(10)]  # Some diversity
+
+        rewards, components = reward_computer.compute_episode_rewards(
+            logits_history, tokens, gamma=0.99
+        )
+
+        self.assertEqual(rewards.shape[0], 10)
+        self.assertEqual(len(components["diversity"]), 10)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

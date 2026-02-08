@@ -5,7 +5,6 @@ import hashlib
 import subprocess
 import shutil
 import torch
-import wandb
 import time
 
 from ruamel.yaml import YAML
@@ -53,27 +52,22 @@ def main():
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, 'config.yaml'))
 
-    # 3. Initialize W&B run
-    run = wandb.init(
-        project="Tidal Language Model",
-        config=config,
-        dir=experiment_dir,
-        name=os.path.basename(experiment_dir)
-    )
-
-    # 4. Setup Logger
+    # 3. Setup Logger
     logger = setup_logger('MainOrchestrator', os.path.join(experiment_dir, 'main.log'), config)
+    model_type = config.get("MODEL_TYPE", "tidal")
     logger.info(f"Starting experiment: {experiment_id}")
-    logger.info(f"W&B Run URL: {run.url}")
+    logger.info(f"Model Type: {model_type}")
+    logger.info(f"Dashboard: http://localhost:8501")
+    logger.info(f"To view training progress, run: streamlit run dashboard.py")
 
     final_model_path = None
     try:
-        # 5. Run Training
+        # 4. Run Training
         logger.info("="*20 + " STARTING TRAINING " + "="*20)
         trainer = Trainer(config, experiment_dir)
         final_model_path = trainer.run()
 
-        # 6. Run Evaluation
+        # 5. Run Evaluation
         if final_model_path:
             logger.info("="*20 + " STARTING EVALUATION " + "="*20)
             probe_words = config.get("PROBE_WORDS", ['water', 'love', 'think', 'ocean', 'freedom', 'grow'])
@@ -88,8 +82,6 @@ def main():
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}", exc_info=True)
     finally:
-        # 7. Finalize W&B run
-        run.finish()
         logger.info(f"Experiment {experiment_id} finished.")
 
 if __name__ == '__main__':

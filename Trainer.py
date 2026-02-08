@@ -6,30 +6,32 @@ import re
 import glob
 import matplotlib.pyplot as plt
 import numpy as np
-import threading
 import time
-import wandb
+import csv
 from concurrent.futures import ThreadPoolExecutor
 
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 from torch.amp import autocast
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from SequentialDataset import load_or_create_dataset, load_vocab
 from Utils import setup_logger, plot_semantic_space, format_cluster_analysis_text
-from TidalLanguageModel import TidalLanguageModel
 from DynamicLRScheduler import DynamicLRScheduler
+from MetricsLogger import MetricsLogger
 
 class Trainer:
     """
-    Handles the entire training pipeline for the Tidal Language Model,
-    including early stopping, checkpointing, and resuming from checkpoints.
+    Handles the entire training pipeline for the Tidal Language Model and
+    the Constant Language Model (baseline), including early stopping,
+    checkpointing, and resuming from checkpoints.
     """
     def __init__(self, config, experiment_dir):
         self.config = config
         self.exp_dir = experiment_dir
-        
+        self.model_type = config.get("MODEL_TYPE", "tidal")
+
         self.device = self._get_device()
         self.logger, self.logger_visualization = self._setup_loggers(config.copy())
         self.last_viz_time = 0
@@ -38,60 +40,55 @@ class Trainer:
 
         # Initialize a thread pool with one worker for async I/O operations.
         # This prevents plotting and file saving from blocking the main training thread.
-        # Making it a single worker is important for simple, sequential queuing.
         self.visualization_executor = ThreadPoolExecutor(max_workers=1)
-                
+
         self.model = None
         self.optimizer = None
         self.criterion = None
         self.scaler = GradScaler()
         self.current_epoch_num = 0
-        
+
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
+        # TensorBoard writer
+        tensorboard_dir = os.path.join(self.exp_dir, "tensorboard_logs")
+        os.makedirs(tensorboard_dir, exist_ok=True)
+        self.tb_writer = SummaryWriter(log_dir=tensorboard_dir)
+
+        # Dashboard metrics logger
+        self.metrics_logger = MetricsLogger(self.exp_dir)
+
     def _log_qualitative_events_async(self, log_entries, idx_to_word, global_step):
-        """Processes a batch of trigger events and logs them as a wandb.Table."""
+        """Processes a batch of trigger events and logs them to MetricsLogger."""
         if not log_entries:
             return
 
         try:
-            columns = [
-                "Global Step", "Sequence Text", "Trigger Name", "Hormone", 
-                "Strength", "Threshold", "Status", "Tidal Level"
-            ]
-            table_data = []
-
             for entry in log_entries:
                 tokens = [idx_to_word.get(idx, "<UNK>") for idx in entry["token_ids"]]
                 text = " ".join(tokens)
                 strength = entry["strength"]
                 threshold = entry["threshold"]
-                status = "🔥 ACTIVE" if strength > threshold else "dormant"
-                
-                table_data.append([
-                    global_step,
-                    text,
-                    entry["trigger_name"],
-                    entry["hormone_name"],
-                    f"{strength:.4f}",
-                    f"{threshold:.2f}",
-                    status,
-                    f"{entry['tidal_level']:.2f}"
-                ])
-            
-            log_dict = {
-                "Trigger Analysis Events": wandb.Table(data=table_data, columns=columns)
-            },
 
-            return log_dict
+                event_data = {
+                    "trigger_name": entry["trigger_name"],
+                    "hormone_name": entry["hormone_name"],
+                    "strength": strength,
+                    "threshold": threshold,
+                    "tidal_level": entry["tidal_level"],
+                    "active": strength > threshold,
+                    "text": text
+                }
+
+                self.metrics_logger.log_trigger_event(event_data, global_step)
 
         except Exception as e:
             self.logger_visualization.error(f"Error during async qualitative logging: {e}", exc_info=True)
 
     def _log_visuals_async(self, viz_data, global_step, batch_tokens, seq_len, vocab, tide_name):
-        """Logs visualizations to W&B in a separate thread to avoid blocking training."""
+        """Logs visualizations in a separate thread to avoid blocking training."""
         try:
-            fig, ax = plt.subplots(figsize=self.config.get("TRAINING_PLOT_FIGSIZE", (8, 8)))    
+            fig, ax = plt.subplots(figsize=self.config.get("TRAINING_PLOT_FIGSIZE", (8, 8)))
             viz_data_sliced = {
                 'positions_2d': viz_data['positions_2d'][:seq_len],
                 'positions_8d': viz_data['positions_8d'][:seq_len],
@@ -100,7 +97,7 @@ class Trainer:
             }
             token_ids_for_viz = batch_tokens[0]
             kmeans = plot_semantic_space(
-                fig, 
+                fig,
                 ax,
                 viz_data_sliced,
                 token_ids_for_viz,
@@ -116,14 +113,25 @@ class Trainer:
                 self.logger_visualization.error("KMeans clustering failed, skipping visualization log.")
                 return
 
-            cluster_text = format_cluster_analysis_text(kmeans.cluster_centers_, self.config)
-            
-            log_dict = {
-                "Semantic Space": wandb.Image(fig),
-                "Cluster Analysis": cluster_text
-            }
+            # Log to TensorBoard as image
+            self.tb_writer.add_figure("Semantic Space", fig, global_step=global_step)
 
-            return log_dict
+            # Save semantic space data for the dashboard
+            semantic_data = {
+                'positions_2d': viz_data_sliced['positions_2d'].cpu().numpy(),
+                'positions_8d': viz_data_sliced['positions_8d'].cpu().numpy(),
+                'forces_2d': viz_data_sliced['forces_2d'].cpu().numpy(),
+                'masses': viz_data_sliced['masses'].cpu().numpy(),
+                'token_ids': token_ids_for_viz.cpu().tolist()
+            }
+            self.metrics_logger.log_semantic_space(semantic_data, global_step)
+
+            # Save frame to disk for video compilation
+            if self.config.get("ENABLE_VISUALIZATION", True):
+                frames_dir = os.path.join(self.exp_dir, self.config.get("TRAINING_FRAMES_SUBDIR", "semantic_space_frames"))
+                os.makedirs(frames_dir, exist_ok=True)
+                frame_path = os.path.join(frames_dir, f"frame_{global_step:08d}.png")
+                fig.savefig(frame_path, dpi=100, bbox_inches='tight')
 
         except Exception as e:
             self.logger_visualization.error(f"Error during async visualization: {e}", exc_info=True)
@@ -132,85 +140,93 @@ class Trainer:
                 plt.close(fig)
 
     def _log_metrics(self, data, global_step):
-        # Fast, synchronous logging remains on the main thread, 
-        # as the negligible performance impact is a worthwhile trade-off 
-        # for ensuring the sequential integrity of the log data without 
-        # introducing asynchronous complexity.
+        """Log metrics to TensorBoard and the dashboard MetricsLogger."""
+        is_tidal = self.model_type == "tidal"
+
+        # Build the metrics dict for dashboard logging
         metrics_dict = {
             "Losses/Total": data['total_loss'],
             "Losses/Prediction": data['prediction_loss'],
-            "Losses/Physics": data['physics_loss'],
-            "Energy/F_pos": data['physics_loss_components']['F_pos'],
-            "Energy/F_neg": data['physics_loss_components']['F_neg'],
-            "Physics/G": self.model.physics_simulator.G.item(),
-            "Physics/Repulsion_Strength": self.model.physics_simulator.repulsion_strength.item(),
-            "Physics/Well_Attraction": self.model.physics_simulator.well_attraction_strength.item(),
-            "Physics/Temperature": self.model.physics_simulator.temperature.item(),
             "Learning Rate": self.optimizer.param_groups[0]['lr']
         }
 
-        if self.model.enable_endocrine_system:
-            hormone_state = self.model.endocrine_system.get_hormone_state()
-            hormone_logs = {f"Hormones/{k}": v for k, v in hormone_state.items()}
-            metrics_dict.update(hormone_logs)
+        # TensorBoard scalar logging
+        self.tb_writer.add_scalar("Losses/Total", data['total_loss'], global_step)
+        self.tb_writer.add_scalar("Losses/Prediction", data['prediction_loss'], global_step)
+        self.tb_writer.add_scalar("Learning Rate", self.optimizer.param_groups[0]['lr'], global_step)
 
-        # Create a new list to hold futures that are not yet complete.
-        still_pending_futures = []
-        # Process all pending futures in a single loop.
+        if is_tidal:
+            metrics_dict["Losses/Physics"] = data['physics_loss']
+            metrics_dict["Energy/F_pos"] = data['physics_loss_components']['F_pos']
+            metrics_dict["Energy/F_neg"] = data['physics_loss_components']['F_neg']
+            metrics_dict["Physics/G"] = self.model.physics_simulator.G.item()
+            metrics_dict["Physics/Repulsion_Strength"] = self.model.physics_simulator.repulsion_strength.item()
+            metrics_dict["Physics/Well_Attraction"] = self.model.physics_simulator.well_attraction_strength.item()
+            metrics_dict["Physics/Temperature"] = self.model.physics_simulator.temperature.item()
+
+            self.tb_writer.add_scalar("Losses/Physics", data['physics_loss'], global_step)
+            self.tb_writer.add_scalar("Energy/F_pos", data['physics_loss_components']['F_pos'], global_step)
+            self.tb_writer.add_scalar("Energy/F_neg", data['physics_loss_components']['F_neg'], global_step)
+            self.tb_writer.add_scalar("Physics/G", self.model.physics_simulator.G.item(), global_step)
+            self.tb_writer.add_scalar("Physics/Repulsion_Strength", self.model.physics_simulator.repulsion_strength.item(), global_step)
+            self.tb_writer.add_scalar("Physics/Well_Attraction", self.model.physics_simulator.well_attraction_strength.item(), global_step)
+            self.tb_writer.add_scalar("Physics/Temperature", self.model.physics_simulator.temperature.item(), global_step)
+
+            if self.model.enable_endocrine_system:
+                hormone_state = self.model.endocrine_system.get_hormone_state()
+                for k, v in hormone_state.items():
+                    metrics_dict[f"Hormones/{k}"] = v
+                    self.tb_writer.add_scalar(f"Hormones/{k}", v, global_step)
+
+        # Log to dashboard JSONL
+        self.metrics_logger.log_metrics(metrics_dict, global_step)
+
+        # Schedule async visualization (tidal model only, with viz data)
+        if is_tidal and 'viz_data' in data and data['viz_data']:
+            current_time = time.time()
+            viz_interval_seconds = self.config.get("VISUALIZATION_INTERVAL_SECONDS", 60)
+            if current_time - self.last_viz_time > viz_interval_seconds:
+                self.last_viz_time = current_time
+
+                # Offload slow I/O to the background thread.
+                # Pass all data as CPU tensors to avoid GPU context issues.
+                future = self.visualization_executor.submit(
+                    self._log_visuals_async,
+                    data['viz_data'],
+                    global_step,
+                    data['input_sequence'],
+                    data['input_sequence_shape'],
+                    data['vocab'],
+                    data['tide_name']
+                )
+                self.pending_viz_futures.append(future)
+
+        # Schedule async qualitative logging (tidal model only)
+        if is_tidal:
+            qualitative_log_interval = self.config.get("QUALITATIVE_LOG_INTERVAL_BATCHES", 100)
+            if global_step % qualitative_log_interval == 0 and self.qualitative_log_buffer:
+                logs_to_process = self.qualitative_log_buffer.copy()
+                self.qualitative_log_buffer.clear()
+
+                future = self.visualization_executor.submit(
+                    self._log_qualitative_events_async,
+                    logs_to_process,
+                    self.idx_to_word,
+                    global_step
+                )
+                self.pending_viz_futures.append(future)
+
+        # Drain completed async futures
+        still_pending = []
         for future in self.pending_viz_futures:
-            
-            # If a future is not done, keep it for the next check.
             if not future.done():
-                still_pending_futures.append(future)
+                still_pending.append(future)
                 continue
-            
-            # If the future is done, try to get its result and log it.
             try:
-                result = future.result()
-                if result:
-                    metrics_dict.update(result)
+                future.result()
             except Exception as e:
                 self.logger_visualization.error(f"Async logging task failed: {e}", exc_info=True)
-
-        # Atomically replace the old list with the new one.
-        self.pending_viz_futures = still_pending_futures
-
-        wandb.log(metrics_dict, step=global_step)
-
-        current_time = time.time()
-        viz_interval_seconds = self.config.get("VISUALIZATION_INTERVAL_SECONDS", 60)
-        if current_time - self.last_viz_time > viz_interval_seconds:
-            self.last_viz_time = current_time
-            
-            # Slow I/O tasks are offloaded to the background visualization thread, so this call returns immediately.
-            # NOTE: We must pass all data to this new thread as CPU tensors or NumPy arrays by using .detach().cpu().
-            # This avoids issues with GPU contexts and to prevent holding onto the computation graph.
-            future = self.visualization_executor.submit(
-                self._log_visuals_async,
-                data['viz_data'], 
-                global_step, 
-                data['input_sequence'], # Already on CPU from _train_epoch.
-                data['input_sequence_shape'], 
-                data['vocab'], 
-                data['tide_name']
-            )
-            self.pending_viz_futures.append(future)
-        
-        qualitative_log_interval = self.config.get("QUALITATIVE_LOG_INTERVAL_BATCHES", 100)
-        if global_step % qualitative_log_interval == 0 and self.qualitative_log_buffer:
-            # 1. Atomically copy and clear the buffer.
-            logs_to_process = self.qualitative_log_buffer.copy()
-            self.qualitative_log_buffer.clear()
-            
-            # 2. Submit the processing task to the background thread.
-            future = self.visualization_executor.submit(
-                self._log_qualitative_events_async,
-                logs_to_process,
-                self.idx_to_word,
-                data['vocab'],
-                global_step
-            )
-            self.pending_viz_futures.append(future)
+        self.pending_viz_futures = still_pending
 
     def _get_device(self):
         """Determines the torch device based on config and availability."""
@@ -236,15 +252,22 @@ class Trainer:
 
     def _setup_model(self, vocab_size, total_foundational_steps=1):
         """Instantiates the model, loss function, optimizer, and scheduler."""
-        self.logger.info("Setting up model, optimizer, criterion, and scheduler...")
-        self.model = TidalLanguageModel(vocab_size=vocab_size, config=self.config, experiment_dir=self.exp_dir)
+        self.logger.info(f"Setting up {self.model_type} model, optimizer, criterion, and scheduler...")
+
+        if self.model_type == "constant":
+            from ConstantLanguageModel import ConstantLanguageModel
+            self.model = ConstantLanguageModel(vocab_size=vocab_size, config=self.config, experiment_dir=self.exp_dir)
+        else:
+            from TidalLanguageModel import TidalLanguageModel
+            self.model = TidalLanguageModel(vocab_size=vocab_size, config=self.config, experiment_dir=self.exp_dir)
+
         self.model.to(self.device)
-        self.model = torch.compile(self.model) # Just-in-time (JIT) compiler.
+        self.model = torch.compile(self.model)
         self.criterion = nn.CrossEntropyLoss()
         base_lr = self.config.get("LEARNING_RATE_SCHEDULER", {}).get("BASE_LR", 0.001)
         self.optimizer = optim.Adam(self.model.parameters(), lr=base_lr)
         self.scheduler = DynamicLRScheduler(self.optimizer, self.config, total_foundational_steps)
-        
+
     def _get_data_loader(self, dataset):
         """Creates a DataLoader for a given dataset."""
         return DataLoader(
@@ -255,7 +278,7 @@ class Trainer:
             pin_memory=True,
             persistent_workers=True
         )
-    
+
     def _train_epoch(self, data_loader, tide_name=None, vocab=None):
         """Generic training function for one epoch."""
         self.model.train()
@@ -266,61 +289,68 @@ class Trainer:
             raise ValueError("DESIRED_BATCH_SIZE must be divisible by BATCH_SIZE for gradient accumulation.")
         accumulation_steps = desired_batch_size // micro_batch_size
 
+        is_tidal = self.model_type == "tidal"
+        physics_loss_weight = self.config.get("PHYSICS_LOSS_WEIGHT", 0.0) if is_tidal else 0.0
+
         total_loss = 0
         progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
 
-        self.optimizer.zero_grad() # Zero gradients at the start of the epoch
+        self.optimizer.zero_grad()
 
         for i, (input_sequence, target_sequence) in enumerate(progress_bar):
             input_sequence_gpu = input_sequence.to(self.device)
             target_sequence_gpu = target_sequence.to(self.device)
-            
+
             with autocast(self.device):
-                logits, physics_loss, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
-                final_physics_loss, physics_loss_components = physics_loss
+                logits, physics_loss_tuple, viz_data = self.model(input_sequence_gpu, target_sequence_gpu)
 
                 vocab_size = logits.shape[-1]
                 prediction_loss = self.criterion(logits.view(-1, vocab_size), target_sequence_gpu.view(-1))
 
-                mean_physics_loss = final_physics_loss.mean()
-                scalar_physics_loss = mean_physics_loss.item()
-                loss = prediction_loss + self.config["PHYSICS_LOSS_WEIGHT"] * mean_physics_loss
+                if is_tidal:
+                    final_physics_loss, physics_loss_components = physics_loss_tuple
+                    mean_physics_loss = final_physics_loss.mean()
+                    scalar_physics_loss = mean_physics_loss.item()
+                    loss = prediction_loss + physics_loss_weight * mean_physics_loss
+                else:
+                    scalar_physics_loss = 0.0
+                    physics_loss_components = None
+                    loss = prediction_loss
 
-                # Normalize loss for accumulation
                 loss = loss / accumulation_steps
-            
+
             self.scaler.scale(loss).backward()
             if (i + 1) % accumulation_steps == 0:
-                # Unscale gradients before clipping
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
 
-                # Scaler steps the optimizer
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 if self.scheduler:
                     self.scheduler.step(tide_name=tide_name)
 
-                self.optimizer.zero_grad() # Reset gradients after update
+                self.optimizer.zero_grad()
 
-            total_loss += loss.item() * accumulation_steps # Un-normalize for logging
+            total_loss += loss.item() * accumulation_steps
             global_step = self.current_epoch_num * len(data_loader) + i
 
             log_data_dict = {
-                'total_loss': loss.item() * accumulation_steps, 
-                'prediction_loss': prediction_loss.item(), 
+                'total_loss': loss.item() * accumulation_steps,
+                'prediction_loss': prediction_loss.item(),
                 'physics_loss': scalar_physics_loss,
-                'physics_loss_components': {
-                    'F_pos': physics_loss_components['F_pos'].item(),
-                    'F_neg': physics_loss_components['F_neg'].item()
-                },
-                'viz_data': viz_data,
-                'input_sequence': input_sequence.cpu(),
-                'input_sequence_shape': input_sequence.shape[1],
-                'vocab': vocab,
                 'tide_name': tide_name
             }
+
+            if is_tidal:
+                log_data_dict['physics_loss_components'] = {
+                    'F_pos': physics_loss_components['F_pos'].item(),
+                    'F_neg': physics_loss_components['F_neg'].item()
+                }
+                log_data_dict['viz_data'] = viz_data
+                log_data_dict['input_sequence'] = input_sequence.cpu()
+                log_data_dict['input_sequence_shape'] = input_sequence.shape[1]
+                log_data_dict['vocab'] = vocab
 
             self._log_metrics(log_data_dict, global_step)
 
@@ -354,13 +384,13 @@ class Trainer:
         phase_name_slug = phase_name.lower().replace("-", "_")
         search_pattern = os.path.join(self.exp_dir, f"checkpoint_{phase_name_slug}_epoch_*.pth")
         checkpoint_files = glob.glob(search_pattern)
-        
+
         if not checkpoint_files:
             return None, 0
 
         latest_epoch = -1
         latest_checkpoint = None
-        
+
         for f_path in checkpoint_files:
             basename = os.path.basename(f_path)
             match = re.search(r'epoch_(\d+).pth', basename)
@@ -369,11 +399,11 @@ class Trainer:
                 if epoch > latest_epoch:
                     latest_epoch = epoch
                     latest_checkpoint = f_path
-                    
+
         if latest_checkpoint:
             self.logger.info(f"Found latest checkpoint for phase '{phase_name}' at epoch {latest_epoch}.")
             return latest_checkpoint, latest_epoch
-            
+
         return None, 0
 
     def _training_loop(self, data_loader, phase_name, max_epochs, start_epoch=0, cache_freq=None, cache_milestones=None, vocab=None):
@@ -408,7 +438,7 @@ class Trainer:
             if patience_counter >= patience:
                 self.logger.info(f"Early stopping triggered at epoch {epoch_num}.")
                 break
-        
+
         self._save_checkpoint(last_epoch_num, phase_name)
 
     def _tidal_fine_tuning_loop(self, vocab, phase_name, max_epochs, start_epoch=0, cache_freq=None):
@@ -432,7 +462,7 @@ class Trainer:
         if not tidal_loaders:
             self.logger.warning("No valid tidal corpus paths found in config. Skipping fine-tuning.")
             return
-            
+
         tide_states = {
             tide_name: {'best_loss': float('inf'), 'patience_counter': 0, 'is_active': True}
             for tide_name in tidal_loaders.keys()
@@ -477,34 +507,53 @@ class Trainer:
 
             if cache_freq and epoch_num % cache_freq == 0:
                 self._save_checkpoint(epoch_num, phase_name)
-        
+
         self._save_checkpoint(last_epoch_num, phase_name)
+
+    def _save_final_embeddings(self, vocab):
+        """Save final 8D semantic embeddings to CSV (tidal model only)."""
+        model_ref = self.model._orig_mod if hasattr(self.model, '_orig_mod') else self.model
+        final_embeddings_512d = model_ref.position_embeddings.weight.detach()
+        final_embeddings_8d = model_ref._project(final_embeddings_512d, "down_512_to_8").cpu().numpy()
+
+        idx_to_word = {v: k for k, v in vocab.items()}
+        csv_path = os.path.join(self.exp_dir, "final_embeddings_8d.csv")
+
+        axis_names = ["G", "X", "V", "A", "H", "S", "F", "T"]
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "word"] + axis_names)
+            for i in range(len(vocab)):
+                word = idx_to_word.get(i, '<UNK>')
+                row = [i, word] + [f"{v:.6f}" for v in final_embeddings_8d[i]]
+                writer.writerow(row)
+
+        self.logger.info(f"Saved final 8D embeddings to {csv_path}")
 
     def run(self):
         """Main function to orchestrate the model training pipeline."""
-        try:  
+        try:
             self.logger.info("Building vocabulary...")
             vocab = load_vocab(self.config)
 
-            # Create and static cache the reverse mapping.
             self.idx_to_word = {v: k for k, v in vocab.items()}
-
             self.probe_words = self.config.get("PROBE_WORDS", [])
             vocab_size = len(vocab)
 
-            # This is an estimate, but it's crucial for the cosine annealing schedule.
             max_foundational_epochs = self.config["NUM_EPOCHS"]
-            # Use a dummy dataset to find the number of batches.
             temp_dataset = load_or_create_dataset(self.config["FOUNDATIONAL_CORPUS_PATH"], self.config)
             num_batches = len(temp_dataset) // self.config["BATCH_SIZE"]
             total_foundational_steps = max_foundational_epochs * num_batches
 
             self._setup_model(vocab_size, total_foundational_steps)
 
+            is_tidal = self.model_type == "tidal"
+
             # Foundational Pre-training
-            self.logger.info("Disabling endocrine system and resonance for foundational training.")
-            self.model.enable_endocrine_system = False
-            self.model.enable_resonance = False
+            if is_tidal:
+                self.logger.info("Disabling endocrine system and resonance for foundational training.")
+                self.model.enable_endocrine_system = False
+                self.model.enable_resonance = False
 
             foundational_phase_name = "Foundational"
             checkpoint_path, start_epoch_foundational = self._find_latest_checkpoint(foundational_phase_name)
@@ -518,67 +567,60 @@ class Trainer:
                 loader = self._get_data_loader(dataset)
                 self._training_loop(loader, foundational_phase_name, max_foundational_epochs, start_epoch_foundational, cache_freq=self.config.get("TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY", 1), cache_milestones=[max_foundational_epochs // 2], vocab=vocab)
 
-            # Fine-tuning
-            self.logger.info("Re-enabling endocrine system and resonance for fine-tuning.")
-            self.model.enable_endocrine_system = True
-            self.model.enable_resonance = True
+            # Fine-tuning (tidal model only)
+            if is_tidal:
+                self.logger.info("Re-enabling endocrine system and resonance for fine-tuning.")
+                self.model.enable_endocrine_system = True
+                self.model.enable_resonance = True
 
-            # Early Fine-Tuning (Optional)
-            early_tune_epochs = self.config.get("EARLY_TUNE_EPOCHS")
-            if early_tune_epochs:
-                early_tune_phase_name = "Early-Fine-tuning"
-                checkpoint_path, start_epoch_early = self._find_latest_checkpoint(early_tune_phase_name)
+                # Early Fine-Tuning (Optional)
+                early_tune_epochs = self.config.get("EARLY_TUNE_EPOCHS")
+                if early_tune_epochs:
+                    early_tune_phase_name = "Early-Fine-tuning"
+                    checkpoint_path, start_epoch_early = self._find_latest_checkpoint(early_tune_phase_name)
+                    if checkpoint_path: self._load_checkpoint(checkpoint_path)
+
+                    if start_epoch_early >= early_tune_epochs:
+                        self.logger.info("Early fine-tuning already completed. Skipping.")
+                    else:
+                        corpus_path = self.config.get("EARLY_TUNE_CORPUS_PATH") or self.config.get("HIGH_TIDE_CORPUS_PATH")
+                        if corpus_path:
+                            dataset = load_or_create_dataset(corpus_path, self.config)
+                            loader = self._get_data_loader(dataset)
+                            self._training_loop(loader, early_tune_phase_name, early_tune_epochs, start_epoch_early, cache_freq=self.config.get("TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY", 1), vocab=vocab)
+                        else:
+                            self.logger.warning("EARLY_TUNE_EPOCHS specified but no corpus path found. Skipping.")
+
+                # Tidal Fine-Tuning
+                tidal_tune_phase_name = "Tidal-Fine-tuning"
+                checkpoint_path, start_epoch_tidal = self._find_latest_checkpoint(tidal_tune_phase_name)
                 if checkpoint_path: self._load_checkpoint(checkpoint_path)
 
-                if start_epoch_early >= early_tune_epochs:
-                    self.logger.info("Early fine-tuning already completed. Skipping.")
+                max_finetune_epochs = self.config["FINE_TUNE_EPOCHS"]
+                if start_epoch_tidal >= max_finetune_epochs:
+                    self.logger.info("Tidal fine-tuning already completed. Skipping.")
                 else:
-                    corpus_path = self.config.get("EARLY_TUNE_CORPUS_PATH") or self.config.get("HIGH_TIDE_CORPUS_PATH")
-                    if corpus_path:
-                        dataset = load_or_create_dataset(corpus_path, self.config)
-                        loader = self._get_data_loader(dataset)
-                        self._training_loop(loader, early_tune_phase_name, early_tune_epochs, start_epoch_early, cache_freq=self.config.get("TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY", 1), vocab=vocab)
-                    else:
-                        self.logger.warning("EARLY_TUNE_EPOCHS specified but no corpus path found. Skipping.")
+                    self._tidal_fine_tuning_loop(vocab, tidal_tune_phase_name, max_finetune_epochs, start_epoch_tidal, cache_freq=self.config.get("FINE_TUNE_MODEL_ARTIFACT_CACHE_FREQUENCY", 1))
 
-            # Tidal Fine-Tuning
-            tidal_tune_phase_name = "Tidal-Fine-tuning"
-            checkpoint_path, start_epoch_tidal = self._find_latest_checkpoint(tidal_tune_phase_name)
-            if checkpoint_path: self._load_checkpoint(checkpoint_path)
-
-            max_finetune_epochs = self.config["FINE_TUNE_EPOCHS"]
-            if start_epoch_tidal >= max_finetune_epochs:
-                self.logger.info("Tidal fine-tuning already completed. Skipping.")
-            else:
-                self._tidal_fine_tuning_loop(vocab, tidal_tune_phase_name, max_finetune_epochs, start_epoch_tidal, cache_freq=self.config.get("FINE_TUNE_MODEL_ARTIFACT_CACHE_FREQUENCY", 1))
-
-            final_model_path = os.path.join(self.exp_dir, f"{self.config['TIDAL_MODEL_NAME']}_v{self.config['TIDAL_MODEL_VERSION']}.pth")
+            # Save final model
+            model_name = self.config.get('TIDAL_MODEL_NAME', self.config.get('MODEL_NAME', 'model'))
+            model_version = self.config.get('TIDAL_MODEL_VERSION', self.config.get('MODEL_VERSION', '1.0.0'))
+            final_model_path = os.path.join(self.exp_dir, f"{model_name}_v{model_version}.pth")
 
             self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
-            torch.save(self.model.state_dict(), final_model_path)
+            state_dict = self.model._orig_mod.state_dict() if hasattr(self.model, '_orig_mod') else self.model.state_dict()
+            torch.save(state_dict, final_model_path)
 
-            artifact = wandb.Artifact(
-                name=f"{self.config['TIDAL_MODEL_NAME']}-v{self.config['TIDAL_MODEL_VERSION']}", 
-                type='model'
-            )
-            artifact.add_file(final_model_path)
-            wandb.log_artifact(artifact)
-            final_embeddings_512d = self.model.position_embeddings.weight.detach()
-            final_embeddings_8d = self.model.projection_layer(final_embeddings_512d).cpu().numpy()
-            idx_to_word = {v: k for k, v in vocab.items()}
-            metadata = [idx_to_word.get(i, '<UNK>') for i in range(len(vocab))]
-            columns = ["id", "word"] + [f"dim_{i}" for i in range(final_embeddings_8d.shape[1])]
+            # Save final embeddings (tidal model only)
+            if is_tidal:
+                self._save_final_embeddings(vocab)
 
-            table_data = []
-            for i, word in enumerate(metadata):
-                row = [i, word] + list(final_embeddings_8d[i])
-                table_data.append(row)
+            # Mark training as complete in dashboard
+            self.metrics_logger.finalize()
 
-            embedding_table = wandb.Table(data=table_data, columns=columns)
-            wandb.log({"Semantic_Space_8D_Embeddings": embedding_table})
-        
             return final_model_path
 
         finally:
             self.logger.info("Shutting down visualization executor...")
             self.visualization_executor.shutdown()
+            self.tb_writer.close()

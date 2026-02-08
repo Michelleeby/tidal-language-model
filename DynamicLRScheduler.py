@@ -7,9 +7,15 @@ class DynamicLRScheduler:
     def __init__(self, optimizer, config: dict, total_foundational_steps: int):
         self.optimizer = optimizer
         self.config = config["LEARNING_RATE_SCHEDULER"]
-        
+
         # Scheduler parameters
-        self.warmup_steps = self.config["WARMUP_STEPS"]
+        # Calculate warmup steps from ratio if WARMUP_STEPS not provided
+        if "WARMUP_STEPS" in self.config:
+            self.warmup_steps = self.config["WARMUP_STEPS"]
+        else:
+            warmup_ratio = self.config.get("WARMUP_RATIO", 0.1)
+            self.warmup_steps = int(total_foundational_steps * warmup_ratio)
+
         self.base_lr = self.config["BASE_LR"]
         self.min_lr = self.config["MIN_LR"]
         self.total_foundational_steps = total_foundational_steps

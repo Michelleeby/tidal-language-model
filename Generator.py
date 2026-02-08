@@ -15,23 +15,24 @@ nlp = None
 
 def tokenizer(text: str, vocab: dict, config: dict) -> torch.Tensor:
     """
-    Converts a string of text into a tensor of token IDs using spaCy for lemmatization.
+    Converts a string of text into a tensor of token IDs using spaCy tokenization.
+    Note: No lemmatization is applied to match vocabulary building process.
     """
     global nlp
     if nlp is None:
         # This function is defined in Preprocess.py
-        initialize_nlp(config) 
+        initialize_nlp(config)
         nlp = spacy.load(config.get("NLP_MODEL", "en_core_web_sm"), disable=config.get("NLP_DISABLE", ["parser", "ner"]))
 
     doc = nlp(text)
     token_ids = []
     for token in doc:
-        lemma = token.lemma_.lower()
-        if not token.is_punct and not token.is_space and lemma in vocab:
-            token_ids.append(vocab[lemma])
+        word = token.text.lower()
+        if not token.is_punct and not token.is_space and word in vocab:
+            token_ids.append(vocab[word])
         elif not token.is_punct and not token.is_space:
-            print(f"  [Tokenizer Warning] OOV token: '{token.text}' (lemma: '{lemma}') - skipping.")
-            
+            print(f"  [Tokenizer Warning] OOV token: '{token.text}' - skipping.")
+
     return torch.tensor(token_ids, dtype=torch.long)
 
 def detokenizer(token_ids: list, idx_to_vocab: dict) -> str:
