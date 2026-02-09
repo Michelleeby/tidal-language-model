@@ -41,6 +41,7 @@ corpus/
 prompt.txt
 configs/
 wandb/
+Tidal Language Model Refactor Plan.md
 
 # Ignore all cached data (datasets, vocabularies)
 cache/

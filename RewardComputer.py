@@ -1,14 +1,14 @@
 """
 RewardComputer.py
 
-Multi-component reward function for RL hormone control.
+Multi-component reward function for RL gate signal control.
 Provides dense per-step rewards based on:
 - Perplexity (language quality)
 - Diversity (vocabulary variety)
 - Repetition penalty (avoid repeats)
 - Coherence (bigram likelihood)
 
-This enables the RL agent to learn hormone control policies that
+This enables the RL agent to learn gating policies that
 improve generation quality across multiple dimensions.
 """
 

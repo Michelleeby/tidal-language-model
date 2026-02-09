@@ -1,11 +1,11 @@
 torch
-spacy
+transformers
+datasets
 ruamel.yaml
 numpy
 matplotlib
 scipy
 scikit-learn
-networkx
 tqdm
 streamlit
 pandas
