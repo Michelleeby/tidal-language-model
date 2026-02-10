@@ -88,12 +88,14 @@ class PPOTrainer:
         config: dict,
         experiment_dir: str,
         device: torch.device = None,
+        metrics_logger=None,
     ):
         self.agent = agent
         self.env = env
         self.config = config
         self.experiment_dir = experiment_dir
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.metrics_logger = metrics_logger
 
         # PPO hyperparameters
         self.lr = config.get("RL_LEARNING_RATE", 3e-4)
@@ -354,6 +356,8 @@ class PPOTrainer:
                 },
                 f,
             )
+        if self.metrics_logger is not None:
+            self.metrics_logger.log_rl_metrics(history, self.global_step)
 
     def save_checkpoint(self, filename: str):
         checkpoint_path = os.path.join(self.experiment_dir, filename)

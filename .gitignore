@@ -25,6 +25,9 @@ wheels/
 *.egg
 MANIFEST
 
+dashboard/node_modules
+dashboard/dist
+
 # Virtual Environments
 tidal/
 tidal-env/
@@ -42,9 +45,11 @@ prompt.txt
 configs/
 wandb/
 Tidal Language Model Refactor Plan.md
+CLAUDE.md
 
 # Ignore all cached data (datasets, vocabularies)
 cache/
+data_cache/
 
 # Ignore the top-level log directory
 logs/
@@ -59,3 +64,6 @@ logs/
 # OS-generated files
 .DS_Store
 Thumbs.db
+
+node_modules/
+dist/

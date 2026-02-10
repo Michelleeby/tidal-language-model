@@ -11,3 +11,4 @@ streamlit
 pandas
 plotly
 altair
+redis>=5.0

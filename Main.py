@@ -58,8 +58,8 @@ def main():
     # 3. Setup Logger
     logger = setup_logger("MainOrchestrator", os.path.join(experiment_dir, "main.log"), config)
     logger.info(f"Starting experiment: {experiment_id}")
-    logger.info(f"Dashboard: http://localhost:8501")
-    logger.info(f"To view training progress, run: streamlit run dashboard.py")
+    logger.info(f"Dashboard: http://localhost:4400")
+    logger.info(f"To view training progress, run: cd dashboard && ddev start && npm run dev")
 
     final_model_path = None
     try:

@@ -14,17 +14,49 @@ Usage:
     input_ids, target_ids = train_ds[0]  # both shape (max_length,)
 """
 
+import logging
+import os
+import sys
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from transformers import GPT2TokenizerFast
 from datasets import load_dataset
 
+logger = logging.getLogger("DataPipeline")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    logger.addHandler(_handler)
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "data_cache")
+
 
 def get_tokenizer() -> GPT2TokenizerFast:
     """Return configured GPT-2 BPE tokenizer (vocab size 50257)."""
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    try:
+        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2", local_files_only=True)
+    except OSError:
+        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
+    # We handle our own chunking so suppress the "sequence longer than
+    # model_max_length" warning that fires for long TinyStories entries.
+    tokenizer.model_max_length = int(1e30)
     return tokenizer
+
+
+def _load_dataset_prefer_cache(dataset_name, split):
+    """Load HF dataset preferring local cache. Falls back to network on cache miss."""
+    try:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        return load_dataset(dataset_name, split=split)
+    except Exception:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        logger.info("Local HF cache miss, downloading from HuggingFace...")
+        return load_dataset(dataset_name, split=split)
+    finally:
+        os.environ.pop("HF_HUB_OFFLINE", None)
 
 
 class TinyStoriesDataset(Dataset):
@@ -57,8 +89,19 @@ class TinyStoriesDataset(Dataset):
         # chunk_length includes one extra token for the target shift
         chunk_length = max_length + 1
 
-        # Load and tokenize
-        raw = load_dataset(dataset_name, split=split)
+        # Try loading from local cache first
+        cache_path = os.path.join(CACHE_DIR, f"{split}_ctx{max_length}.pt")
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached chunks from {cache_path}")
+            self.chunks = torch.load(cache_path, weights_only=True)
+            return
+
+        # Cache miss — build chunks from HF dataset (one-time).
+        # Try offline first (uses HF's local cache) to avoid slow Hub requests.
+        logger.info(f"Building {split} chunk cache (one-time)...")
+        logger.info("Loading dataset from HF cache...")
+        raw = _load_dataset_prefer_cache(dataset_name, split)
+        logger.info(f"Loaded {len(raw):,} examples. Tokenizing...")
         tokenized = raw.map(
             lambda batch: self.tokenizer(
                 batch["text"],
@@ -70,15 +113,21 @@ class TinyStoriesDataset(Dataset):
             desc=f"Tokenizing {split}",
         )
 
-        # Flatten all tokens into a single 1-D list, then chunk
-        all_ids = []
-        for example in tokenized:
-            all_ids.extend(example["input_ids"])
+        # Flatten all tokens via pyarrow (zero-copy from Arrow buffers,
+        # avoids slow Python iteration over millions of ragged lists).
+        logger.info("Flattening tokens and chunking...")
+        arrow_col = tokenized.data.column("input_ids")
+        all_ids = arrow_col.combine_chunks().values.to_numpy(zero_copy_only=False)
 
         # Drop remainder that doesn't fill a full chunk
         num_chunks = len(all_ids) // chunk_length
         all_ids = all_ids[: num_chunks * chunk_length]
-        self.chunks = torch.tensor(all_ids, dtype=torch.long).view(num_chunks, chunk_length)
+        self.chunks = torch.from_numpy(all_ids.astype(np.int64)).view(num_chunks, chunk_length)
+
+        # Save to local cache — subsequent runs skip all of the above
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        torch.save(self.chunks, cache_path)
+        logger.info(f"Cached {num_chunks:,} chunks to {cache_path}")
 
     def __len__(self) -> int:
         return self.chunks.size(0)

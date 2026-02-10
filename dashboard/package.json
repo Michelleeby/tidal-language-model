@@ -1,0 +1,21 @@
+{
+  "name": "tidal-dashboard",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
+  "scripts": {
+    "dev": "npm run build -w packages/shared && npm run dev -w packages/server & npm run dev -w packages/client & npm run dev -w packages/shared & wait",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "server:dev": "npm run dev -w packages/server",
+    "client:dev": "npm run dev -w packages/client",
+    "redis:up": "docker compose up -d",
+    "redis:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

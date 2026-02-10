@@ -4,6 +4,8 @@ import torch.nn as nn
 import os
 import re
 import glob
+import queue
+import threading
 
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
@@ -46,19 +48,38 @@ class Trainer:
 
         self.metrics_logger = MetricsLogger(self.exp_dir)
 
+        self._log_queue = queue.Queue()
+        self._log_thread = threading.Thread(target=self._log_worker, daemon=True)
+        self._log_thread.start()
+
+    def _log_worker(self):
+        """Background worker that processes log entries sequentially."""
+        while True:
+            item = self._log_queue.get()
+            if item is None:
+                break
+            data, global_step = item
+            try:
+                self.tb_writer.add_scalar("Losses/Total", data["total_loss"], global_step)
+                self.tb_writer.add_scalar("Losses/Prediction", data["prediction_loss"], global_step)
+                self.tb_writer.add_scalar("Learning Rate", data["lr"], global_step)
+
+                self.metrics_logger.log_metrics({
+                    "Losses/Total": data["total_loss"],
+                    "Losses/Prediction": data["prediction_loss"],
+                    "Learning Rate": data["lr"],
+                }, global_step)
+            except Exception:
+                pass
+
     def _log_metrics(self, data, global_step):
-        """Log metrics to TensorBoard and the dashboard MetricsLogger."""
-        metrics_dict = {
-            "Losses/Total": data["total_loss"],
-            "Losses/Prediction": data["prediction_loss"],
-            "Learning Rate": self.optimizer.param_groups[0]["lr"],
-        }
+        """Enqueue metrics for background logging (non-blocking)."""
+        self._log_queue.put((data, global_step))
 
-        self.tb_writer.add_scalar("Losses/Total", data["total_loss"], global_step)
-        self.tb_writer.add_scalar("Losses/Prediction", data["prediction_loss"], global_step)
-        self.tb_writer.add_scalar("Learning Rate", self.optimizer.param_groups[0]["lr"], global_step)
-
-        self.metrics_logger.log_metrics(metrics_dict, global_step)
+    def _flush_logs(self):
+        """Drain the log queue and stop the worker thread."""
+        self._log_queue.put(None)
+        self._log_thread.join()
 
     def _get_device(self):
         if self.config["DEVICE"] == "auto":
@@ -135,14 +156,14 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-            total_loss += loss.item() * accumulation_steps
-            global_step = self.current_epoch_num * len(data_loader) + i
+                global_step = self.current_epoch_num * len(data_loader) + i
+                self._log_metrics({
+                    "total_loss": loss.item() * accumulation_steps,
+                    "prediction_loss": prediction_loss.item(),
+                    "lr": self.optimizer.param_groups[0]["lr"],
+                }, global_step)
 
-            log_data_dict = {
-                "total_loss": loss.item() * accumulation_steps,
-                "prediction_loss": prediction_loss.item(),
-            }
-            self._log_metrics(log_data_dict, global_step)
+            total_loss += loss.item() * accumulation_steps
 
         avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0
         self.current_epoch_num += 1
@@ -279,4 +300,5 @@ class Trainer:
             return final_model_path
 
         finally:
+            self._flush_logs()
             self.tb_writer.close()

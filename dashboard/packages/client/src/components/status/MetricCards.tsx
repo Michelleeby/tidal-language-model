@@ -1,0 +1,50 @@
+import type { MetricPoint } from "@tidal/shared";
+
+interface MetricCardsProps {
+  latest: MetricPoint | null;
+}
+
+export default function MetricCards({ latest }: MetricCardsProps) {
+  if (!latest) {
+    return null;
+  }
+
+  const cards = [
+    {
+      label: "Total Loss",
+      value: (latest["Losses/Total"] as number)?.toFixed(4) ?? "—",
+      color: "text-blue-400",
+    },
+    {
+      label: "Prediction Loss",
+      value: (latest["Losses/Prediction"] as number)?.toFixed(4) ?? "—",
+      color: "text-amber-400",
+    },
+    {
+      label: "Learning Rate",
+      value: (latest["Learning Rate"] as number)?.toExponential(2) ?? "—",
+      color: "text-emerald-400",
+    },
+    {
+      label: "Perplexity",
+      value: Math.exp((latest["Losses/Total"] as number) ?? 0).toFixed(1),
+      color: "text-purple-400",
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {cards.map((card) => (
+        <div
+          key={card.label}
+          className="bg-gray-900 rounded-lg p-3"
+        >
+          <div className="text-xs text-gray-500 mb-1">{card.label}</div>
+          <div className={`text-lg font-mono font-semibold ${card.color}`}>
+            {card.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
