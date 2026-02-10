@@ -113,11 +113,8 @@ class TinyStoriesDataset(Dataset):
             desc=f"Tokenizing {split}",
         )
 
-        # Flatten all tokens via pyarrow (zero-copy from Arrow buffers,
-        # avoids slow Python iteration over millions of ragged lists).
         logger.info("Flattening tokens and chunking...")
-        arrow_col = tokenized.data.column("input_ids")
-        all_ids = arrow_col.combine_chunks().values.to_numpy(zero_copy_only=False)
+        all_ids = np.concatenate(tokenized["input_ids"])
 
         # Drop remainder that doesn't fill a full chunk
         num_chunks = len(all_ids) // chunk_length
