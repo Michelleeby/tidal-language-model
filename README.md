@@ -1,204 +1,151 @@
 # Tidal Language Model
 
-The **Tidal Language Model** learns through physics. During training, concepts from the vocabulary are N-bodies in a **512D** *embedding space*. This is projected to an **8D** *Semantic Space* which is then projected to a **2D** *physical space* where a simulation is applied to the N-bodies. The new positions are then projected back to the **8D** *Semantic Space* where they are affected by an endocrine and “tide” or tick regulated resonance system. Physical loss is calculated at this layer using a custom *Grand Unifying Loss* function that is based on Helmholtz Free Energy. Finally, these new positions are projected back to the final **512D** output. In this way, we aim to create a *Semantic Space*, influenced by hormonal responses to periodic changes in “tide” and sequential and cognitive-like triggers from the input.
+A **Gated Transformer** language model (~30.7M parameters) with an **RL-learned gating controller** that modulates generation behavior at inference time. The model is pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) using GPT-2 BPE tokenization (50,257 vocab), then a PPO agent learns to control three gate signals — **creativity**, **focus**, and **stability** — that dynamically scale attention and FFN outputs across all transformer layers.
 
-## Semantic Space
+## Architecture
 
-Theoretically, the *Semantic Space* mimics the following planes and their axes:
+### Phase 1 — Language Model (`TransformerLM`)
 
-1. **Core Conceptual Plane** defines the intrinsic nature of a concept.  
-   1. **G-Axis (Groundedness)** Measures the concept's tie to direct sensory-motor experience.  
-      1. **Low G** Concrete & Sensory (*rock, water, heavy*)  
-      2. **High G** Abstract & Relational (*justice, theory, freedom*)    
-   2. **X-Axis (Taxonomic Specificity)** Measures the concept's level in a hierarchy.  
-      1. **Low X** General & Superordinate (*animal, tool, idea*)  
-      2. **High X** Specific & Subordinate (*poodle, screwdriver, sonnet*)  
-2. **Affective Plane (Emotion)** maps the core emotional qualities based on the Circumplex Model.  
-   1. **V-Axis (Valence)** Measures the positive or negative emotional charge.  
-      1. **Low V** Negative (*pain, sad, anger*)  
-      2. **High V** Positive (*joy, peace, beauty*)   
-   2. **A-Axis (Arousal)** Measures the emotional intensity or energy.  
-      1. **Low A** Deactivated & Calm (*sleep, bored, serene*)  
-      2. **High A** Activated & Excited (*panic, rage, surprise*)  
-3. **Interoceptive Plane (Bodily State)** maps the underlying physiological states, inspired by the gut-brain axis.  
-   1.  **H-Axis (Homeostasis)** Measures the sense of internal balance versus dysregulation.  
-      1. **Low H** Dysregulated (*nausea, fatigue, stress*)  
-      2. **High H** Regulated (*healthy, rested, energized*)  
-   2. **S-Axis (Somatic Focus)** Measures if a concept is experienced more in the body or mind.  
-      1. **Low S** Cognitive (*belief, memory, curiosity*)  
-      2. **High S** Somatic/Physical (*pain, itch, warmth*)  
-4. **Structural Plane (Contextual Role)** defines the concept's role within a larger structure like a sentence or timeline.  
-   1. **F-Axis (Functional Role)** Measures a word's purpose as either providing meaning or grammatical structure.  
-      1. **Low F** Lexical/Content (*mountain, sun, ocean*)  
-      2. **High F** Functional/Grammar (*is, the, because*)  
-   2. **T-Axis (Temporal Orientation)** Measures a concept's inherent relationship to time.  
-      1. **Low T** Past-Oriented (*history, memory, yesterday*)  
-      2. **High T** Future-Oriented (plan, hope, tomorrow)
-
-See [`TidalLanguageModel.py`](TidalLanguageModel.py) for more details.
-
-## *Grand Unifying Loss* Function
-
-The final loss is a contrastive one, where we want the free energy of a correct context `(Fpos​)` to be lower than that of a random context `(Fneg​)`
-
-```math
-L=mean(relu(F_{pos}−F_{neg}+M))
+```
+Input tokens
+  → Token Embeddings (256D) + Positional Embeddings
+  → 6 × GatedTransformerBlock
+  → LayerNorm → Output Projection → Logits (50,257)
 ```
 
-Where the Free Energy, `F`, is defined as:
+Each `GatedTransformerBlock` contains two `DynamicGate` modules (one for attention, one for FFN). These are small MLPs (`3 → 32 → 256 → sigmoid`) that convert 3D gate signals into per-dimension scaling factors applied to the residual stream. Initialized with bias = 2.0 so `sigmoid(output) ≈ 1.0` at the start (neutral — no effect). When no gate signals are provided, gates produce unit scaling.
 
-```math
-F=\underbrace{(PE_{pairwise}+PE_{well})}_{Internal Energy (U)}−\underbrace{T⋅S}_{Entropy Term}
+Training uses cross-entropy loss with gradient accumulation, mixed-precision (AMP), cosine LR annealing with warmup, and `torch.compile`.
+
+### Phase 2 — RL Gating Controller (`GatingPolicyAgent`)
+
+A PPO actor-critic agent observes a **64D** vector (token statistics, chunked hidden-state summaries, generation context) and outputs continuous actions in `[0, 1]` via a Beta distribution:
+
+| Signal | Effect |
+|---|---|
+| **creativity** | Scales sampling temperature (`0.5×` – `1.5×` base) |
+| **focus** | Adds position-based attention bias toward recent context |
+| **stability** | Scales repetition penalty (`1×` – `2.5×` base) |
+
+The `GatingModulator` maps actions to generation parameters, and the `RewardComputer` provides dense per-step rewards from perplexity, diversity, repetition, and coherence components.
+
+### Real-Time Dashboard
+
+A monitoring dashboard built with **Fastify 5 + React 19 + Redis 7** (replacing the deprecated Streamlit dashboard). Training metrics flow from `MetricsLogger` → Redis (real-time SSE) + JSONL (archival) → Fastify API → React frontend.
+
+## Project Structure
+
 ```
-
-Where `PE_pairwise` is the pairwise potential energy and `PE_well` is the well potential energy. `T` is the temperature and `S` is the entropy.
-
-See [`Physics2D.py`](Physics2D.py) for more details.
-
-## Building the Vocabulary
-
-The vocabulary is built from the foundational corpus file using **lemmatization**, with the `spaCy` library. **Lemmatization** is the process of converting a word to its base form. For example, the word "running" would be converted to "run". This creates the "concepts" that the model will project into the *Semantic Space*. 
-
-See [`Preprocess.py`](Preprocess.py) for more details.
-
-## Semantic Endocrine System
-
-The *Semantic Endocrine System* releases hormones in response to sequence and cognitive-like triggers from the input. 
-
-See `detect_triggers`, `release_hormones`, and `apply_hormonal_effects` methods in [`SemanticEndocrineSystem.py`](SemanticEndocrineSystem.py) for more details.
-
-## Development
-
-### Project Structure
-
-```plaintext
 tidal-language-model/
-├── cache/
-├── configs/
-   ├── base_config.yaml
-├── corpus/
-   ├── foundational.txt
-   ├── high_tide.txt
-   ├── low_tide.txt
-   ├── storm_tide.txt
-├── experiments/
-├── logs/
-   ├── training-endocrine-system-*.log
-   ├── evaluation-endocrine-system-*.log
-   ├── training-physics-*.log
-   ├── evaluation-physics-*.log
-├── tests/
-   ├── test_physics.py
-   ├── test_semantic_endocrine_system.py
-   ├── test_tidal_language_model.py
-├── tidal-env/
-├── .gitignore
-├── AssociativeDataset.py
-├── DynamicLRScheduler.py
-├── Evaluator.py
-├── Generator.py
-├── Main.py
-├── Physics2D.py
-├── Preprocess.py
-├── requirements.txt
-├── README.md
-├── SemanticEndocrineSystem.py
-├── TidalLanguageModel.py
-├── Trainer.py
-├── Utils.py
+├── TransformerLM.py          # Gated Transformer language model
+├── GatingPolicyAgent.py      # PPO actor-critic for gate control
+├── GatingEnvironment.py      # RL environment wrapping the LM
+├── GatingModulator.py        # Maps gate signals → generation params
+├── RewardComputer.py         # Multi-component reward function
+├── Main.py                   # Phase 1 training entry point
+├── train_rl.py               # Phase 2 RL training entry point
+├── Trainer.py                # LM training loop
+├── RLTrainer.py              # PPO training loop
+├── Generator.py              # Text generation (with optional RL gating)
+├── Evaluator.py              # Model evaluation
+├── DataPipeline.py           # TinyStories loading + GPT-2 BPE tokenization
+├── MetricsLogger.py          # Redis + JSONL metrics logging
+├── DynamicLRScheduler.py     # Cosine annealing with warmup
+├── Utils.py                  # Shared utilities
+├── configs/                  # YAML config files (gitignored)
+├── experiments/              # Checkpoints and run artifacts
+├── tests/                    # Unit tests (unittest)
+├── dashboard/                # Fastify + React monitoring dashboard
+│   ├── docker-compose.yml    # Redis 7 service
+│   └── packages/
+│       ├── server/           # Fastify 5 API (port 4400)
+│       ├── client/           # React 19 / Vite 6 (port 5173)
+│       └── shared/           # Shared types
+├── legacy_research/          # Original physics-based architecture
+└── requirements.txt
 ```
 
-### Setup Environment
+## Setup
 
-On Windows, WSL2 is recommended with any Linux distro, the default Ubuntu installation is fine. Use a WSL2 Terminal instance and run the following commands from the root directory of the project:
+### Prerequisites
+
+- Python 3.12+
+- CUDA-capable GPU
+- Node.js 20+ and Docker (for the dashboard)
+
+### Environment
 
 ```bash
-python3 -m venv tidal-env && \
-source tidal-env/bin/activate && \
-sudo apt-get update && \
-sudo apt-get install build-essential python3.12-venv python3.12-dev && \
+python3 -m venv tidal-env
+source tidal-env/bin/activate
 pip3 install -r requirements.txt
 ```
 
-Then install these remaining dependencies:
-
-#### CUDA
-
-The model requires CUDA support.
-
-Set the CUDA version according to your GPU.
+Install PyTorch with CUDA support (set the version for your GPU):
 
 ```bash
 CUDA_VERSION="cu129"
-```
-
-Then run the following command:
-
-```bash
 pip3 install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"
 ```
 
-#### Tokenizer
+## Usage
 
-The spaCy model is used to tokenize the input text as well as lemmatize it. 
-
-Download the spaCy model:
+### Train the Language Model (Phase 1)
 
 ```bash
-python3 -m spacy download en_core_web_sm
+python3 Main.py --config configs/base_config.yaml
 ```
 
-### Train the Model
+Checkpoints are saved as raw `state_dict` files to `experiments/<experiment_id>/`.
 
-First, preprocess the vocabulary and cache the training pairs:
+### Train the RL Gating Agent (Phase 2)
 
-```bash
-python3 Preprocess.py
-```
-
-Then, set the configuration for the training run:
+Requires a trained TransformerLM checkpoint:
 
 ```bash
-CONFIG_FILE="configs/base_config.yaml"
-```
-
-Finally, train the model:
-
-```bash
-python3 Main.py --config "${CONFIG_FILE}"
-```
-
-To start the environment, run the following command:
-
-```bash
-source tidal-env/bin/activate
-```
-
-To deactivate the environment, run the following command:
-
-```bash
-deactivate
+python3 train_rl.py \
+    --config configs/base_config.yaml \
+    --rl-config configs/rl_config.yaml \
+    --checkpoint experiments/<experiment_id>/transformer-lm_v1.0.0.pth
 ```
 
 ### Generate Text
 
-Set the following variables, replacing the values with the ones you want to use.
+Standard generation:
 
 ```bash
-CONFIG_FILE="configs/base_config.yaml" && \
-EXPERIMENT_ID="20250905-170823-commit_05ef08d-config_196aafedf3" && \
-CHECKPOINT_ID="checkpoint_foundational_epoch_1" && \
-MODEL_PATH="experiments/${EXPERIMENT_ID}/${CHECKPOINT_ID}.pth" && \
-PROMPT="the ocean reflects the" && \
-MAX_TOKENS=50 && \
-TEMPERATURE=0.8 && \
-TOP_K=50
+python3 Generator.py \
+    --config configs/base_config.yaml \
+    --checkpoint experiments/<experiment_id>/checkpoint_foundational_epoch_1.pth \
+    --prompt "Once upon a time" --max_tokens 50 --temperature 0.8 --top_k 50
 ```
 
-Then run the following command:
+With RL-controlled gating:
 
 ```bash
-python3 Generator.py --config "${CONFIG_FILE}" --checkpoint "${MODEL_PATH}" --prompt "${PROMPT}" --max_tokens ${MAX_TOKENS} --temperature ${TEMPERATURE} --top_k ${TOP_K}
+python3 Generator.py \
+    --config configs/base_config.yaml \
+    --checkpoint <model_checkpoint> \
+    --rl-agent --rl-checkpoint <rl_checkpoint> \
+    --prompt "Once upon a time"
 ```
 
-This can be done while the model trains. Throughout the training, the model checkpoints will be saved to the `experiments` directory.
+### Run Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+### Start the Dashboard
+
+```bash
+cd dashboard && docker compose up -d && npm run dev
+```
+
+## Legacy
+
+The original architecture used an N-body physics simulation in 2D space with a "Semantic Endocrine System" for modulating embeddings. That work has been archived to `legacy_research/` along with its [README](legacy_research/README.md).
+
+## License
+
+[GPL-3.0](LICENSE)
