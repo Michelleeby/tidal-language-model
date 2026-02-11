@@ -33,6 +33,14 @@ The `GatingModulator` maps actions to generation parameters, and the `RewardComp
 
 A monitoring dashboard built with **Fastify 5 + React 19 + Redis 7** (replacing the deprecated Streamlit dashboard). Training metrics flow from `MetricsLogger` → Redis (real-time SSE) + JSONL (archival) → Fastify API → React frontend.
 
+![Training metrics dashboard](docs/images/dashboard-training.png)
+
+![RL gating dashboard with reward curves and ablation comparison](docs/images/dashboard-rl-gating.png)
+
+### Generation with RL-Controlled Gating
+
+![Text generation with RL-controlled gating](docs/images/generation-output.png)
+
 ## Project Structure
 
 ```
