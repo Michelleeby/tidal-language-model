@@ -1,5 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import UPlotChart from "./UPlotChart.js";
+import ZoomResetButton from "./ZoomResetButton.js";
+import type { UPlotChartHandle } from "./UPlotChart.js";
 import type { RLTrainingHistory } from "@tidal/shared";
 
 interface RLRewardCurveProps {
@@ -7,6 +9,9 @@ interface RLRewardCurveProps {
 }
 
 export default function RLRewardCurve({ history }: RLRewardCurveProps) {
+  const chartRef = useRef<UPlotChartHandle>(null);
+  const [zoomed, setZoomed] = useState(false);
+
   const data = useMemo(() => {
     if (!history || history.episode_rewards.length === 0)
       return [new Float64Array(0), new Float64Array(0)] as const;
@@ -22,12 +27,15 @@ export default function RLRewardCurve({ history }: RLRewardCurveProps) {
   }
 
   return (
-    <div className="bg-gray-900 rounded-lg p-4">
+    <div className="bg-gray-900 rounded-lg p-4 relative">
       <h3 className="text-sm font-medium text-gray-300 mb-2">
         Episode Rewards
       </h3>
+      <ZoomResetButton visible={zoomed} onReset={() => chartRef.current?.resetZoom()} />
       <UPlotChart
+        ref={chartRef}
         data={[data[0], data[1]]}
+        onZoomChange={setZoomed}
         options={{
           title: "",
           scales: { x: { time: false } },

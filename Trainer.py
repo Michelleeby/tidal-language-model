@@ -61,12 +61,10 @@ class Trainer:
             data, global_step = item
             try:
                 self.tb_writer.add_scalar("Losses/Total", data["total_loss"], global_step)
-                self.tb_writer.add_scalar("Losses/Prediction", data["prediction_loss"], global_step)
                 self.tb_writer.add_scalar("Learning Rate", data["lr"], global_step)
 
                 self.metrics_logger.log_metrics({
                     "Losses/Total": data["total_loss"],
-                    "Losses/Prediction": data["prediction_loss"],
                     "Learning Rate": data["lr"],
                 }, global_step)
             except Exception:
@@ -158,8 +156,7 @@ class Trainer:
 
                 global_step = self.current_epoch_num * len(data_loader) + i
                 self._log_metrics({
-                    "total_loss": loss.item() * accumulation_steps,
-                    "prediction_loss": prediction_loss.item(),
+                    "total_loss": prediction_loss.item(),
                     "lr": self.optimizer.param_groups[0]["lr"],
                 }, global_step)
 

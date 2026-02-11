@@ -3,7 +3,6 @@ export interface MetricPoint {
   step: number;
   timestamp: number;
   "Losses/Total"?: number;
-  "Losses/Prediction"?: number;
   "Learning Rate"?: number;
   [key: string]: number | string | undefined;
 }

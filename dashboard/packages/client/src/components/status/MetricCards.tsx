@@ -11,14 +11,9 @@ export default function MetricCards({ latest }: MetricCardsProps) {
 
   const cards = [
     {
-      label: "Total Loss",
+      label: "Loss",
       value: (latest["Losses/Total"] as number)?.toFixed(4) ?? "—",
       color: "text-blue-400",
-    },
-    {
-      label: "Prediction Loss",
-      value: (latest["Losses/Prediction"] as number)?.toFixed(4) ?? "—",
-      color: "text-amber-400",
     },
     {
       label: "Learning Rate",

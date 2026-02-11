@@ -1,5 +1,6 @@
+import { useMemo } from "react";
 import { useExperiments } from "../hooks/useExperiments.js";
-import { useMetrics, useRLMetrics, useCheckpoints, useEvaluation, useAblation } from "../hooks/useMetrics.js";
+import { useFullMetrics, useRLMetrics, useCheckpoints, useEvaluation, useAblation } from "../hooks/useMetrics.js";
 import { useSSE } from "../hooks/useSSE.js";
 import { useExperimentStore } from "../stores/experimentStore.js";
 import LossCurves from "../components/charts/LossCurves.js";
@@ -13,6 +14,7 @@ import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
 import MetricCards from "../components/status/MetricCards.js";
 import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
+import { lttbDownsample } from "../utils/downsample.js";
 import type { MetricPoint } from "@tidal/shared";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -26,12 +28,14 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "samples", label: "Samples" },
 ];
 
+const CLIENT_MAX_POINTS = 8000;
+
 export default function DashboardPage() {
   const { selectedExpId, setSelectedExpId, activeTab, setActiveTab } =
     useExperimentStore();
 
   const { data: expData, isLoading: expLoading } = useExperiments();
-  const { data: metricsData } = useMetrics(selectedExpId);
+  const { data: metricsData } = useFullMetrics(selectedExpId);
   const { data: rlData } = useRLMetrics(selectedExpId);
   const { data: checkpointsData } = useCheckpoints(selectedExpId);
   const { data: evalData } = useEvaluation(selectedExpId);
@@ -40,12 +44,34 @@ export default function DashboardPage() {
   // SSE for live updates
   useSSE(selectedExpId);
 
-  // Merge REST data with SSE live data
+  // Merge historical data with live SSE data
   const queryClient = useQueryClient();
   const livePoints =
     queryClient.getQueryData<MetricPoint[]>(["metrics", selectedExpId, "live"]) ?? [];
-  const restPoints = metricsData?.points ?? [];
-  const points = livePoints.length > 0 ? livePoints : restPoints;
+  const historicalPoints = metricsData?.points ?? [];
+
+  const points = useMemo(() => {
+    if (historicalPoints.length === 0 && livePoints.length === 0) return [];
+
+    // Find the last step in historical data
+    const lastHistoricalStep =
+      historicalPoints.length > 0
+        ? historicalPoints[historicalPoints.length - 1].step
+        : -1;
+
+    // Append only live points that are newer than the historical data
+    const newLivePoints = livePoints.filter((p) => p.step > lastHistoricalStep);
+    const merged = newLivePoints.length > 0
+      ? [...historicalPoints, ...newLivePoints]
+      : historicalPoints;
+
+    // Safety cap: client-side LTTB if merged data exceeds limit
+    if (merged.length > CLIENT_MAX_POINTS) {
+      return lttbDownsample(merged, CLIENT_MAX_POINTS);
+    }
+    return merged;
+  }, [historicalPoints, livePoints]);
+
   const latestPoint = points.length > 0 ? points[points.length - 1] : null;
 
   // Auto-select first experiment if none selected

@@ -21,11 +21,14 @@ export default async function metricsRoutes(fastify: FastifyInstance) {
 
     let points;
     let downsampled = false;
+    let originalCount: number;
 
     if (mode === "recent") {
       points = await reader.getRecentMetrics(expId, window);
+      originalCount = points.length;
     } else {
       points = await reader.getFullHistory(expId);
+      originalCount = points.length;
       if (points.length > maxPoints) {
         points = lttbDownsample(points, maxPoints);
         downsampled = true;
@@ -36,6 +39,7 @@ export default async function metricsRoutes(fastify: FastifyInstance) {
       expId,
       points,
       totalPoints: points.length,
+      originalCount,
       downsampled,
     };
   });

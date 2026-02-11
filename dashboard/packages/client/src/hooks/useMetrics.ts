@@ -14,6 +14,15 @@ export function useMetrics(
   });
 }
 
+export function useFullMetrics(expId: string | null, maxPoints = 5000) {
+  return useQuery({
+    queryKey: ["metrics", expId, "historical", 0, maxPoints],
+    queryFn: () => api.getMetrics(expId!, "historical", 0, maxPoints),
+    enabled: !!expId,
+    staleTime: 60_000,
+  });
+}
+
 export function useRLMetrics(expId: string | null) {
   return useQuery({
     queryKey: ["rl-metrics", expId],

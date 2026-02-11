@@ -25,6 +25,7 @@ export interface MetricsResponse {
   expId: string;
   points: MetricPoint[];
   totalPoints: number;
+  originalCount: number;
   downsampled: boolean;
 }
 
