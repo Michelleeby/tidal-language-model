@@ -47,8 +47,10 @@ def run_generation(args):
         return
     print(f"Loading model state from: {args.checkpoint}")
     device = "cuda" if torch.cuda.is_available() and config.get("DEVICE", "auto") != "cpu" else "cpu"
-    state_dict = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(state_dict)
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        checkpoint = checkpoint["model_state_dict"]
+    model.load_state_dict(checkpoint)
     model.to(device)
     print("Model loaded successfully.")
 

@@ -44,9 +44,10 @@ class Evaluator:
         vocab_size = config.get("VOCAB_SIZE", self.tokenizer.vocab_size)
 
         self.model = TransformerLM(vocab_size=vocab_size, config=config)
-        self.model.load_state_dict(
-            torch.load(model_path, map_location=self.device)
-        )
+        checkpoint = torch.load(model_path, map_location=self.device)
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            checkpoint = checkpoint["model_state_dict"]
+        self.model.load_state_dict(checkpoint)
         self.model.to(self.device)
         self.model.eval()
 

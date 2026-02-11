@@ -174,15 +174,33 @@ class Trainer:
         checkpoint_name = f"checkpoint_{phase_name_slug}_epoch_{epoch}.pth"
         checkpoint_path = os.path.join(self.exp_dir, checkpoint_name)
         self.logger.info(f"Saving checkpoint to {checkpoint_path}")
-        state_dict = self.model._orig_mod.state_dict() if hasattr(self.model, "_orig_mod") else self.model.state_dict()
-        torch.save(state_dict, checkpoint_path)
+        model_state = self.model._orig_mod.state_dict() if hasattr(self.model, "_orig_mod") else self.model.state_dict()
+        torch.save({
+            "model_state_dict": model_state,
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_current_step": self.scheduler.current_step,
+            "scaler_state_dict": self.scaler.state_dict(),
+            "epoch": epoch,
+        }, checkpoint_path)
 
     def _load_checkpoint(self, checkpoint_path):
         self.logger.info(f"Loading model from checkpoint: {checkpoint_path}")
         try:
+            data = torch.load(checkpoint_path, map_location=self.device)
             model_to_load = self.model._orig_mod if hasattr(self.model, "_orig_mod") else self.model
-            model_to_load.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
-            self.logger.info("Successfully loaded checkpoint.")
+
+            if isinstance(data, dict) and "model_state_dict" in data:
+                model_to_load.load_state_dict(data["model_state_dict"])
+                if self.optimizer and "optimizer_state_dict" in data:
+                    self.optimizer.load_state_dict(data["optimizer_state_dict"])
+                if self.scheduler and "scheduler_current_step" in data:
+                    self.scheduler.current_step = data["scheduler_current_step"]
+                if "scaler_state_dict" in data:
+                    self.scaler.load_state_dict(data["scaler_state_dict"])
+                self.logger.info("Successfully loaded full training checkpoint.")
+            else:
+                model_to_load.load_state_dict(data)
+                self.logger.info("Loaded legacy checkpoint (model weights only).")
         except FileNotFoundError:
             self.logger.warning(f"Checkpoint file not found: {checkpoint_path}")
         except Exception as e:
@@ -272,6 +290,7 @@ class Trainer:
             checkpoint_path, start_epoch_foundational = self._find_latest_checkpoint(foundational_phase_name)
             if checkpoint_path:
                 self._load_checkpoint(checkpoint_path)
+                self.current_epoch_num = start_epoch_foundational
 
             if start_epoch_foundational >= max_foundational_epochs:
                 self.logger.info("Foundational training already completed. Skipping.")

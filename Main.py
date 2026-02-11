@@ -38,6 +38,8 @@ def main():
     torch.set_float32_matmul_precision("high")
     parser = argparse.ArgumentParser(description="Train and evaluate a TransformerLM.")
     parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file.")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to an existing experiment directory to resume training from.")
     args = parser.parse_args()
 
     # 1. Load Configuration
@@ -47,11 +49,18 @@ def main():
     with open(args.config, "r") as f:
         config = yaml.load(f)
 
-    # 2. Generate Experiment ID & Directory
-    timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-    base_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
-    experiment_id = f"{timestamp}-{base_id}"
-    experiment_dir = os.path.join("experiments", experiment_id)
+    # 2. Resolve Experiment Directory
+    if args.resume:
+        experiment_dir = args.resume
+        if not os.path.isdir(experiment_dir):
+            print(f"Error: Resume directory not found: {experiment_dir}")
+            sys.exit(1)
+        experiment_id = os.path.basename(experiment_dir)
+    else:
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        base_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
+        experiment_id = f"{timestamp}-{base_id}"
+        experiment_dir = os.path.join("experiments", experiment_id)
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, "config.yaml"))
 
