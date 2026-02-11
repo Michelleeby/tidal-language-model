@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 import type Redis from "ioredis";
-import type { SSEEvent } from "@tidal/shared";
+import type { SSEEvent, TrainingJob } from "@tidal/shared";
 
 interface Client {
   reply: FastifyReply;
@@ -8,17 +8,25 @@ interface Client {
   lastStep: number;
 }
 
+interface GlobalClient {
+  reply: FastifyReply;
+}
+
 /**
  * Manages SSE connections, polling Redis for updates and pushing events.
  */
 export class SSEManager {
   private clients = new Map<string, Set<Client>>();
+  private globalClients = new Set<GlobalClient>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  private subscriber: Redis | null = null;
 
   constructor(
     private redis: Redis | null,
     private pollIntervalMs: number = 2000,
-  ) {}
+  ) {
+    this.subscribeToJobUpdates();
+  }
 
   start() {
     if (this.timer) return;
@@ -29,6 +37,10 @@ export class SSEManager {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.subscriber) {
+      this.subscriber.disconnect();
+      this.subscriber = null;
     }
   }
 
@@ -55,10 +67,60 @@ export class SSEManager {
       if (this.clients.get(expId)?.size === 0) {
         this.clients.delete(expId);
       }
-      if (this.clients.size === 0) {
+      if (this.clients.size === 0 && this.globalClients.size === 0) {
         this.stop();
       }
     });
+  }
+
+  addGlobalClient(reply: FastifyReply) {
+    const client: GlobalClient = { reply };
+    this.globalClients.add(client);
+
+    // Send initial heartbeat
+    this.sendRawEvent(reply, {
+      type: "heartbeat",
+      data: { timestamp: Date.now() },
+    });
+
+    this.start();
+
+    reply.raw.on("close", () => {
+      this.globalClients.delete(client);
+      if (this.clients.size === 0 && this.globalClients.size === 0) {
+        this.stop();
+      }
+    });
+  }
+
+  broadcastJobUpdate(job: TrainingJob) {
+    const event: SSEEvent = { type: "job-update", data: job };
+    for (const client of this.globalClients) {
+      this.sendRawEvent(client.reply, event);
+    }
+  }
+
+  private async subscribeToJobUpdates() {
+    if (!this.redis) return;
+    try {
+      // Create a dedicated subscriber connection (ioredis requirement)
+      this.subscriber = this.redis.duplicate();
+      await this.subscriber.subscribe("tidal:job:updates");
+      this.subscriber.on("message", async (_channel, message) => {
+        try {
+          const { jobId } = JSON.parse(message);
+          if (!jobId || !this.redis) return;
+          const raw = await this.redis.hget("tidal:jobs", jobId);
+          if (raw) {
+            this.broadcastJobUpdate(JSON.parse(raw));
+          }
+        } catch {
+          // Non-fatal
+        }
+      });
+    } catch {
+      // Redis pub/sub not available — global clients rely on polling
+    }
   }
 
   private async poll() {
@@ -111,11 +173,23 @@ export class SSEManager {
         });
       }
     }
+
+    // Heartbeat for global clients
+    for (const client of this.globalClients) {
+      this.sendRawEvent(client.reply, {
+        type: "heartbeat",
+        data: { timestamp: Date.now() },
+      });
+    }
   }
 
   private sendEvent(client: Client, event: SSEEvent) {
+    this.sendRawEvent(client.reply, event);
+  }
+
+  private sendRawEvent(reply: FastifyReply, event: SSEEvent) {
     try {
-      client.reply.raw.write(
+      reply.raw.write(
         `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`,
       );
     } catch {

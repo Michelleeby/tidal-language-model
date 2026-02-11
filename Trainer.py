@@ -48,6 +48,10 @@ class Trainer:
 
         self.metrics_logger = MetricsLogger(self.exp_dir)
 
+        self._complete_signal_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".training_complete_signal"
+        )
+
         self._log_queue = queue.Queue()
         self._log_thread = threading.Thread(target=self._log_worker, daemon=True)
         self._log_thread.start()
@@ -78,6 +82,16 @@ class Trainer:
         """Drain the log queue and stop the worker thread."""
         self._log_queue.put(None)
         self._log_thread.join()
+
+    def _should_complete(self):
+        """Check if an external signal requests graceful completion."""
+        try:
+            if os.path.exists(self._complete_signal_path):
+                os.remove(self._complete_signal_path)
+                return True
+        except OSError:
+            pass
+        return False
 
     def _get_device(self):
         if self.config["DEVICE"] == "auto":
@@ -255,6 +269,10 @@ class Trainer:
             if (cache_freq and epoch_num % cache_freq == 0) or \
                (cache_milestones and epoch_num in cache_milestones):
                 self._save_checkpoint(epoch_num, phase_name)
+
+            if self._should_complete():
+                self.logger.info(f"Graceful completion signal received after epoch {epoch_num}.")
+                break
 
             if patience_counter >= patience:
                 self.logger.info(f"Early stopping triggered at epoch {epoch_num}.")

@@ -1,10 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { SSEManager } from "../services/sse-manager.js";
 
 export default async function sseRoutes(fastify: FastifyInstance) {
-  const manager = new SSEManager(fastify.redis);
-
-  fastify.addHook("onClose", () => manager.stop());
+  const manager = fastify.sseManager;
 
   fastify.get<{
     Params: { expId: string };
@@ -19,6 +16,20 @@ export default async function sseRoutes(fastify: FastifyInstance) {
 
     // Keep the connection open — Fastify will not auto-close raw streams
     // The SSEManager handles cleanup when the client disconnects
+    await new Promise(() => {
+      // Never resolves — held open until client disconnects
+    });
+  });
+
+  fastify.get("/api/jobs/stream", async (_request, reply) => {
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    manager.addGlobalClient(reply);
+
     await new Promise(() => {
       // Never resolves — held open until client disconnects
     });

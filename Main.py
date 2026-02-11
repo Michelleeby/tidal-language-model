@@ -64,6 +64,26 @@ def main():
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, "config.yaml"))
 
+    # 2b. Report experiment ID to Redis job record (if launched by worker agent)
+    job_id = os.environ.get("TIDAL_JOB_ID")
+    if job_id:
+        try:
+            import json
+            import redis as redis_lib
+            r = redis_lib.from_url(
+                os.environ.get("REDIS_URL", "redis://localhost:6379"),
+                decode_responses=True,
+            )
+            job_raw = r.hget("tidal:jobs", job_id)
+            if job_raw:
+                job = json.loads(job_raw)
+                job["experimentId"] = experiment_id
+                job["updatedAt"] = time.time()
+                r.hset("tidal:jobs", job_id, json.dumps(job))
+                r.publish("tidal:job:updates", json.dumps({"jobId": job_id}))
+        except Exception:
+            pass
+
     # 3. Setup Logger
     logger = setup_logger("MainOrchestrator", os.path.join(experiment_dir, "main.log"), config)
     logger.info(f"Starting experiment: {experiment_id}")

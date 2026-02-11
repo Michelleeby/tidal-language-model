@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useExperiments } from "../hooks/useExperiments.js";
 import { useFullMetrics, useRLMetrics, useCheckpoints, useEvaluation, useAblation } from "../hooks/useMetrics.js";
 import { useSSE } from "../hooks/useSSE.js";
+import { useJobSSE } from "../hooks/useJobSSE.js";
 import { useExperimentStore } from "../stores/experimentStore.js";
 import LossCurves from "../components/charts/LossCurves.js";
 import LearningRateChart from "../components/charts/LearningRateChart.js";
@@ -14,6 +15,8 @@ import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
 import MetricCards from "../components/status/MetricCards.js";
 import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
+import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
+import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
 import { lttbDownsample } from "../utils/downsample.js";
 import type { MetricPoint } from "@tidal/shared";
 import { useQueryClient } from "@tanstack/react-query";
@@ -43,6 +46,7 @@ export default function DashboardPage() {
 
   // SSE for live updates
   useSSE(selectedExpId);
+  useJobSSE();
 
   // Merge historical data with live SSE data
   const queryClient = useQueryClient();
@@ -128,6 +132,7 @@ export default function DashboardPage() {
         <>
           {activeTab === "training" && (
             <div className="space-y-4">
+              <TrainingControlBar />
               <MetricCarousel>
                 <MetricCards latest={latestPoint} />
                 <TrainingStatusCard
@@ -147,6 +152,7 @@ export default function DashboardPage() {
 
           {activeTab === "rl-gating" && (
             <div className="space-y-4">
+              <RLTrainingTrigger selectedExpId={selectedExpId} />
               <RLRewardCurve history={rlData?.metrics?.history ?? null} />
               <RLLossChart history={rlData?.metrics?.history ?? null} />
               <AblationComparison results={ablationData?.results ?? null} />

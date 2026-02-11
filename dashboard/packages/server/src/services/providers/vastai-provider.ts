@@ -1,0 +1,23 @@
+import type { TrainingJob } from "@tidal/shared";
+import type {
+  ComputeProvider,
+  ProvisionResult,
+} from "../compute-provider.js";
+
+export class VastAIProvider implements ComputeProvider {
+  readonly type = "vastai" as const;
+
+  async canProvision(): Promise<boolean> {
+    return false;
+  }
+
+  async provision(_job: TrainingJob): Promise<ProvisionResult> {
+    return { success: false, error: "vast.ai provider not implemented" };
+  }
+
+  async deprovision(_job: TrainingJob): Promise<void> {}
+
+  async isAlive(_job: TrainingJob): Promise<boolean> {
+    return false;
+  }
+}
