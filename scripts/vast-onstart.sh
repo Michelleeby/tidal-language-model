@@ -16,10 +16,12 @@ redis-server \
     --maxmemory 2048mb \
     --maxmemory-policy allkeys-lfu
 
-# 3. Build dashboard
+# 3. Build dashboard (shared must be built before client)
 cd "$REPO_DIR/dashboard"
 npm ci --prefer-offline 2>/dev/null || npm install
-npm run build
+npm run build -w packages/shared
+npm run build -w packages/server
+npm run build -w packages/client
 
 # 4. Start dashboard server (Fastify on :4400)
 EXPERIMENTS_DIR="$REPO_DIR/experiments" \
