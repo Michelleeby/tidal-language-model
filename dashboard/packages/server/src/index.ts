@@ -4,6 +4,9 @@ import fastifyStatic from "@fastify/static";
 import { loadConfig, type ServerConfig } from "./config.js";
 import redisPlugin from "./plugins/redis.js";
 import corsPlugin from "./plugins/cors.js";
+import ssePlugin from "./plugins/sse.js";
+import authPlugin from "./plugins/auth.js";
+import rateLimitPlugin from "./plugins/rate-limit.js";
 import experimentsRoutes from "./routes/experiments.js";
 import metricsRoutes from "./routes/metrics.js";
 import rlMetricsRoutes from "./routes/rl-metrics.js";
@@ -12,6 +15,7 @@ import checkpointsRoutes from "./routes/checkpoints.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import generateRoutes from "./routes/generate.js";
 import sseRoutes from "./routes/sse.js";
+import jobRoutes from "./routes/jobs.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -35,9 +39,12 @@ async function main() {
   // Decorate with config
   fastify.decorate("serverConfig", config);
 
-  // Plugins
+  // Plugins (order matters: redis before sse, auth/rate-limit after redis, all before routes)
   await fastify.register(corsPlugin);
   await fastify.register(redisPlugin, { url: config.redisUrl });
+  await fastify.register(ssePlugin);
+  await fastify.register(authPlugin);
+  await fastify.register(rateLimitPlugin);
 
   // API routes
   await fastify.register(experimentsRoutes);
@@ -48,6 +55,7 @@ async function main() {
   await fastify.register(evaluationRoutes);
   await fastify.register(generateRoutes);
   await fastify.register(sseRoutes);
+  await fastify.register(jobRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

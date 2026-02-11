@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import type { ComputeProviderType } from "@tidal/shared";
+
 export interface ServerConfig {
   port: number;
   host: string;
@@ -7,6 +9,8 @@ export interface ServerConfig {
   experimentsDir: string;
   pythonBin: string;
   projectRoot: string;
+  defaultComputeProvider: ComputeProviderType;
+  authToken: string | null;
 }
 
 export function loadConfig(): ServerConfig {
@@ -28,5 +32,8 @@ export function loadConfig(): ServerConfig {
       process.env.PYTHON_BIN ??
       path.join(projectRoot, "tidal-env", "bin", "python"),
     projectRoot,
+    defaultComputeProvider:
+      (process.env.DEFAULT_COMPUTE_PROVIDER as ComputeProviderType) ?? "local",
+    authToken: process.env.TIDAL_AUTH_TOKEN ?? null,
   };
 }

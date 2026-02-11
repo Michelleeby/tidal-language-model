@@ -8,7 +8,7 @@ export default async function generateRoutes(fastify: FastifyInstance) {
   fastify.post<{
     Body: GenerateRequest;
     Reply: GenerateResponse;
-  }>("/api/generate", async (request) => {
+  }>("/api/generate", { preHandler: [fastify.rateLimit] }, async (request) => {
     return bridge.generate(request.body);
   });
 }

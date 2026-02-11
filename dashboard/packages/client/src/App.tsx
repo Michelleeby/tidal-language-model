@@ -1,6 +1,7 @@
 import { useState } from "react";
 import DashboardPage from "./pages/DashboardPage.js";
 import PlaygroundPage from "./pages/PlaygroundPage.js";
+import AuthPrompt from "./components/AuthPrompt.js";
 
 type Page = "dashboard" | "playground";
 
@@ -9,6 +10,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
+      <AuthPrompt />
       <header className="border-b border-gray-800 px-3 md:px-6 py-3 flex items-center gap-3 md:gap-6">
         <h1 className="text-lg font-semibold tracking-tight">
           Tidal Dashboard

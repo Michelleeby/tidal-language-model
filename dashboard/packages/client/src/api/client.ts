@@ -8,12 +8,36 @@ import type {
   AblationResponse,
   GenerateRequest,
   GenerateResponse,
+  CreateJobRequest,
+  CreateJobResponse,
+  JobsListResponse,
+  JobResponse,
+  JobSignalRequest,
+  JobSignalResponse,
 } from "@tidal/shared";
+import { getAuthToken, requestAuth } from "../hooks/useAuth.js";
 
 const BASE = "/api";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  const token = getAuthToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const res = await fetch(url, { ...init, headers });
+
+  if (res.status === 401) {
+    requestAuth();
+    throw new Error("Authentication required");
+  }
+
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After") ?? "?";
+    throw new Error(`Rate limited. Try again in ${retryAfter} seconds.`);
+  }
+
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json() as Promise<T>;
 }
@@ -47,5 +71,31 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    }),
+
+  getJobs: () => fetchJson<JobsListResponse>(`${BASE}/jobs`),
+
+  getJob: (jobId: string) =>
+    fetchJson<JobResponse>(`${BASE}/jobs/${jobId}`),
+
+  getActiveJob: () => fetchJson<JobResponse>(`${BASE}/jobs/active`),
+
+  createJob: (body: CreateJobRequest) =>
+    fetchJson<CreateJobResponse>(`${BASE}/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  signalJob: (jobId: string, signal: JobSignalRequest["signal"]) =>
+    fetchJson<JobSignalResponse>(`${BASE}/jobs/${jobId}/signal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signal }),
+    }),
+
+  cancelJob: (jobId: string) =>
+    fetchJson<JobSignalResponse>(`${BASE}/jobs/${jobId}/cancel`, {
+      method: "POST",
     }),
 };
