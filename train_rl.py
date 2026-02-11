@@ -73,8 +73,11 @@ def load_model(config, checkpoint_path, device):
     vocab_size = config.get("VOCAB_SIZE", 50257)
 
     model = TransformerLM(vocab_size=vocab_size, config=config)
-    state_dict = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(state_dict)
+    data = torch.load(checkpoint_path, map_location=device)
+    if isinstance(data, dict) and "model_state_dict" in data:
+        model.load_state_dict(data["model_state_dict"])
+    else:
+        model.load_state_dict(data)
     model.to(device)
     model.eval()
 
