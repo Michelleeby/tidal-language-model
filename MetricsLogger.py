@@ -18,7 +18,7 @@ class MetricsLogger:
     falls back to disk-only mode with a single warning.
     """
 
-    def __init__(self, experiment_dir: str, max_history: int = 10000):
+    def __init__(self, experiment_dir: str, max_history: int = 10000, reset_metrics: bool = True):
         self.experiment_dir = experiment_dir
         self.max_history = max_history
         self.exp_id = os.path.basename(experiment_dir)
@@ -39,7 +39,7 @@ class MetricsLogger:
         self._redis_warned = False
         self._init_redis()
 
-        self._initialize_files()
+        self._initialize_files(reset_metrics=reset_metrics)
 
     def _init_redis(self):
         """Try to connect to Redis. Gracefully degrade if unavailable."""
@@ -67,8 +67,9 @@ class MetricsLogger:
                 logger.warning("Redis connection lost — falling back to disk only")
                 self._redis_warned = True
 
-    def _initialize_files(self):
-        open(self.metrics_file, "w").close()
+    def _initialize_files(self, reset_metrics: bool = True):
+        if reset_metrics:
+            open(self.metrics_file, "w").close()
         self._update_status({
             "status": "initialized",
             "start_time": time.time(),

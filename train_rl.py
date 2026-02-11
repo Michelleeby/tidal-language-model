@@ -3,8 +3,11 @@ train_rl.py
 
 Entry point for RL gating controller training on a frozen TransformerLM.
 
+RL training runs within the same experiment directory as the source checkpoint,
+so metrics and checkpoints are co-located for the dashboard.
+
 Usage:
-    # Train RL agent
+    # Train RL agent (logs into the checkpoint's experiment directory)
     python3 train_rl.py \
         --config configs/base_config.yaml \
         --rl-config configs/rl_config.yaml \
@@ -15,7 +18,7 @@ Usage:
         --config configs/base_config.yaml \
         --rl-config configs/rl_config.yaml \
         --checkpoint experiments/<experiment_id>/transformer-lm_v1.0.0.pth \
-        --resume experiments/<rl_experiment_id>/rl_checkpoint_iter_100.pth
+        --resume experiments/<experiment_id>/rl_checkpoint_iter_100.pth
 
     # Run ablation study after training
     python3 train_rl.py \
@@ -43,6 +46,7 @@ from GatingEnvironment import GatingEnvironment
 from GatingModulator import GatingModulator
 from RewardComputer import RewardComputer
 from RLTrainer import PPOTrainer, run_ablation_study
+from MetricsLogger import MetricsLogger
 
 yaml = YAML(typ="safe")
 
@@ -167,12 +171,24 @@ def main():
             sys.exit(1)
         experiment_id = os.path.basename(experiment_dir)
     else:
-        timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        base_id = f"commit_{get_git_commit_hash()}-rl_{get_file_hash(args.rl_config)}"
-        experiment_id = f"{timestamp}-{base_id}"
-        experiment_dir = os.path.join("experiments", experiment_id)
-        os.makedirs(experiment_dir, exist_ok=True)
-        shutil.copy(args.config, os.path.join(experiment_dir, "base_config.yaml"))
+        # Derive experiment directory from the checkpoint path so RL training
+        # logs into the same experiment that produced the base model.
+        checkpoint_parent = os.path.dirname(os.path.abspath(args.checkpoint))
+        experiments_root = os.path.abspath("experiments")
+        if checkpoint_parent.startswith(experiments_root) and checkpoint_parent != experiments_root:
+            experiment_dir = checkpoint_parent
+            experiment_id = os.path.basename(experiment_dir)
+            print(f"Using existing experiment from checkpoint: {experiment_id}")
+        else:
+            # Checkpoint is outside experiments/ — fall back to creating a new directory
+            timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+            base_id = f"commit_{get_git_commit_hash()}-rl_{get_file_hash(args.rl_config)}"
+            experiment_id = f"{timestamp}-{base_id}"
+            experiment_dir = os.path.join("experiments", experiment_id)
+            os.makedirs(experiment_dir, exist_ok=True)
+            shutil.copy(args.config, os.path.join(experiment_dir, "base_config.yaml"))
+
+        # Always save RL config into the experiment directory
         shutil.copy(args.rl_config, os.path.join(experiment_dir, "rl_config.yaml"))
 
     print(f"Experiment: {experiment_id}")
@@ -236,12 +252,15 @@ def main():
                 print(f"  {metric}: {value:.4f}")
         return
 
+    metrics_logger = MetricsLogger(experiment_dir, reset_metrics=False)
+
     trainer = PPOTrainer(
         agent=agent,
         env=env,
         config=merged_config,
         experiment_dir=experiment_dir,
         device=device,
+        metrics_logger=metrics_logger,
     )
 
     if args.resume:
