@@ -8,8 +8,8 @@ export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
-      <header className="border-b border-gray-800 px-6 py-3 flex items-center gap-6">
+    <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
+      <header className="border-b border-gray-800 px-3 md:px-6 py-3 flex items-center gap-3 md:gap-6">
         <h1 className="text-lg font-semibold tracking-tight">
           Tidal Dashboard
         </h1>
@@ -28,7 +28,7 @@ export default function App() {
           </NavButton>
         </nav>
       </header>
-      <main className="p-6">
+      <main className="p-3 md:p-6">
         {page === "dashboard" && <DashboardPage />}
         {page === "playground" && <PlaygroundPage />}
       </main>

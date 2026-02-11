@@ -33,18 +33,18 @@ export default function MetricCards({ latest }: MetricCardsProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <>
       {cards.map((card) => (
         <div
           key={card.label}
-          className="bg-gray-900 rounded-lg p-3"
+          className="snap-center flex-shrink-0 w-full md:w-auto bg-gray-900 rounded-lg p-3"
         >
           <div className="text-xs text-gray-500 mb-1">{card.label}</div>
-          <div className={`text-lg font-mono font-semibold ${card.color}`}>
+          <div className={`text-2xl font-mono font-semibold ${card.color}`}>
             {card.value}
           </div>
         </div>
       ))}
-    </div>
+    </>
   );
 }

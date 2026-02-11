@@ -9,7 +9,7 @@ export default function TrainingStatusCard({
 }: TrainingStatusCardProps) {
   if (!status) {
     return (
-      <div className="bg-gray-900 rounded-lg p-4 text-gray-500 text-sm">
+      <div className="snap-center flex-shrink-0 w-full md:w-auto bg-gray-900 rounded-lg p-4 text-gray-500 text-sm">
         No status available
       </div>
     );
@@ -22,7 +22,7 @@ export default function TrainingStatusCard({
   }[status.status];
 
   return (
-    <div className="bg-gray-900 rounded-lg p-4 space-y-2">
+    <div className="snap-center flex-shrink-0 w-full md:w-auto bg-gray-900 rounded-lg p-4 space-y-2">
       <div className="flex items-center gap-2">
         <span
           className={`inline-block w-2 h-2 rounded-full ${

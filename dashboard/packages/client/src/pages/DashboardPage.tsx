@@ -11,6 +11,7 @@ import AblationComparison from "../components/charts/AblationComparison.js";
 import CheckpointBrowser from "../components/charts/CheckpointBrowser.js";
 import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
 import MetricCards from "../components/status/MetricCards.js";
+import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
 import type { MetricPoint } from "@tidal/shared";
 import { useQueryClient } from "@tanstack/react-query";
@@ -55,13 +56,13 @@ export default function DashboardPage() {
   return (
     <div className="space-y-4">
       {/* Experiment selector */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-1">
         <label className="text-sm text-gray-400">Experiment:</label>
         {expLoading ? (
           <span className="text-sm text-gray-500">Loading...</span>
         ) : (
           <select
-            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
+            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500 max-w-md"
             value={selectedExpId ?? ""}
             onChange={(e) => setSelectedExpId(e.target.value || null)}
           >
@@ -76,7 +77,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-gray-800 pb-px">
+      <div className="flex gap-1 border-b border-gray-800 pb-px overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -101,17 +102,15 @@ export default function DashboardPage() {
         <>
           {activeTab === "training" && (
             <div className="space-y-4">
-              <div className="flex gap-4 items-start">
-                <div className="flex-1">
-                  <MetricCards latest={latestPoint} />
-                </div>
+              <MetricCarousel>
+                <MetricCards latest={latestPoint} />
                 <TrainingStatusCard
                   status={
                     expData?.experiments.find((e) => e.id === selectedExpId)
                       ?.status ?? null
                   }
                 />
-              </div>
+              </MetricCarousel>
               <LossCurves points={points} />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <LearningRateChart points={points} />
