@@ -66,7 +66,13 @@ export default function PlaygroundPage() {
           <select
             className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200"
             value={checkpoint}
-            onChange={(e) => setCheckpoint(e.target.value)}
+            onChange={(e) => {
+              setCheckpoint(e.target.value);
+              const filename = e.target.value.split("/").pop() ?? "";
+              if (filename.startsWith("rl_checkpoint")) {
+                setGatingMode("learned");
+              }
+            }}
             disabled={!expId}
           >
             <option value="">Select checkpoint</option>
