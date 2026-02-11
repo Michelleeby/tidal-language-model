@@ -40,7 +40,12 @@ export default function LearningRateChart({ points }: LearningRateChartProps) {
           },
           axes: [
             { label: "Step", stroke: "#9ca3af", grid: { stroke: "#1f2937" } },
-            { label: "LR", stroke: "#9ca3af", grid: { stroke: "#1f2937" } },
+            {
+              label: "LR",
+              stroke: "#9ca3af",
+              grid: { stroke: "#1f2937" },
+              values: (_u: unknown, vals: number[]) => vals.map((v) => v.toExponential(1)),
+            },
           ],
           series: [
             {},
