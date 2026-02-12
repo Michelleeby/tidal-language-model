@@ -28,7 +28,7 @@ const DEFAULT_CONFIG: OrchestratorConfig = {
   healthCheckIntervalMs: 15_000,
   heartbeatTimeoutMs: 60_000,
   staleStartupTimeoutMs: 30_000,
-  remoteStartupTimeoutMs: 300_000,
+  remoteStartupTimeoutMs: 900_000,
 };
 
 const TERMINAL_STATUSES: Set<JobStatus> = new Set([
