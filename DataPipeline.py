@@ -101,28 +101,31 @@ class TinyStoriesDataset(Dataset):
         logger.info(f"Building {split} chunk cache (one-time)...")
         logger.info("Loading dataset from HF cache...")
         raw = _load_dataset_prefer_cache(dataset_name, split)
-        logger.info(f"Loaded {len(raw):,} examples. Tokenizing...")
-        tokenized = raw.map(
-            lambda batch: self.tokenizer(
-                batch["text"],
+        num_examples = len(raw)
+        logger.info(f"Loaded {num_examples:,} examples. Tokenizing and flattening...")
+        batch_size = 5000
+        token_chunks: list[np.ndarray] = []
+        total = 0
+        for start in range(0, num_examples, batch_size):
+            batch_texts = raw[start : start + batch_size]["text"]
+            encoded = self.tokenizer(
+                batch_texts,
                 truncation=False,
                 return_attention_mask=False,
-            ),
-            batched=True,
-            batch_size=5000,
-            remove_columns=raw.column_names,
-            desc=f"Tokenizing {split}",
-        )
+            )
+            for ids in encoded["input_ids"]:
+                arr = np.array(ids, dtype=np.int64)
+                token_chunks.append(arr)
+                total += len(arr)
+            if start % 50000 == 0:
+                logger.info(f"  Tokenized {start + len(batch_texts):,}/{num_examples:,} examples ({total:,} tokens)")
 
-        logger.info("Flattening tokens and chunking...")
-        all_input_ids = tokenized["input_ids"]
-        total = sum(len(ids) for ids in all_input_ids)
-        logger.info(f"Total tokens: {total:,}. Building flat array...")
+        logger.info(f"Total tokens: {total:,}. Concatenating...")
         all_ids = np.empty(total, dtype=np.int64)
         offset = 0
-        for ids in all_input_ids:
-            n = len(ids)
-            all_ids[offset : offset + n] = ids
+        for arr in token_chunks:
+            n = len(arr)
+            all_ids[offset : offset + n] = arr
             offset += n
 
         # Drop remainder that doesn't fill a full chunk
