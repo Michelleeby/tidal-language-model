@@ -8,11 +8,10 @@ import type {
 const VASTAI_API = "https://console.vast.ai/api/v0";
 const MIN_GPU_RAM_MB = 16_000;
 const MIN_CPU_CORES = 16;
-const MIN_INET_DOWN_MBPS = 400;
-const MIN_INET_UP_MBPS = 400;
-const MIN_RELIABILITY = 0.95;
-const DOCKER_IMAGE = "pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime";
-const MAX_COMPUTE_CAP = 90; // Exclude Blackwell (sm_120) — no stable PyTorch support yet
+const MIN_INET_DOWN_MBPS = 800;
+const MIN_INET_UP_MBPS = 800;
+const MIN_RELIABILITY = 0.99;
+const DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
 
 export interface VastAIProviderConfig {
   apiKey: string | null;
@@ -138,7 +137,6 @@ export class VastAIProvider implements ComputeProvider {
       cpu_cores_effective: { gte: MIN_CPU_CORES },
       inet_down: { gte: MIN_INET_DOWN_MBPS },
       inet_up: { gte: MIN_INET_UP_MBPS },
-      compute_cap: { lte: MAX_COMPUTE_CAP },
       rentable: { eq: true },
       num_gpus: { eq: 1 },
       reliability2: { gte: MIN_RELIABILITY },
