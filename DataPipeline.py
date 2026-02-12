@@ -103,6 +103,23 @@ class TinyStoriesDataset(Dataset):
         raw = _load_dataset_prefer_cache(dataset_name, split)
         num_examples = len(raw)
         logger.info(f"Loaded {num_examples:,} examples. Tokenizing and flattening...")
+
+        # Diagnostic: verify tokenizer works on this environment
+        import transformers
+        logger.info(f"  transformers version: {transformers.__version__}")
+        sample_text = raw[0]["text"]
+        logger.info(f"  Sample text (first 100 chars): {repr(sample_text[:100])}")
+        sample_enc = self.tokenizer(sample_text, truncation=False, return_attention_mask=False)
+        logger.info(f"  Sample encoded input_ids (first 20): {sample_enc['input_ids'][:20]}")
+        logger.info(f"  Sample encoded length: {len(sample_enc['input_ids'])}")
+        sample_batch = self.tokenizer(
+            [sample_text, "hello world"],
+            truncation=False,
+            return_attention_mask=False,
+        )
+        logger.info(f"  Batch encoded type: {type(sample_batch['input_ids'])}")
+        logger.info(f"  Batch encoded lengths: {[len(x) for x in sample_batch['input_ids']]}")
+
         batch_size = 5000
         token_chunks: list[np.ndarray] = []
         total = 0
@@ -117,7 +134,16 @@ class TinyStoriesDataset(Dataset):
                 arr = np.array(ids, dtype=np.int64)
                 token_chunks.append(arr)
                 total += len(arr)
-            if start % 50000 == 0:
+            if start == 0:
+                logger.info(f"  First batch: {len(batch_texts)} texts, encoded type: {type(encoded['input_ids'])}")
+                logger.info(f"  First 3 input_ids lengths: {[len(x) for x in encoded['input_ids'][:3]]}")
+                if total == 0:
+                    logger.error("  FATAL: First batch produced 0 tokens! Dumping debug info...")
+                    logger.error(f"  batch_texts[:2] = {batch_texts[:2]}")
+                    logger.error(f"  encoded keys = {list(encoded.keys())}")
+                    logger.error(f"  encoded['input_ids'][:3] = {encoded['input_ids'][:3]}")
+                    raise RuntimeError("Tokenizer produced 0 tokens — see logs above")
+            if start % 50000 == 0 and start > 0:
                 logger.info(f"  Tokenized {start + len(batch_texts):,}/{num_examples:,} examples ({total:,} tokens)")
 
         logger.info(f"Total tokens: {total:,}. Concatenating...")
