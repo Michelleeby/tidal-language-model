@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useActiveJob, useCreateJob, useSignalJob, useCancelJob } from "../../hooks/useJobs.js";
+import { useActiveJob, useCreateJob, useSignalJob, useCancelJob, useJobs } from "../../hooks/useJobs.js";
 import type { JobStatus } from "@tidal/shared";
 
 const STATUS_COLORS: Record<JobStatus, string> = {
@@ -39,6 +39,7 @@ const CANCELLABLE_STUCK: Set<JobStatus> = new Set([
 
 export default function TrainingControlBar() {
   const { data: activeData } = useActiveJob();
+  const { data: jobsData } = useJobs();
   const createJob = useCreateJob();
   const signalJob = useSignalJob();
   const cancelJob = useCancelJob();
@@ -51,6 +52,13 @@ export default function TrainingControlBar() {
   const activeJob = activeData?.job ?? null;
   const hasActiveJob = activeJob != null &&
     !["completed", "failed", "cancelled"].includes(activeJob.status);
+
+  // Find most recent failed job (within last 5 minutes) to show error
+  const recentFailedJob = !hasActiveJob
+    ? (jobsData?.jobs ?? [])
+        .filter((j) => j.status === "failed" && j.completedAt && Date.now() - j.completedAt < 300_000)
+        .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))[0] ?? null
+    : null;
 
   const handleStart = () => {
     createJob.mutate(
@@ -180,6 +188,11 @@ export default function TrainingControlBar() {
       {createJob.isError && (
         <span className="text-sm text-red-400">
           {(createJob.error as Error).message}
+        </span>
+      )}
+      {recentFailedJob && (
+        <span className="text-sm text-red-400">
+          Last job failed: {recentFailedJob.error ?? "Unknown error"}
         </span>
       )}
     </div>
