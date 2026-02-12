@@ -50,6 +50,58 @@ export default async function workerRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /api/workers/:jobId/metrics — worker forwards training metrics
+  fastify.post<{
+    Params: { jobId: string };
+    Body: {
+      expId: string;
+      points?: Array<Record<string, unknown>>;
+      status?: Record<string, unknown>;
+    };
+  }>(
+    "/api/workers/:jobId/metrics",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const redis = fastify.redis;
+      if (!redis) {
+        return reply.status(503).send({ error: "Redis unavailable" });
+      }
+
+      const { expId, points, status } = request.body;
+      if (!expId) {
+        return reply.status(400).send({ error: "expId is required" });
+      }
+
+      const pipe = redis.pipeline();
+
+      // Register the experiment
+      pipe.sadd("tidal:experiments", expId);
+
+      // Write metric points
+      if (points && points.length > 0) {
+        const serialized = points.map((p) => JSON.stringify(p));
+        pipe.rpush(`tidal:metrics:${expId}:history`, ...serialized);
+        pipe.ltrim(`tidal:metrics:${expId}:history`, -50000, -1);
+        // Set latest to the last point in the batch
+        pipe.set(
+          `tidal:metrics:${expId}:latest`,
+          serialized[serialized.length - 1],
+          "EX",
+          600,
+        );
+      }
+
+      // Write status
+      if (status) {
+        pipe.set(`tidal:status:${expId}`, JSON.stringify(status), "EX", 900);
+      }
+
+      await pipe.exec();
+
+      return reply.send({ ok: true, ingested: points?.length ?? 0 });
+    },
+  );
+
   // GET /api/workers/:jobId/signal — worker polls for signals
   fastify.get<{ Params: { jobId: string } }>(
     "/api/workers/:jobId/signal",

@@ -232,6 +232,11 @@ class WorkerAgent:
             "TIDAL_JOB_ID": self.job_id,
         }
 
+        # Pass API credentials so MetricsLogger can forward metrics remotely
+        if hasattr(self.transport, "api_url"):
+            env["TIDAL_API_URL"] = self.transport.api_url
+            env["TIDAL_AUTH_TOKEN"] = self.transport.auth_token
+
         # Capture stderr in a ring buffer so we can report crash errors
         self._stderr_lines: list[str] = []
         self._stderr_lock = threading.Lock()
