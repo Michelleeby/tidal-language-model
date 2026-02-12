@@ -118,24 +118,15 @@ class TinyStoriesDataset(Dataset):
         )
 
         logger.info("Flattening tokens and chunking...")
-        # Pre-compute total length to allocate once instead of concatenating ragged lists
-        lengths = tokenized.map(
-            lambda batch: {"len": [len(ids) for ids in batch["input_ids"]]},
-            batched=True,
-            batch_size=10000,
-            num_proc=num_proc,
-            remove_columns=tokenized.column_names,
-        )
-        total_tokens = sum(lengths["len"])
-        logger.info(f"Total tokens: {total_tokens:,}. Pre-allocating flat array...")
-
-        all_ids = np.empty(total_tokens, dtype=np.int64)
-        offset = 0
+        # Collect all token IDs into chunks of numpy arrays, then concatenate once
+        chunks = []
+        total = 0
         for batch in tokenized.iter(batch_size=10000):
             for ids in batch["input_ids"]:
-                n = len(ids)
-                all_ids[offset : offset + n] = ids
-                offset += n
+                chunks.append(np.array(ids, dtype=np.int64))
+                total += len(ids)
+        logger.info(f"Total tokens: {total:,}. Concatenating...")
+        all_ids = np.concatenate(chunks) if chunks else np.array([], dtype=np.int64)
 
         # Drop remainder that doesn't fill a full chunk
         num_chunks = len(all_ids) // chunk_length
