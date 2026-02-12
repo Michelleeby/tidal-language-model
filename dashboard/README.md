@@ -25,6 +25,7 @@ npm run build -w packages/client
 
 # 2. Kill the old server and start a new one
 kill $(pgrep -f 'index.js')
+TIDAL_AUTH_TOKEN=your-secret-token-here \
 EXPERIMENTS_DIR=/workspace/tidal-language-model/experiments \
 REDIS_URL=redis://localhost:6379 \
 PYTHON_BIN=/opt/conda/bin/python \
