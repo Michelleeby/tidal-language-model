@@ -26,7 +26,7 @@ export interface OrchestratorConfig {
 const DEFAULT_CONFIG: OrchestratorConfig = {
   defaultProvider: "local",
   healthCheckIntervalMs: 15_000,
-  heartbeatTimeoutMs: 60_000,
+  heartbeatTimeoutMs: 180_000,
   staleStartupTimeoutMs: 30_000,
   remoteStartupTimeoutMs: 900_000,
 };
@@ -301,6 +301,21 @@ export class JobOrchestrator {
 
         const age = Date.now() - heartbeat * 1000;
         if (age > this.config.heartbeatTimeoutMs) {
+          // Remote jobs: check if the instance is still alive before killing
+          if (isRemote && provider) {
+            try {
+              const alive = await provider.isAlive(job);
+              if (alive) {
+                this.log.info(
+                  { jobId: job.jobId, ageMs: age },
+                  "Heartbeat stale but instance still alive — skipping",
+                );
+                continue;
+              }
+            } catch {
+              // isAlive check failed, proceed with timeout
+            }
+          }
           this.log.warn(
             { jobId: job.jobId, ageMs: age },
             "Heartbeat stale — marking failed",

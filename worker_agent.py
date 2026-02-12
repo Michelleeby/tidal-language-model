@@ -96,23 +96,30 @@ class HttpTransport(Transport):
         self.api_url = api_url.rstrip("/")
         self.auth_token = auth_token
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> dict | None:
+    def _request(self, method: str, path: str, body: dict | None = None, retries: int = 3) -> dict | None:
         url = f"{self.api_url}{path}"
-        data = json.dumps(body).encode() if body else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {self.auth_token}")
-        req.add_header("User-Agent", "TidalWorker/1.0")
-        if data:
-            req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            print(f"HTTP {e.code} on {method} {path}: {e.read().decode()}", file=sys.stderr)
-            return None
-        except Exception as e:
-            print(f"Request failed {method} {path}: {e}", file=sys.stderr)
-            return None
+        last_err = None
+        for attempt in range(retries):
+            data = json.dumps(body).encode() if body else None
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("Authorization", f"Bearer {self.auth_token}")
+            req.add_header("User-Agent", "TidalWorker/1.0")
+            if data:
+                req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                print(f"HTTP {e.code} on {method} {path}: {e.read().decode()}", file=sys.stderr)
+                return None  # don't retry HTTP errors (4xx/5xx)
+            except Exception as e:
+                last_err = e
+                if attempt < retries - 1:
+                    wait = 2 ** attempt  # 1s, 2s
+                    print(f"Request failed {method} {path} (attempt {attempt + 1}/{retries}): {e} — retrying in {wait}s", file=sys.stderr)
+                    time.sleep(wait)
+        print(f"Request failed {method} {path} after {retries} attempts: {last_err}", file=sys.stderr)
+        return None
 
     def get_job(self, job_id: str) -> dict | None:
         result = self._request("GET", f"/api/jobs/{job_id}")
