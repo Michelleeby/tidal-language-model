@@ -15,7 +15,6 @@ Usage:
 """
 
 import logging
-import multiprocessing
 import os
 import sys
 import numpy as np
@@ -102,8 +101,7 @@ class TinyStoriesDataset(Dataset):
         logger.info(f"Building {split} chunk cache (one-time)...")
         logger.info("Loading dataset from HF cache...")
         raw = _load_dataset_prefer_cache(dataset_name, split)
-        num_proc = min(multiprocessing.cpu_count(), 8)
-        logger.info(f"Loaded {len(raw):,} examples. Tokenizing with {num_proc} workers...")
+        logger.info(f"Loaded {len(raw):,} examples. Tokenizing...")
         tokenized = raw.map(
             lambda batch: self.tokenizer(
                 batch["text"],
@@ -112,7 +110,6 @@ class TinyStoriesDataset(Dataset):
             ),
             batched=True,
             batch_size=5000,
-            num_proc=num_proc,
             remove_columns=raw.column_names,
             desc=f"Tokenizing {split}",
         )
