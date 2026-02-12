@@ -1,0 +1,9 @@
+node_modules
+packages/*/node_modules
+packages/*/dist
+**/*.tsbuildinfo
+.git
+docker-compose*.yml
+Dockerfile
+Caddyfile
+redis/
