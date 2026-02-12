@@ -7,7 +7,7 @@ import type {
 
 const VASTAI_API = "https://console.vast.ai/api/v0";
 const MIN_GPU_RAM_MB = 8_000;
-const DOCKER_IMAGE = "pytorch/pytorch:2.3.0-cuda12.1-cudnn9-runtime";
+const DOCKER_IMAGE = "pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime";
 
 export interface VastAIProviderConfig {
   apiKey: string | null;
