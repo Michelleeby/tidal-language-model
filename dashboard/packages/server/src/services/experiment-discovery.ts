@@ -55,6 +55,7 @@ export class ExperimentDiscovery {
   ): Promise<ExperimentSummary | null> {
     const expPath = path.join(this.experimentsDir, id);
 
+    // Try local filesystem first (local experiments have full metadata)
     try {
       const stat = await fsp.stat(expPath);
       if (!stat.isDirectory()) return null;
@@ -88,6 +89,40 @@ export class ExperimentDiscovery {
         hasAblation,
         status,
         checkpoints,
+      };
+    } catch {
+      // No local directory — try Redis (remote experiment)
+      return this.getRedisOnlySummary(id);
+    }
+  }
+
+  /**
+   * Build a summary for experiments that only exist in Redis (remote workers).
+   * Status and metrics live in Redis keys, not on the local filesystem.
+   */
+  private async getRedisOnlySummary(
+    id: string,
+  ): Promise<ExperimentSummary | null> {
+    if (!this.redis) return null;
+
+    try {
+      const statusRaw = await this.redis.get(`tidal:status:${id}`);
+      const status: TrainingStatus | null = statusRaw
+        ? JSON.parse(statusRaw)
+        : null;
+
+      // Only surface this experiment if we have at least status data in Redis
+      if (!status) return null;
+
+      return {
+        id,
+        path: "",
+        created: status.start_time ?? status.last_update,
+        hasRLMetrics: false,
+        hasEvaluation: false,
+        hasAblation: false,
+        status,
+        checkpoints: [],
       };
     } catch {
       return null;
