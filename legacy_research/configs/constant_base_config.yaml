@@ -1,0 +1,195 @@
+# configs/constant_base_config.yaml
+
+# This file is HASHED for experiment reproducibility.
+# Changes to this file will invalidate the experiment's hash.
+
+# Model Type
+MODEL_TYPE: "constant"  # Options: "tidal" or "constant"
+
+# Model Info
+MODEL_VERSION: "1.0.0"
+MODEL_NAME: "constant-baseline"
+FOUNDATIONAL_CORPUS_PATH: "corpus/foundational.txt"
+HIGH_TIDE_CORPUS_PATH: "corpus/high_tide.txt"
+LOW_TIDE_CORPUS_PATH: "corpus/low_tide.txt"
+STORM_TIDE_CORPUS_PATH: "corpus/storm_tide.txt"
+
+# Constant Model Architecture
+EMBED_DIM: 512
+NUM_TRANSFORMER_BLOCKS: 8
+NUM_ATTENTION_HEADS: 8
+FFN_HIDDEN_DIM: 2048
+DROPOUT: 0.1
+MAX_CONTEXT_LENGTH: 512
+
+# Training Loop (matches Tidal config for fair comparison)
+PATIENCE: 5
+MIN_DELTA: 0.0001
+DESIRED_BATCH_SIZE: 2048
+BATCH_SIZE: 64
+NUM_EPOCHS: 12
+FINE_TUNE_EPOCHS: 8
+VALIDATION_SPLIT_RATIO: 0.1
+NUM_CPU_CORE_WORKERS: 8
+VISUALIZATION_INTERVAL_SECONDS: 60
+ENABLE_VISUALIZATION: true
+TRAINING_FRAMES_SUBDIR: "semantic_space_frames"
+TRAINING_PLOT_FIGSIZE: [8, 8]
+
+# Learning Rate Scheduler (matches Tidal config)
+LEARNING_RATE_SCHEDULER:
+  WARMUP_RATIO: 0.1
+  BASE_LR: 0.001
+  MIN_LR: 1.0e-6
+  # Tide-specific learning rates for fine-tuning (kept for compatibility)
+  FINETUNE_LR_HIGH: 5.0e-5
+  FINETUNE_LR_LOW: 1.0e-5
+  FINETUNE_LR_STORM: 2.5e-5
+
+# Logging
+LOG_DIRECTORY: "logs"
+LOG_FILE_TRAINING_ENDORCRINE_SYSTEM: "training-endocrine-system.log"
+LOG_FILE_EVALUATION_ENDOCRINE_SYSTEM: "evaluation-endocrine-system.log"
+LOG_FILE_TRAINING_PHYSICS: "training-physics.log"
+LOG_FILE_EVALUATION_PHYSICS: "evaluation-physics.log"
+LOG_INTERVAL_TRAINING_ENDORCRINE_SYSTEM: 1000
+CHECKPOINT_PATH: "training_checkpoint.pth"
+ENABLE_CONSOLE_LOGGING: false
+TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY: 1
+FINE_TUNE_MODEL_ARTIFACT_CACHE_FREQUENCY: 1
+QUALITATIVE_LOG_INTERVAL_BATCHES: 100
+
+# Device
+DEVICE: "auto"
+MAX_GRAD_NORM: 1.0
+
+# NLP (same as Tidal for fair comparison)
+NLP_MODEL: "en_core_web_sm"
+NLP_DISABLE: ["parser", "ner"]
+VOCAB_MIN_FREQUENCY: 5
+NLP_PADDING_SIZE: 100
+DEFAULT_TOP_K: 6
+DEFAULT_WINDOW_SIZE: 2
+CORPUS_ENCODING: "utf-8"
+VOCAB_CACHE_PATH: "vocab.pkl"
+CACHE_DIR: "cache"
+
+# Evaluation
+FIGURE_SIZE: [12, 8]
+FONT: 10
+FONT_LARGE: 16
+FONT_BOLD: "bold"
+WORD_SIMILARITY_BENCHMARK:
+  - ['light', 'wave', 8.0]
+  - ['species', 'varieties', 7.5]
+  - ['gravity', 'acceleration', 9.0]
+  - ['innovation', 'growth', 8.5]
+  - ['patent', 'invention', 9.5]
+  - ['king', 'thane', 7.0]
+  - ['witch', 'prophecy', 6.5]
+  - ['park', 'forest', 8.0]
+  - ['jobs', 'economy', 8.8]
+  - ['freedom', 'democracy', 9.2]
+ANALOGY_BENCHMARK:
+  - ['einstein', 'relativity', 'darwin', 'evolution']
+  - ['apple', 'gravity', 'moon', 'orbit']
+  - ['macbeth', 'ambition', 'lady macbeth', 'guilt']
+  - ['recession', 'unemployment', 'recovery', 'jobs']
+
+# TensorBoard Tag Configuration
+TENSORBOARD_TAGS:
+  LOSSES: "Loss"
+  LEARNING_RATE: "Learning"
+
+# ============================================================================
+# NOTE: The following parameters are NOT used by ConstantLanguageModel
+# but are kept for configuration compatibility with infrastructure code
+# that may reference them. They will be ignored by the constant model.
+# ============================================================================
+
+# Ignored by Constant Model - Physics Simulation
+ENABLE_PHYSICS_LOSS: false
+PHYSICS_LOSS_WEIGHT: 0.0
+
+# Ignored by Constant Model - Tidal/Endocrine Systems
+ENABLE_RESONANCE: false
+ENABLE_ENDORCRINE_SYSTEM: false
+CIRCADIAN_PERIOD: 2000
+
+# Ignored by Constant Model - Semantic Space (used by Tidal only)
+SEMANTIC_AXIS_COUNT: 8
+GRU_HIDDEN_SIZE: 512
+MASS_EMBEDDING_DIM: 1
+SEMANTIC_AXIS_MAPPING:
+  G_AXIS: 0
+  X_AXIS: 1
+  V_AXIS: 2
+  A_AXIS: 3
+  H_AXIS: 4
+  S_AXIS: 5
+  F_AXIS: 6
+  T_AXIS: 7
+
+# Ignored by Constant Model - Physics Parameters
+G: 1.0
+SOFTENING_PARAM: 1e-6
+LOSS_SOFTENING_PARAM: 1.0e-4
+MAX_FORCE: 10.0
+DEFAULT_DT: 0.01
+FORCE_CALCULATION_EPSILON: 1e-9
+VERLET_INTEGRATION_CONSTANT: 0.5
+NUM_NEGATIVE_SAMPLES: 5
+PHYSICS_LOSS_MARGIN: 1.0
+REPULSION_STRENGTH: 0.5
+REPULSION_CUTOFF: 0.1
+
+# Ignored by Constant Model - Semantic Wells
+NUM_SEMANTIC_WELLS: 16
+WELL_ATTRACTION_STRENGTH: 0.1
+TEMPERATURE: 1.0
+ENTROPY_COEFFICIENT: 0.01
+KE_PENALTY_FACTOR: 0.001
+
+# Ignored by Constant Model - Embedding Initialization
+MASS_EMBEDDING_MIN: 0.5
+MASS_EMBEDDING_MAX: 2.0
+POSITION_EMBEDDING_MEAN: 0.0
+POSITION_EMBEDDING_STD: 0.5
+
+# Ignored by Constant Model - Tidal Effects
+HIGH_TIDE_CATALYST_HORMONE_RELEASE_AMOUNT: 0.1
+LOW_TIDE_INHIBITOR_HORMONE_RELEASE_AMOUNT: 0.05
+LOW_TIDE_DAMPING_FACTOR: 0.90
+HIGH_TIDE_DAMPING_FACTOR: 0.98
+NORMAL_TIDE_DAMPING_FACTOR: 0.95
+NORMAL_TIDE_RESONANCE_MASK: 1.0
+HIGH_TIDE_RESONANCE_MASK: 1.5
+LOW_TIDE_RESONANCE_MASK: 0.5
+RESONANCE_STRENGTH: 0.1
+HIGH_TIDE_THRESHOLD: 1.5
+LOW_TIDE_THRESHOLD: 0.5
+
+# Ignored by Constant Model - Endocrine System
+HORMONE_TYPES: []
+HORMONE_INITIAL_STATES: {}
+TRIGGER_THRESHOLDS: {}
+SEMANTIC_SPACE_SLICES: {}
+DEFAULT_HORMONE_INITIAL_LEVEL: 0.0
+ACTIVATION_SENSITIVITY: 2.5
+HORMONE_DECAY_RATE: 0.50
+HORMONE_MAX_RELEASE_AMOUNT: 0.05
+HORMONE_MIN_ACTIVE_LEVEL: 0.1
+INHIBITOR_HORMONE_SUPPRESSION_THRESHOLD: 0.5
+CATALYST_HORMONE_EFFECT: 0.2
+STRESS_HORMONE_EFFECT: 0.1
+INHIBITOR_HORMONE_EFFECT: 0.1
+STRESS_HORMONE_EXCESS_THRESHOLD: 0.75
+STRESS_HORMONE_IMPAIRMENT_FACTOR: 0.5
+STRESS_HORMONE_AFFECTS_MAX_FORCE: false
+REPETITION_TRIGGER_TOKEN_SEQUENCE_THRESHOLD: 0
+SEMANTIC_BRIDGE_TRIGGER_TOKEN_SEQUENCE_THRESHOLD: 1
+ENABLE_MASS_MODULATION: false
+CATALYST_HORMONE_MASS_EFFECT: 0.0
+STRESS_HORMONE_MASS_EFFECT: 0.0
+INHIBITOR_HORMONE_MASS_EFFECT: 0.0
+MASS_MODULATION_MIN_MASS: 1e-4
