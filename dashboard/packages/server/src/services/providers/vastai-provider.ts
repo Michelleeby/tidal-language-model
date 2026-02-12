@@ -10,7 +10,7 @@ const MIN_GPU_RAM_MB = 16_000;
 const MIN_CPU_CORES = 16;
 const MIN_INET_DOWN_MBPS = 800;
 const MIN_INET_UP_MBPS = 800;
-const MIN_RELIABILITY = 0.99;
+const MIN_RELIABILITY = 0.95;
 const DOCKER_IMAGE = "pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime";
 const MAX_COMPUTE_CAP = 90; // Exclude Blackwell (sm_120) — no stable PyTorch support yet
 
