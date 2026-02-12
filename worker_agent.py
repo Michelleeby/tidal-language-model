@@ -101,6 +101,7 @@ class HttpTransport(Transport):
         data = json.dumps(body).encode() if body else None
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.auth_token}")
+        req.add_header("User-Agent", "TidalWorker/1.0")
         if data:
             req.add_header("Content-Type", "application/json")
         try:
