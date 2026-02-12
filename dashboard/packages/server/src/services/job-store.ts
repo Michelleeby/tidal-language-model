@@ -93,4 +93,10 @@ export class JobStore {
     const val = await r.get(`${HEARTBEAT_PREFIX}${jobId}:heartbeat`);
     return val ? parseFloat(val) : null;
   }
+
+  async setHeartbeat(jobId: string): Promise<void> {
+    const r = this.ensureRedis();
+    const key = `${HEARTBEAT_PREFIX}${jobId}:heartbeat`;
+    await r.set(key, String(Date.now() / 1000), "EX", 30);
+  }
 }

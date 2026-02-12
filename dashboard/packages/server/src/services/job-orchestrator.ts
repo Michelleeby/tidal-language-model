@@ -19,6 +19,8 @@ export interface OrchestratorConfig {
   heartbeatTimeoutMs: number;
   /** How long a job can sit in pending/provisioning/starting before being marked failed */
   staleStartupTimeoutMs: number;
+  /** How long a remote job can sit in starting before being marked failed (default 5 min) */
+  remoteStartupTimeoutMs: number;
 }
 
 const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -26,6 +28,7 @@ const DEFAULT_CONFIG: OrchestratorConfig = {
   healthCheckIntervalMs: 15_000,
   heartbeatTimeoutMs: 60_000,
   staleStartupTimeoutMs: 30_000,
+  remoteStartupTimeoutMs: 300_000,
 };
 
 const TERMINAL_STATUSES: Set<JobStatus> = new Set([
@@ -123,6 +126,12 @@ export class JobOrchestrator {
       });
       this.broadcast(starting!);
 
+      if (provider.isRemote) {
+        // Remote providers: worker connects via API and sets itself to "running"
+        this.log.info({ jobId: job.jobId }, "Remote job — waiting for worker to connect");
+        return starting!;
+      }
+
       this.spawner.spawnLocal(job.jobId, job.config);
 
       const running = await this.store.update(job.jobId, {
@@ -159,7 +168,7 @@ export class JobOrchestrator {
     const updated = await this.store.update(jobId, { status: newStatus });
     this.broadcast(updated!);
 
-    if (signal === "stop") {
+    if (signal === "stop" && this.spawner.isRunning(jobId)) {
       this.spawner.kill(jobId);
     }
 
@@ -175,9 +184,15 @@ export class JobOrchestrator {
       throw new Error(`Job already in terminal status: ${job.status}`);
     }
 
-    // Kill worker if it exists
+    // Kill local worker if it exists
     if (this.spawner.isRunning(jobId)) {
       this.spawner.kill(jobId);
+    }
+
+    // Deprovision remote instances
+    const provider = this.chain.getProvider(job.provider);
+    if (provider?.isRemote) {
+      await provider.deprovision(job);
     }
 
     const updated = await this.store.update(jobId, {
@@ -203,6 +218,8 @@ export class JobOrchestrator {
     status: "completed" | "failed",
     error?: string,
   ): Promise<void> {
+    const job = await this.store.get(jobId);
+
     const patch: Partial<TrainingJob> = {
       status,
       completedAt: Date.now(),
@@ -211,6 +228,14 @@ export class JobOrchestrator {
 
     const updated = await this.store.update(jobId, patch);
     if (updated) this.broadcast(updated);
+
+    // Deprovision remote instances on completion
+    if (job) {
+      const provider = this.chain.getProvider(job.provider);
+      if (provider?.isRemote) {
+        await provider.deprovision(job);
+      }
+    }
   }
 
   stop(): void {
@@ -227,6 +252,9 @@ export class JobOrchestrator {
       for (const job of active) {
         if (TERMINAL_STATUSES.has(job.status)) continue;
 
+        const provider = this.chain.getProvider(job.provider);
+        const isRemote = provider?.isRemote ?? false;
+
         // Jobs stuck in startup phases (pending/provisioning/starting)
         if (
           job.status === "pending" ||
@@ -234,7 +262,10 @@ export class JobOrchestrator {
           job.status === "starting"
         ) {
           const age = Date.now() - job.updatedAt;
-          if (age > this.config.staleStartupTimeoutMs) {
+          const timeout = isRemote
+            ? this.config.remoteStartupTimeoutMs
+            : this.config.staleStartupTimeoutMs;
+          if (age > timeout) {
             this.log.warn(
               { jobId: job.jobId, status: job.status, ageMs: age },
               "Job stuck in startup — marking failed",
@@ -251,7 +282,9 @@ export class JobOrchestrator {
         // Running/completing/stopping jobs — check heartbeat
         const heartbeat = await this.store.getHeartbeat(job.jobId);
         if (heartbeat === null) {
-          // No heartbeat yet — check if worker is still running
+          // Remote jobs: rely on heartbeat only (no local process to check)
+          if (isRemote) continue;
+          // Local jobs: check if worker process is still running
           if (!this.spawner.isRunning(job.jobId)) {
             this.log.warn(
               { jobId: job.jobId },

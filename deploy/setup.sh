@@ -25,8 +25,23 @@ git clone "$REPO" "$INSTALL_DIR"
 
 echo "==> Creating .env"
 AUTH_TOKEN=$(openssl rand -hex 32)
+
+# Optional vast.ai setup
+VASTAI_KEY=""
+read -rp "vast.ai API key (leave blank to skip): " VASTAI_KEY
+VASTAI_VARS=""
+if [ -n "$VASTAI_KEY" ]; then
+    read -rp "Dashboard URL (e.g. https://ai.michelleeby.com): " DASHBOARD_URL
+    read -rp "Git repo URL for vast.ai workers: " REPO_URL_VASTAI
+    VASTAI_VARS="
+VASTAI_API_KEY=$VASTAI_KEY
+TIDAL_DASHBOARD_URL=$DASHBOARD_URL
+TIDAL_REPO_URL=$REPO_URL_VASTAI
+DEFAULT_COMPUTE_PROVIDER=vastai"
+fi
+
 cat > "$INSTALL_DIR/dashboard/.env" <<EOF
-TIDAL_AUTH_TOKEN=$AUTH_TOKEN
+TIDAL_AUTH_TOKEN=$AUTH_TOKEN$VASTAI_VARS
 EOF
 
 echo "==> Building and starting services"

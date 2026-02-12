@@ -8,6 +8,7 @@ export interface ProvisionResult {
 
 export interface ComputeProvider {
   readonly type: ComputeProviderType;
+  readonly isRemote: boolean;
   canProvision(): Promise<boolean>;
   provision(job: TrainingJob): Promise<ProvisionResult>;
   deprovision(job: TrainingJob): Promise<void>;

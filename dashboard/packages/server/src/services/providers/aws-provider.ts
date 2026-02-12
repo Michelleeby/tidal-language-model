@@ -6,6 +6,7 @@ import type {
 
 export class AWSProvider implements ComputeProvider {
   readonly type = "aws" as const;
+  readonly isRemote = true;
 
   async canProvision(): Promise<boolean> {
     return false;

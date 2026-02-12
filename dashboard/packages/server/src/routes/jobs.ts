@@ -27,7 +27,13 @@ export default async function jobRoutes(fastify: FastifyInstance) {
   const chain = new ProvisioningChain([
     new LocalProvider(spawner),
     new AWSProvider(),
-    new VastAIProvider(),
+    new VastAIProvider({
+      apiKey: config.vastaiApiKey,
+      dashboardUrl: config.dashboardUrl,
+      authToken: config.authToken,
+      repoUrl: config.repoUrl,
+      log: fastify.log,
+    }),
   ]);
   const orchestrator = new JobOrchestrator(
     store,

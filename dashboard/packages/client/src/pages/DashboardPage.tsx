@@ -124,15 +124,11 @@ export default function DashboardPage() {
       </div>
 
       {/* Tab content */}
-      {!selectedExpId ? (
-        <div className="text-gray-500 text-sm py-8 text-center">
-          Select an experiment to view metrics
-        </div>
-      ) : (
-        <>
-          {activeTab === "training" && (
-            <div className="space-y-4">
-              <TrainingControlBar />
+      {activeTab === "training" && (
+        <div className="space-y-4">
+          <TrainingControlBar />
+          {selectedExpId ? (
+            <>
               <MetricCarousel>
                 <MetricCards latest={latestPoint} />
                 <TrainingStatusCard
@@ -147,36 +143,60 @@ export default function DashboardPage() {
                 <LearningRateChart points={points} />
                 <PerplexityChart points={points} />
               </div>
+            </>
+          ) : (
+            <div className="text-gray-500 text-sm py-8 text-center">
+              No experiments yet. Start a training job above to begin.
             </div>
           )}
+        </div>
+      )}
 
-          {activeTab === "rl-gating" && (
-            <div className="space-y-4">
+      {activeTab === "rl-gating" && (
+        <div className="space-y-4">
+          {selectedExpId ? (
+            <>
               <RLTrainingTrigger selectedExpId={selectedExpId} />
               <RLRewardCurve history={rlData?.metrics?.history ?? null} />
               <RLLossChart history={rlData?.metrics?.history ?? null} />
               <AblationComparison results={ablationData?.results ?? null} />
-            </div>
-          )}
-
-          {activeTab === "comparison" && (
+            </>
+          ) : (
             <div className="text-gray-500 text-sm py-8 text-center">
-              Multi-experiment comparison coming in a future update.
-              <br />
-              Select multiple experiments to overlay loss curves.
+              Select an experiment to view RL gating metrics.
             </div>
           )}
+        </div>
+      )}
 
-          {activeTab === "checkpoints" && (
-            <CheckpointBrowser
-              checkpoints={checkpointsData?.checkpoints ?? []}
-            />
-          )}
+      {activeTab === "comparison" && (
+        <div className="text-gray-500 text-sm py-8 text-center">
+          Multi-experiment comparison coming in a future update.
+          <br />
+          Select multiple experiments to overlay loss curves.
+        </div>
+      )}
 
-          {activeTab === "samples" && (
-            <SamplePreviews results={evalData?.results ?? null} />
-          )}
-        </>
+      {activeTab === "checkpoints" && (
+        selectedExpId ? (
+          <CheckpointBrowser
+            checkpoints={checkpointsData?.checkpoints ?? []}
+          />
+        ) : (
+          <div className="text-gray-500 text-sm py-8 text-center">
+            Select an experiment to browse checkpoints.
+          </div>
+        )
+      )}
+
+      {activeTab === "samples" && (
+        selectedExpId ? (
+          <SamplePreviews results={evalData?.results ?? null} />
+        ) : (
+          <div className="text-gray-500 text-sm py-8 text-center">
+            Select an experiment to view sample previews.
+          </div>
+        )
       )}
     </div>
   );

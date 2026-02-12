@@ -11,6 +11,9 @@ export interface ServerConfig {
   projectRoot: string;
   defaultComputeProvider: ComputeProviderType;
   authToken: string | null;
+  vastaiApiKey: string | null;
+  repoUrl: string | null;
+  dashboardUrl: string | null;
 }
 
 export function loadConfig(): ServerConfig {
@@ -35,5 +38,8 @@ export function loadConfig(): ServerConfig {
     defaultComputeProvider:
       (process.env.DEFAULT_COMPUTE_PROVIDER as ComputeProviderType) ?? "local",
     authToken: process.env.TIDAL_AUTH_TOKEN ?? null,
+    vastaiApiKey: process.env.VASTAI_API_KEY ?? null,
+    repoUrl: process.env.TIDAL_REPO_URL ?? null,
+    dashboardUrl: process.env.TIDAL_DASHBOARD_URL ?? null,
   };
 }

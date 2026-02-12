@@ -7,6 +7,7 @@ import type { WorkerSpawner } from "../worker-spawner.js";
 
 export class LocalProvider implements ComputeProvider {
   readonly type = "local" as const;
+  readonly isRemote = false;
 
   constructor(private spawner: WorkerSpawner) {}
 

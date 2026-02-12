@@ -16,6 +16,7 @@ import evaluationRoutes from "./routes/evaluation.js";
 import generateRoutes from "./routes/generate.js";
 import sseRoutes from "./routes/sse.js";
 import jobRoutes from "./routes/jobs.js";
+import workerRoutes from "./routes/workers.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -56,6 +57,7 @@ async function main() {
   await fastify.register(generateRoutes);
   await fastify.register(sseRoutes);
   await fastify.register(jobRoutes);
+  await fastify.register(workerRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

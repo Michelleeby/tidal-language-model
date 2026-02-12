@@ -1,8 +1,9 @@
 """
 Worker agent that runs training jobs on behalf of the dashboard orchestrator.
 
-Reads job config from Redis, spawns the appropriate training subprocess,
-monitors for signals (complete/stop), and reports status back via Redis.
+Reads job config from Redis (local) or HTTPS API (remote), spawns the
+appropriate training subprocess, monitors for signals (complete/stop),
+and reports status back.
 """
 
 import argparse
@@ -13,6 +14,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import urllib.error
+from abc import ABC, abstractmethod
 
 import redis as redis_lib
 
@@ -27,11 +31,112 @@ HEARTBEAT_TTL = 30
 SIGNAL_POLL_INTERVAL = 2
 
 
-class WorkerAgent:
-    def __init__(self, job_id: str, redis_url: str):
-        self.job_id = job_id
+# ── Transport abstraction ────────────────────────────────────────────
+
+class Transport(ABC):
+    @abstractmethod
+    def get_job(self, job_id: str) -> dict | None: ...
+
+    @abstractmethod
+    def update_status(self, job_id: str, status: str, error: str | None = None) -> None: ...
+
+    @abstractmethod
+    def send_heartbeat(self, job_id: str) -> None: ...
+
+    @abstractmethod
+    def read_signal(self, job_id: str) -> str | None: ...
+
+
+class RedisTransport(Transport):
+    """Existing behavior — communicates directly with Redis for local jobs."""
+
+    def __init__(self, redis_url: str):
         self.redis_url = redis_url
         self.redis = redis_lib.from_url(redis_url, decode_responses=True)
+
+    def get_job(self, job_id: str) -> dict | None:
+        raw = self.redis.hget(JOBS_HASH, job_id)
+        return json.loads(raw) if raw else None
+
+    def update_status(self, job_id: str, status: str, error: str | None = None) -> None:
+        try:
+            raw = self.redis.hget(JOBS_HASH, job_id)
+            if not raw:
+                return
+            job = json.loads(raw)
+            job["status"] = status
+            job["updatedAt"] = time.time()
+            if error:
+                job["error"] = error
+            if status in ("completed", "failed"):
+                job["completedAt"] = time.time()
+            self.redis.hset(JOBS_HASH, job_id, json.dumps(job))
+            self.redis.publish(UPDATES_CHANNEL, json.dumps({"jobId": job_id}))
+        except Exception as e:
+            print(f"Failed to update job status: {e}", file=sys.stderr)
+
+    def send_heartbeat(self, job_id: str) -> None:
+        key = f"{HEARTBEAT_PREFIX}{job_id}:heartbeat"
+        self.redis.set(key, str(time.time()), ex=HEARTBEAT_TTL)
+
+    def read_signal(self, job_id: str) -> str | None:
+        try:
+            val = self.redis.get(f"{SIGNAL_PREFIX}{job_id}:signal")
+            if val:
+                self.redis.delete(f"{SIGNAL_PREFIX}{job_id}:signal")
+            return val
+        except Exception:
+            return None
+
+
+class HttpTransport(Transport):
+    """Communicates with the dashboard Fastify API over HTTPS for remote jobs."""
+
+    def __init__(self, api_url: str, auth_token: str):
+        self.api_url = api_url.rstrip("/")
+        self.auth_token = auth_token
+
+    def _request(self, method: str, path: str, body: dict | None = None) -> dict | None:
+        url = f"{self.api_url}{path}"
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {self.auth_token}")
+        if data:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            print(f"HTTP {e.code} on {method} {path}: {e.read().decode()}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Request failed {method} {path}: {e}", file=sys.stderr)
+            return None
+
+    def get_job(self, job_id: str) -> dict | None:
+        result = self._request("GET", f"/api/jobs/{job_id}")
+        return result.get("job") if result else None
+
+    def update_status(self, job_id: str, status: str, error: str | None = None) -> None:
+        body: dict = {"status": status}
+        if error:
+            body["error"] = error
+        self._request("PATCH", f"/api/workers/{job_id}/status", body)
+
+    def send_heartbeat(self, job_id: str) -> None:
+        self._request("POST", f"/api/workers/{job_id}/heartbeat")
+
+    def read_signal(self, job_id: str) -> str | None:
+        result = self._request("GET", f"/api/workers/{job_id}/signal")
+        return result.get("signal") if result else None
+
+
+# ── Worker agent ─────────────────────────────────────────────────────
+
+class WorkerAgent:
+    def __init__(self, job_id: str, transport: Transport):
+        self.job_id = job_id
+        self.transport = transport
         self.process: subprocess.Popen | None = None
         self._heartbeat_stop = threading.Event()
         self._project_root = os.path.dirname(os.path.abspath(__file__))
@@ -56,15 +161,15 @@ class WorkerAgent:
 
     def run(self):
         """Main entry point: read job, start heartbeat, spawn training, monitor."""
-        job = self._get_job()
+        job = self.transport.get_job(self.job_id)
         if not job:
-            print(f"Job {self.job_id} not found in Redis", file=sys.stderr)
+            print(f"Job {self.job_id} not found", file=sys.stderr)
             sys.exit(1)
 
         job_type = job["config"]["type"]
         config = job["config"]
 
-        self._update_status("running")
+        self.transport.update_status(self.job_id, "running")
         self._start_heartbeat()
 
         try:
@@ -73,15 +178,19 @@ class WorkerAgent:
             elif job_type == "rl-training":
                 exit_code = self._run_rl_training(config)
             else:
-                self._update_status("failed", error=f"Unknown job type: {job_type}")
+                self.transport.update_status(
+                    self.job_id, "failed", error=f"Unknown job type: {job_type}"
+                )
                 return
 
             if exit_code == 0:
-                self._update_status("completed")
+                self.transport.update_status(self.job_id, "completed")
             else:
-                self._update_status("failed", error=f"Process exited with code {exit_code}")
+                self.transport.update_status(
+                    self.job_id, "failed", error=f"Process exited with code {exit_code}"
+                )
         except Exception as e:
-            self._update_status("failed", error=str(e))
+            self.transport.update_status(self.job_id, "failed", error=str(e))
         finally:
             self._heartbeat_stop.set()
 
@@ -111,7 +220,6 @@ class WorkerAgent:
             **os.environ,
             "PYTHONUNBUFFERED": "1",
             "TIDAL_JOB_ID": self.job_id,
-            "REDIS_URL": self.redis_url,
         }
 
         self.process = subprocess.Popen(
@@ -123,17 +231,15 @@ class WorkerAgent:
         )
 
         while self.process.poll() is None:
-            sig = self._read_signal()
+            sig = self.transport.read_signal(self.job_id)
             if sig == "complete":
                 self._write_complete_signal()
-                self._clear_signal()
-                self._update_status("completing")
+                self.transport.update_status(self.job_id, "completing")
                 # Wait for process to finish naturally
                 self.process.wait()
                 break
             elif sig == "stop":
-                self._clear_signal()
-                self._update_status("stopping")
+                self.transport.update_status(self.job_id, "stopping")
                 self.process.send_signal(signal.SIGTERM)
                 try:
                     self.process.wait(timeout=30)
@@ -153,51 +259,16 @@ class WorkerAgent:
             f.write(str(time.time()))
 
     def _start_heartbeat(self):
-        """Thread: SET worker heartbeat key every 10s, TTL 30s."""
+        """Thread: send heartbeat every 10s."""
         def _beat():
-            key = f"{HEARTBEAT_PREFIX}{self.job_id}:heartbeat"
             while not self._heartbeat_stop.wait(HEARTBEAT_INTERVAL):
                 try:
-                    self.redis.set(key, str(time.time()), ex=HEARTBEAT_TTL)
+                    self.transport.send_heartbeat(self.job_id)
                 except Exception:
                     pass
 
         t = threading.Thread(target=_beat, daemon=True)
         t.start()
-
-    def _update_status(self, status: str, error: str | None = None):
-        """Update job in Redis hash + PUBLISH on updates channel."""
-        try:
-            raw = self.redis.hget(JOBS_HASH, self.job_id)
-            if not raw:
-                return
-            job = json.loads(raw)
-            job["status"] = status
-            job["updatedAt"] = time.time()
-            if error:
-                job["error"] = error
-            if status == "completed" or status == "failed":
-                job["completedAt"] = time.time()
-            self.redis.hset(JOBS_HASH, self.job_id, json.dumps(job))
-            self.redis.publish(UPDATES_CHANNEL, json.dumps({"jobId": self.job_id}))
-        except Exception as e:
-            print(f"Failed to update job status: {e}", file=sys.stderr)
-
-    def _get_job(self) -> dict | None:
-        raw = self.redis.hget(JOBS_HASH, self.job_id)
-        return json.loads(raw) if raw else None
-
-    def _read_signal(self) -> str | None:
-        try:
-            return self.redis.get(f"{SIGNAL_PREFIX}{self.job_id}:signal")
-        except Exception:
-            return None
-
-    def _clear_signal(self):
-        try:
-            self.redis.delete(f"{SIGNAL_PREFIX}{self.job_id}:signal")
-        except Exception:
-            pass
 
 
 def main():
@@ -205,12 +276,31 @@ def main():
     parser.add_argument("--job-id", required=True, help="Job ID to execute")
     parser.add_argument(
         "--redis-url",
-        default=os.environ.get("REDIS_URL", "redis://localhost:6379"),
-        help="Redis connection URL",
+        default=None,
+        help="Redis connection URL (for local mode)",
+    )
+    parser.add_argument(
+        "--api-url",
+        default=None,
+        help="Dashboard API URL (for remote mode, e.g. https://ai.michelleeby.com)",
+    )
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="Auth token for dashboard API (remote mode)",
     )
     args = parser.parse_args()
 
-    agent = WorkerAgent(args.job_id, args.redis_url)
+    if args.api_url:
+        if not args.auth_token:
+            print("--auth-token is required when using --api-url", file=sys.stderr)
+            sys.exit(1)
+        transport = HttpTransport(args.api_url, args.auth_token)
+    else:
+        redis_url = args.redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
+        transport = RedisTransport(redis_url)
+
+    agent = WorkerAgent(args.job_id, transport)
     agent.run()
 
 
