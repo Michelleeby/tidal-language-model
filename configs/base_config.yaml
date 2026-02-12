@@ -1,0 +1,53 @@
+# configs/base_config.yaml
+#
+# Configuration for TransformerLM training on TinyStories.
+# This file is HASHED for experiment reproducibility.
+
+# Model Info
+MODEL_VERSION: "1.0.0"
+MODEL_NAME: "transformer-lm"
+
+# Data
+DATASET: "roneneldan/TinyStories"
+TOKENIZER: "gpt2"
+VOCAB_SIZE: 50257
+
+# Transformer Architecture (~20M params)
+EMBED_DIM: 256
+NUM_TRANSFORMER_BLOCKS: 6
+NUM_ATTENTION_HEADS: 8
+FFN_HIDDEN_DIM: 1024
+DROPOUT: 0.1
+MAX_CONTEXT_LENGTH: 256
+
+# Training Loop
+PATIENCE: 5
+MIN_DELTA: 0.0001
+DESIRED_BATCH_SIZE: 2048
+BATCH_SIZE: 64
+NUM_EPOCHS: 12
+VALIDATION_SPLIT_RATIO: 0.1
+NUM_CPU_CORE_WORKERS: 4
+
+# Learning Rate Scheduler
+LEARNING_RATE_SCHEDULER:
+  WARMUP_RATIO: 0.1
+  BASE_LR: 0.001
+  MIN_LR: 1.0e-6
+
+# Logging
+LOG_DIRECTORY: "logs"
+ENABLE_CONSOLE_LOGGING: false
+TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY: 1
+
+# Device
+DEVICE: "auto"
+MAX_GRAD_NORM: 1.0
+
+# Evaluation
+EVAL_BATCH_SIZE: 64
+
+# TensorBoard Tag Configuration
+TENSORBOARD_TAGS:
+  LOSSES: "Loss"
+  LEARNING_RATE: "Learning"

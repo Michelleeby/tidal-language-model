@@ -1,0 +1,100 @@
+# configs/rl_config.yaml
+#
+# Configuration for RL Gating Controller training.
+# This file extends base_config.yaml with RL-specific settings.
+
+# ============================================================================
+# RL AGENT CONFIGURATION
+# ============================================================================
+
+# Agent architecture
+RL_AGENT_TYPE: "beta"  # Options: "beta" (Beta distribution), "gaussian" (Gaussian + squashing)
+RL_OBSERVATION_DIM: 64
+RL_ACTION_DIM: 3  # [creativity, focus, stability]
+RL_HIDDEN_DIM: 128
+
+# ============================================================================
+# PPO HYPERPARAMETERS
+# ============================================================================
+
+# Core PPO settings
+RL_LEARNING_RATE: 3.0e-4
+RL_GAMMA: 0.99  # Discount factor
+RL_GAE_LAMBDA: 0.95  # GAE lambda for advantage estimation
+RL_CLIP_EPSILON: 0.2  # PPO clipping parameter
+RL_ENTROPY_COEF: 0.01  # Entropy bonus coefficient
+RL_VALUE_COEF: 0.5  # Value loss coefficient
+RL_MAX_GRAD_NORM: 0.5  # Gradient clipping
+
+# Training loop
+RL_ROLLOUT_STEPS: 128  # Steps per rollout before update
+RL_NUM_EPOCHS: 4  # PPO epochs per rollout
+RL_BATCH_SIZE: 32  # Minibatch size for updates
+RL_TOTAL_TIMESTEPS: 100000  # Total training steps
+
+# ============================================================================
+# ENVIRONMENT CONFIGURATION
+# ============================================================================
+
+RL_MAX_EPISODE_LENGTH: 50  # Max tokens per generation episode
+RL_PROMPT_MIN_LENGTH: 3
+RL_PROMPT_MAX_LENGTH: 10
+RL_TOP_K: 40  # Top-k sampling during generation
+
+# ============================================================================
+# GATING MODULATOR SETTINGS
+# ============================================================================
+
+# Base generation parameters (before gating modulation)
+RL_BASE_TEMPERATURE: 1.0
+RL_BASE_REPETITION_PENALTY: 1.2
+
+# Creativity gate effects on temperature
+# Result: base_temp * (min + creativity * (max - min))
+RL_CREATIVITY_TEMP_MIN: 0.5  # At creativity=0: temp = 0.5x base
+RL_CREATIVITY_TEMP_MAX: 1.5  # At creativity=1: temp = 1.5x base
+
+# Stability gate effects on repetition penalty
+# Result: penalty in range [min, max] based on stability level
+RL_STABILITY_PENALTY_MIN: 1.0  # At stability=0: no extra penalty
+RL_STABILITY_PENALTY_MAX: 2.5  # At stability=1: 2.5x penalty
+
+# Focus gate effects on attention
+RL_FOCUS_ATTENTION_STRENGTH: 2.0  # Strength of position-based attention bias
+
+# ============================================================================
+# REWARD FUNCTION WEIGHTS
+# ============================================================================
+
+# Multi-component reward: reward = sum(weight_i * component_i)
+RL_REWARD_PERPLEXITY_WEIGHT: 0.4  # Lower perplexity = better
+RL_REWARD_DIVERSITY_WEIGHT: 0.3  # Higher diversity = better
+RL_REWARD_REPETITION_WEIGHT: 0.2  # Lower repetition = better
+RL_REWARD_COHERENCE_WEIGHT: 0.1  # Higher coherence = better
+
+# Reward normalization
+RL_PERPLEXITY_CLIP: 100.0  # Max perplexity before clipping
+RL_ENTROPY_TARGET: 5.0  # Target entropy for diversity
+
+# ============================================================================
+# EVALUATION AND ABLATION
+# ============================================================================
+
+RL_EVAL_EPISODES: 50  # Episodes per policy during ablation
+RL_EVAL_INTERVAL: 1000  # Steps between evaluations
+
+# ============================================================================
+# LOGGING AND CHECKPOINTS
+# ============================================================================
+
+RL_LOG_INTERVAL: 10  # Iterations between console logs
+RL_METRICS_INTERVAL: 50  # Iterations between saving metrics
+RL_CHECKPOINT_INTERVAL: 100  # Iterations between checkpoints
+
+# TensorBoard tags for RL metrics
+TENSORBOARD_TAGS:
+  LOSSES: "Loss"
+  LEARNING_RATE: "Learning"
+  RL_REWARDS: "RL/Rewards"
+  RL_POLICY: "RL/Policy"
+  RL_GATING: "RL/Gating"

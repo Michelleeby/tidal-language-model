@@ -42,7 +42,6 @@ ENV/
 experiments/
 corpus/
 prompt.txt
-configs/
 wandb/
 Tidal Language Model Refactor Plan.md
 CLAUDE.md
