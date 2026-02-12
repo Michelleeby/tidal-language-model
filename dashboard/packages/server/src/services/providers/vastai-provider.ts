@@ -132,6 +132,7 @@ export class VastAIProvider implements ComputeProvider {
       gpu_ram: { gte: MIN_GPU_RAM_MB },
       rentable: { eq: true },
       num_gpus: { eq: 1 },
+      reliability2: { gte: 0.99 },
       order: [["dph_total", "asc"]],
       type: "on-demand",
       limit: 10,
