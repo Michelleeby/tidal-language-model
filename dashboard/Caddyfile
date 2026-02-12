@@ -1,3 +1,8 @@
+:443 {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	reverse_proxy app:4400
+}
+
 :80 {
 	reverse_proxy app:4400
 }

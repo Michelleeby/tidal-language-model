@@ -37,8 +37,10 @@ services:
       - app
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/tidal/certs:/etc/caddy/certs:ro
 
 volumes:
   redis-data:

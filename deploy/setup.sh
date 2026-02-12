@@ -17,6 +17,7 @@ fi
 echo "==> Configuring firewall"
 ufw allow OpenSSH
 ufw allow 80/tcp
+ufw allow 443/tcp
 ufw --force enable
 
 echo "==> Cloning repository"
