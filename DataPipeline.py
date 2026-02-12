@@ -115,15 +115,15 @@ class TinyStoriesDataset(Dataset):
         )
 
         logger.info("Flattening tokens and chunking...")
-        # Collect all token IDs into chunks of numpy arrays, then concatenate once
-        chunks = []
-        total = 0
-        for batch in tokenized.iter(batch_size=10000):
-            for ids in batch["input_ids"]:
-                chunks.append(np.array(ids, dtype=np.int64))
-                total += len(ids)
-        logger.info(f"Total tokens: {total:,}. Concatenating...")
-        all_ids = np.concatenate(chunks) if chunks else np.array([], dtype=np.int64)
+        all_input_ids = tokenized["input_ids"]
+        total = sum(len(ids) for ids in all_input_ids)
+        logger.info(f"Total tokens: {total:,}. Building flat array...")
+        all_ids = np.empty(total, dtype=np.int64)
+        offset = 0
+        for ids in all_input_ids:
+            n = len(ids)
+            all_ids[offset : offset + n] = ids
+            offset += n
 
         # Drop remainder that doesn't fill a full chunk
         num_chunks = len(all_ids) // chunk_length
