@@ -114,7 +114,11 @@ class Trainer:
 
         self.model = TransformerLM(vocab_size=vocab_size, config=self.config)
         self.model.to(self.device)
-        self.model = torch.compile(self.model)
+        if self.config.get("TORCH_COMPILE", True):
+            try:
+                self.model = torch.compile(self.model)
+            except Exception as e:
+                self.logger.warning(f"torch.compile failed, using eager mode: {e}")
 
         self.criterion = nn.CrossEntropyLoss()
         base_lr = self.config.get("LEARNING_RATE_SCHEDULER", {}).get("BASE_LR", 0.001)

@@ -194,9 +194,11 @@ class WorkerAgent:
             if exit_code == 0:
                 self.transport.update_status(self.job_id, "completed")
             else:
-                self.transport.update_status(
-                    self.job_id, "failed", error=f"Process exited with code {exit_code}"
-                )
+                tail = self._get_stderr_tail()
+                error_msg = f"Process exited with code {exit_code}"
+                if tail:
+                    error_msg += f"\n{tail}"
+                self.transport.update_status(self.job_id, "failed", error=error_msg)
         except Exception as e:
             self.transport.update_status(self.job_id, "failed", error=str(e))
         finally:
@@ -230,13 +232,31 @@ class WorkerAgent:
             "TIDAL_JOB_ID": self.job_id,
         }
 
+        # Capture stderr in a ring buffer so we can report crash errors
+        self._stderr_lines: list[str] = []
+        self._stderr_lock = threading.Lock()
+
         self.process = subprocess.Popen(
             args,
             cwd=self._project_root,
             env=env,
             stdout=sys.stdout,
-            stderr=sys.stderr,
+            stderr=subprocess.PIPE,
         )
+
+        # Tee stderr: print to our stderr + keep last 50 lines
+        def _read_stderr():
+            assert self.process.stderr is not None
+            for raw_line in self.process.stderr:
+                line = raw_line.decode("utf-8", errors="replace")
+                sys.stderr.write(line)
+                with self._stderr_lock:
+                    self._stderr_lines.append(line.rstrip())
+                    if len(self._stderr_lines) > 50:
+                        self._stderr_lines.pop(0)
+
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stderr_thread.start()
 
         while self.process.poll() is None:
             sig = self.transport.read_signal(self.job_id)
@@ -259,6 +279,11 @@ class WorkerAgent:
             time.sleep(SIGNAL_POLL_INTERVAL)
 
         return self.process.returncode or 0
+
+    def _get_stderr_tail(self, lines: int = 10) -> str:
+        """Return the last N lines of captured stderr."""
+        with self._stderr_lock:
+            return "\n".join(self._stderr_lines[-lines:])
 
     def _write_complete_signal(self):
         """Write sentinel file for Trainer.py to pick up."""
