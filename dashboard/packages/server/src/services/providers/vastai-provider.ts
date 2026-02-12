@@ -6,7 +6,11 @@ import type {
 } from "../compute-provider.js";
 
 const VASTAI_API = "https://console.vast.ai/api/v0";
-const MIN_GPU_RAM_MB = 8_000;
+const MIN_GPU_RAM_MB = 16_000;
+const MIN_CPU_CORES = 16;
+const MIN_INET_DOWN_MBPS = 800;
+const MIN_INET_UP_MBPS = 800;
+const MIN_RELIABILITY = 0.99;
 const DOCKER_IMAGE = "pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime";
 
 export interface VastAIProviderConfig {
@@ -130,9 +134,12 @@ export class VastAIProvider implements ComputeProvider {
   private async findCheapestOffer(): Promise<VastOffer | null> {
     const query = JSON.stringify({
       gpu_ram: { gte: MIN_GPU_RAM_MB },
+      cpu_cores_effective: { gte: MIN_CPU_CORES },
+      inet_down: { gte: MIN_INET_DOWN_MBPS },
+      inet_up: { gte: MIN_INET_UP_MBPS },
       rentable: { eq: true },
       num_gpus: { eq: 1 },
-      reliability2: { gte: 0.99 },
+      reliability2: { gte: MIN_RELIABILITY },
       order: [["dph_total", "asc"]],
       type: "on-demand",
       limit: 10,
