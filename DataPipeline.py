@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import multiprocessing
 import os
 import sys
 import numpy as np
@@ -101,7 +102,8 @@ class TinyStoriesDataset(Dataset):
         logger.info(f"Building {split} chunk cache (one-time)...")
         logger.info("Loading dataset from HF cache...")
         raw = _load_dataset_prefer_cache(dataset_name, split)
-        logger.info(f"Loaded {len(raw):,} examples. Tokenizing...")
+        num_proc = min(multiprocessing.cpu_count(), 8)
+        logger.info(f"Loaded {len(raw):,} examples. Tokenizing with {num_proc} workers...")
         tokenized = raw.map(
             lambda batch: self.tokenizer(
                 batch["text"],
@@ -109,17 +111,36 @@ class TinyStoriesDataset(Dataset):
                 return_attention_mask=False,
             ),
             batched=True,
+            batch_size=5000,
+            num_proc=num_proc,
             remove_columns=raw.column_names,
             desc=f"Tokenizing {split}",
         )
 
         logger.info("Flattening tokens and chunking...")
-        all_ids = np.concatenate(tokenized["input_ids"])
+        # Pre-compute total length to allocate once instead of concatenating ragged lists
+        lengths = tokenized.map(
+            lambda batch: {"len": [len(ids) for ids in batch["input_ids"]]},
+            batched=True,
+            batch_size=10000,
+            num_proc=num_proc,
+            remove_columns=tokenized.column_names,
+        )
+        total_tokens = sum(lengths["len"])
+        logger.info(f"Total tokens: {total_tokens:,}. Pre-allocating flat array...")
+
+        all_ids = np.empty(total_tokens, dtype=np.int64)
+        offset = 0
+        for batch in tokenized.iter(batch_size=10000):
+            for ids in batch["input_ids"]:
+                n = len(ids)
+                all_ids[offset : offset + n] = ids
+                offset += n
 
         # Drop remainder that doesn't fill a full chunk
         num_chunks = len(all_ids) // chunk_length
         all_ids = all_ids[: num_chunks * chunk_length]
-        self.chunks = torch.from_numpy(all_ids.astype(np.int64)).view(num_chunks, chunk_length)
+        self.chunks = torch.from_numpy(all_ids).view(num_chunks, chunk_length)
 
         # Save to local cache — subsequent runs skip all of the above
         os.makedirs(CACHE_DIR, exist_ok=True)
