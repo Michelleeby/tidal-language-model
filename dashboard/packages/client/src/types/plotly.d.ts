@@ -1,15 +1,23 @@
-declare module "plotly.js-dist-min" {
-  export function newPlot(
+interface PlotlyModule {
+  newPlot(
     root: HTMLElement,
     data: Array<Record<string, unknown>>,
     layout?: Record<string, unknown>,
     config?: Record<string, unknown>,
   ): Promise<void>;
-  export function react(
+  react(
     root: HTMLElement,
     data: Array<Record<string, unknown>>,
     layout?: Record<string, unknown>,
     config?: Record<string, unknown>,
   ): Promise<void>;
-  export function purge(root: HTMLElement): void;
+  purge(root: HTMLElement): void;
 }
+
+declare global {
+  interface Window {
+    Plotly?: PlotlyModule;
+  }
+}
+
+export {};

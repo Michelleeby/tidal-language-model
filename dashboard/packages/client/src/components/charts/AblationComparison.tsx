@@ -13,31 +13,32 @@ export default function AblationComparison({
   useEffect(() => {
     if (!results || !containerRef.current) return;
 
-    // Dynamic import of Plotly to avoid bundling the whole library upfront
-    import("plotly.js-dist-min").then((Plotly) => {
-      const policies = Object.keys(results);
-      const metrics = ["mean_reward", "mean_diversity", "mean_perplexity"];
-      const colors = ["#3b82f6", "#22c55e", "#a855f7"];
+    // Plotly is loaded via CDN script tag (too large to bundle)
+    const Plotly = window.Plotly;
+    if (!Plotly) return;
 
-      const traces = metrics.map((metric, i) => ({
-        x: policies,
-        y: policies.map((p) => results[p][metric as keyof typeof results[string]]),
-        name: metric.replace("mean_", ""),
-        type: "bar" as const,
-        marker: { color: colors[i] },
-      }));
+    const policies = Object.keys(results);
+    const metrics = ["mean_reward", "mean_diversity", "mean_perplexity"];
+    const colors = ["#3b82f6", "#22c55e", "#a855f7"];
 
-      Plotly.newPlot(containerRef.current!, traces, {
-        barmode: "group",
-        paper_bgcolor: "transparent",
-        plot_bgcolor: "transparent",
-        font: { color: "#9ca3af" },
-        xaxis: { title: "Policy" },
-        yaxis: { title: "Value", gridcolor: "#1f2937" },
-        margin: { t: 20, b: 60, l: 60, r: 20 },
-        legend: { orientation: "h", y: -0.2 },
-      }, { responsive: true });
-    });
+    const traces = metrics.map((metric, i) => ({
+      x: policies,
+      y: policies.map((p) => results[p][metric as keyof typeof results[string]]),
+      name: metric.replace("mean_", ""),
+      type: "bar" as const,
+      marker: { color: colors[i] },
+    }));
+
+    Plotly.newPlot(containerRef.current!, traces, {
+      barmode: "group",
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { color: "#9ca3af" },
+      xaxis: { title: "Policy" },
+      yaxis: { title: "Value", gridcolor: "#1f2937" },
+      margin: { t: 20, b: 60, l: 60, r: 20 },
+      legend: { orientation: "h", y: -0.2 },
+    }, { responsive: true });
   }, [results]);
 
   if (!results) {
