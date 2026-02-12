@@ -110,8 +110,14 @@ class HttpTransport(Transport):
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode())
             except urllib.error.HTTPError as e:
-                print(f"HTTP {e.code} on {method} {path}: {e.read().decode()}", file=sys.stderr)
-                return None  # don't retry HTTP errors (4xx/5xx)
+                body_text = e.read().decode()[:200]
+                if e.code in (502, 503, 504) and attempt < retries - 1:
+                    wait = 2 ** attempt
+                    print(f"HTTP {e.code} on {method} {path} (attempt {attempt + 1}/{retries}) — retrying in {wait}s", file=sys.stderr)
+                    time.sleep(wait)
+                    continue
+                print(f"HTTP {e.code} on {method} {path}: {body_text}", file=sys.stderr)
+                return None
             except Exception as e:
                 last_err = e
                 if attempt < retries - 1:
