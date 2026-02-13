@@ -36,8 +36,9 @@ export class MetricsReader {
     return this.readJsonlTail(expId, window);
   }
 
-  /** Read full history from JSONL file. */
+  /** Read full history from JSONL file, falling back to Redis. */
   async getFullHistory(expId: string): Promise<MetricPoint[]> {
+    // Try disk first
     const filePath = path.join(
       this.experimentsDir,
       expId,
@@ -45,23 +46,38 @@ export class MetricsReader {
       "metrics.jsonl",
     );
 
-    if (!fs.existsSync(filePath)) return [];
+    if (fs.existsSync(filePath)) {
+      const points: MetricPoint[] = [];
+      const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-    const points: MetricPoint[] = [];
-    const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-    for await (const line of rl) {
-      if (line.trim()) {
-        try {
-          points.push(JSON.parse(line) as MetricPoint);
-        } catch {
-          // Skip malformed lines
+      for await (const line of rl) {
+        if (line.trim()) {
+          try {
+            points.push(JSON.parse(line) as MetricPoint);
+          } catch {
+            // Skip malformed lines
+          }
         }
+      }
+
+      if (points.length > 0) return points;
+    }
+
+    // Fallback: read full history from Redis list
+    if (this.redis) {
+      try {
+        const key = `tidal:metrics:${expId}:history`;
+        const raw = await this.redis.lrange(key, 0, -1);
+        if (raw.length > 0) {
+          return raw.map((s) => JSON.parse(s) as MetricPoint);
+        }
+      } catch {
+        // No Redis data either
       }
     }
 
-    return points;
+    return [];
   }
 
   /** Read training status. */

@@ -6,9 +6,10 @@ import type { MetricPoint } from "@tidal/shared";
 
 interface LossCurvesProps {
   points: MetricPoint[];
+  syncKey?: string;
 }
 
-export default function LossCurves({ points }: LossCurvesProps) {
+export default function LossCurves({ points, syncKey }: LossCurvesProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -32,6 +33,7 @@ export default function LossCurves({ points }: LossCurvesProps) {
       <UPlotChart
         ref={chartRef}
         data={[data[0], data[1]]}
+        syncKey={syncKey}
         onZoomChange={setZoomed}
         options={{
           title: "",

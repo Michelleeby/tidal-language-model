@@ -19,9 +19,13 @@ import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
 import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
 import { lttbDownsample } from "../utils/downsample.js";
 import type { MetricPoint } from "@tidal/shared";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client.js";
+import type { TrainingStatus } from "@tidal/shared";
 
 type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples";
+
+const CHART_SYNC_KEY = "training-charts";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "training", label: "Training" },
@@ -44,9 +48,21 @@ export default function DashboardPage() {
   const { data: evalData } = useEvaluation(selectedExpId);
   const { data: ablationData } = useAblation(selectedExpId);
 
-  // SSE for live updates
+  // SSE for live updates (pushes into ["status", expId] among others)
   useSSE(selectedExpId);
   useJobSSE();
+
+  // Status: seed from REST, kept fresh by SSE pushes
+  const { data: statusData } = useQuery({
+    queryKey: ["status", selectedExpId],
+    queryFn: async () => {
+      const res = await api.getStatus(selectedExpId!);
+      return res.status;
+    },
+    enabled: !!selectedExpId,
+    staleTime: Infinity,
+  });
+  const status: TrainingStatus | null = statusData ?? null;
 
   // Merge historical data with live SSE data
   const queryClient = useQueryClient();
@@ -131,17 +147,12 @@ export default function DashboardPage() {
             <>
               <MetricCarousel>
                 <MetricCards latest={latestPoint} />
-                <TrainingStatusCard
-                  status={
-                    expData?.experiments.find((e) => e.id === selectedExpId)
-                      ?.status ?? null
-                  }
-                />
+                <TrainingStatusCard status={status} />
               </MetricCarousel>
-              <LossCurves points={points} />
+              <LossCurves points={points} syncKey={CHART_SYNC_KEY} />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <LearningRateChart points={points} />
-                <PerplexityChart points={points} />
+                <LearningRateChart points={points} syncKey={CHART_SYNC_KEY} />
+                <PerplexityChart points={points} syncKey={CHART_SYNC_KEY} />
               </div>
             </>
           ) : (

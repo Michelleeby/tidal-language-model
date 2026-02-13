@@ -6,9 +6,10 @@ import type { MetricPoint } from "@tidal/shared";
 
 interface LearningRateChartProps {
   points: MetricPoint[];
+  syncKey?: string;
 }
 
-export default function LearningRateChart({ points }: LearningRateChartProps) {
+export default function LearningRateChart({ points, syncKey }: LearningRateChartProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -32,6 +33,7 @@ export default function LearningRateChart({ points }: LearningRateChartProps) {
       <UPlotChart
         ref={chartRef}
         data={[data[0], data[1]]}
+        syncKey={syncKey}
         onZoomChange={setZoomed}
         options={{
           title: "",

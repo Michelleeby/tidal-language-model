@@ -6,9 +6,10 @@ import type { MetricPoint } from "@tidal/shared";
 
 interface PerplexityChartProps {
   points: MetricPoint[];
+  syncKey?: string;
 }
 
-export default function PerplexityChart({ points }: PerplexityChartProps) {
+export default function PerplexityChart({ points, syncKey }: PerplexityChartProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -37,6 +38,7 @@ export default function PerplexityChart({ points }: PerplexityChartProps) {
       <UPlotChart
         ref={chartRef}
         data={[data[0], data[1]]}
+        syncKey={syncKey}
         onZoomChange={setZoomed}
         options={{
           title: "",

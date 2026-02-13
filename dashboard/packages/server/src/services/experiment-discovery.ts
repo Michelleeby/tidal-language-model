@@ -70,14 +70,22 @@ export class ExperimentDiscovery {
       const hasAblation = entries.includes("ablation_results.json");
       const checkpoints = entries.filter((f) => f.endsWith(".pth"));
 
-      // Read status
+      // Read status — try disk first, then Redis
       let status: TrainingStatus | null = null;
       const statusPath = path.join(expPath, "dashboard_metrics", "status.json");
       try {
         const raw = await fsp.readFile(statusPath, "utf-8");
         status = JSON.parse(raw);
       } catch {
-        // No status file
+        // No status file on disk — try Redis
+        if (this.redis) {
+          try {
+            const raw = await this.redis.get(`tidal:status:${id}`);
+            if (raw) status = JSON.parse(raw);
+          } catch {
+            // No Redis status either
+          }
+        }
       }
 
       return {

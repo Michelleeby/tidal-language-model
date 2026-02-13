@@ -10,11 +10,12 @@ interface UPlotChartProps {
   data: uPlot.AlignedData;
   options: Omit<uPlot.Options, "width" | "height">;
   height?: number;
+  syncKey?: string;
   onZoomChange?: (zoomed: boolean) => void;
 }
 
 export default forwardRef<UPlotChartHandle, UPlotChartProps>(
-  function UPlotChart({ data, options, height = 300, onZoomChange }, ref) {
+  function UPlotChart({ data, options, height = 300, syncKey, onZoomChange }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<uPlot | null>(null);
     const zoomedRef = useRef(false);
@@ -46,6 +47,7 @@ export default forwardRef<UPlotChartHandle, UPlotChartProps>(
         cursor: {
           ...options.cursor,
           drag: { x: true, y: false, ...(options.cursor as any)?.drag },
+          ...(syncKey ? { sync: { key: syncKey, setSeries: false, scales: ["x", null] } } : {}),
         },
         hooks: {
           ...options.hooks,
