@@ -76,6 +76,28 @@ export class JobHealthMonitor {
               "failed",
               `Stuck in ${job.status} for ${Math.round(age / 1000)}s`,
             );
+            continue;
+          }
+
+          // Remote jobs with a provisioned instance: check if still alive
+          // (60s grace period to avoid checking right after provisioning)
+          if (isRemote && provider && job.providerMeta && age > 60_000) {
+            try {
+              const alive = await provider.isAlive(job);
+              if (!alive) {
+                this.log.warn(
+                  { jobId: job.jobId, status: job.status },
+                  "Remote instance no longer alive during startup — marking failed",
+                );
+                await this.onJobFailed(
+                  job.jobId,
+                  "failed",
+                  "Remote instance terminated during startup",
+                );
+              }
+            } catch {
+              // isAlive check failed — don't fail the job, let the timeout handle it
+            }
           }
           continue;
         }
@@ -83,8 +105,28 @@ export class JobHealthMonitor {
         // Running/completing/stopping jobs — check heartbeat
         const heartbeat = await this.store.getHeartbeat(job.jobId);
         if (heartbeat === null) {
-          // Remote jobs: rely on heartbeat only (no local process to check)
-          if (isRemote) continue;
+          // Remote jobs: check if the instance is still alive
+          if (isRemote) {
+            if (provider) {
+              try {
+                const alive = await provider.isAlive(job);
+                if (!alive) {
+                  this.log.warn(
+                    { jobId: job.jobId },
+                    "Remote instance gone, no heartbeat — marking failed",
+                  );
+                  await this.onJobFailed(
+                    job.jobId,
+                    "failed",
+                    "Remote instance terminated",
+                  );
+                }
+              } catch {
+                // isAlive check failed — skip for now
+              }
+            }
+            continue;
+          }
           // Local jobs: check if worker process is still running
           if (!this.spawner.isRunning(job.jobId)) {
             this.log.warn(

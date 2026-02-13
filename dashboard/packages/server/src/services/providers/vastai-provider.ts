@@ -7,6 +7,7 @@ import type {
 import type { GpuTier } from "../job-policy.js";
 
 const VASTAI_API = "https://console.vast.ai/api/v0";
+const TERMINAL_INSTANCE_STATUSES = new Set(["exited", "offline", "error"]);
 const MIN_INET_DOWN_MBPS = 800;
 const MIN_INET_UP_MBPS = 800;
 const MIN_RELIABILITY = 0.99;
@@ -109,8 +110,9 @@ export class VastAIProvider implements ComputeProvider {
         headers: { Authorization: `Bearer ${this.apiKey}` },
       });
       if (!res.ok) {
+        const body = await res.text().catch(() => "");
         this.log.warn(
-          { instanceId, status: res.status },
+          { instanceId, status: res.status, body },
           "vast.ai deprovision returned non-OK",
         );
       }
@@ -129,7 +131,8 @@ export class VastAIProvider implements ComputeProvider {
       });
       if (!res.ok) return false;
       const data = (await res.json()) as { actual_status?: string };
-      return data.actual_status === "running";
+      if (!data.actual_status) return false;
+      return !TERMINAL_INSTANCE_STATUSES.has(data.actual_status);
     } catch {
       return false;
     }
