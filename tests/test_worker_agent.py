@@ -124,6 +124,35 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             self.assertIn("transformer-lm_v1.0.0.pth", req_path)
             self.assertIn("expId=abc-123", req_path)
 
+    def test_parses_absolute_checkpoint_path(self):
+        """Handles absolute paths like '/data/experiments/<expId>/<filename>'."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            body = b"model weights"
+
+            fake_resp = FakeResponse(200, body, {
+                "content-length": str(len(body)),
+            })
+            mock_conn = MagicMock()
+            mock_conn.getresponse.return_value = fake_resp
+
+            with patch("http.client.HTTPConnection", return_value=mock_conn):
+                agent._download_checkpoint({
+                    "checkpoint": "/data/experiments/20260213-exp-abc/checkpoint_epoch_5.pth",
+                })
+
+            # Verify correct expId and filename extracted
+            req_path = mock_conn.putrequest.call_args[0][1]
+            self.assertIn("checkpoint_epoch_5.pth", req_path)
+            self.assertIn("expId=20260213-exp-abc", req_path)
+
+            # File should be saved locally under project_root/experiments/
+            final = os.path.join(tmpdir, "experiments", "20260213-exp-abc", "checkpoint_epoch_5.pth")
+            self.assertTrue(os.path.exists(final))
+
     def test_creates_experiment_directory(self):
         """Creates experiments/<expId>/ if it doesn't exist."""
         transport = _make_http_transport()

@@ -334,14 +334,21 @@ class WorkerAgent:
         if not checkpoint_path:
             return
 
-        # Parse "experiments/<expId>/<filename>"
+        # Parse expId and filename from path containing "experiments/<expId>/<filename>"
+        # Handles both relative ("experiments/...") and absolute ("/data/experiments/...")
         parts = checkpoint_path.replace("\\", "/").split("/")
-        if len(parts) < 3 or parts[0] != "experiments":
+        try:
+            idx = parts.index("experiments")
+        except ValueError:
+            raise RuntimeError(
+                f"Cannot parse checkpoint path (no 'experiments' segment): {checkpoint_path}"
+            )
+        if idx + 2 >= len(parts):
             raise RuntimeError(
                 f"Cannot parse checkpoint path: {checkpoint_path}"
             )
-        exp_id = parts[1]
-        filename = parts[2]
+        exp_id = parts[idx + 1]
+        filename = parts[idx + 2]
 
         dest = os.path.join(self._project_root, "experiments", exp_id, filename)
         if os.path.exists(dest):
