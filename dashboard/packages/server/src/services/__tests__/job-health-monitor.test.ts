@@ -346,6 +346,142 @@ describe("JobHealthMonitor — no-heartbeat remote running jobs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Stopping jobs — graceful "Stop Now" should eventually deprovision
+// ---------------------------------------------------------------------------
+
+describe("JobHealthMonitor — stopping jobs", () => {
+  it("cancels remote stopping job when no heartbeat and isAlive returns true", async () => {
+    const results: { jobId: string; status: string; error?: string }[] = [];
+
+    const job = makeRemoteJob({ status: "stopping" as JobStatus });
+
+    const provider = fakeProvider({ isRemote: true, isAliveResult: true });
+    const monitor = new JobHealthMonitor(
+      fakeStore([job]),
+      fakeChain(provider),
+      fakeSpawner(),
+      DEFAULT_CONFIG,
+      async (jobId, status, error) => { results.push({ jobId, status, error }); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].jobId, job.jobId);
+    assert.equal(results[0].status, "cancelled");
+    assert.ok(results[0].error?.includes("Stopped by user"));
+  });
+
+  it("cancels remote stopping job when no heartbeat and isAlive returns false", async () => {
+    const results: { jobId: string; status: string }[] = [];
+
+    const job = makeRemoteJob({ status: "stopping" as JobStatus });
+
+    const provider = fakeProvider({ isRemote: true, isAliveResult: false });
+    const monitor = new JobHealthMonitor(
+      fakeStore([job]),
+      fakeChain(provider),
+      fakeSpawner(),
+      DEFAULT_CONFIG,
+      async (jobId, status) => { results.push({ jobId, status }); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, "cancelled");
+  });
+
+  it("cancels remote stopping job when heartbeat is stale", async () => {
+    const results: { jobId: string; status: string }[] = [];
+
+    const job = makeRemoteJob({ status: "stopping" as JobStatus });
+    const staleHeartbeat = (Date.now() - 120_000) / 1000; // 2 min ago
+    const heartbeats = new Map([[job.jobId, staleHeartbeat]]);
+
+    const provider = fakeProvider({ isRemote: true, isAliveResult: true });
+    const monitor = new JobHealthMonitor(
+      fakeStore([job], heartbeats),
+      fakeChain(provider),
+      fakeSpawner(),
+      DEFAULT_CONFIG,
+      async (jobId, status) => { results.push({ jobId, status }); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, "cancelled");
+  });
+
+  it("does NOT cancel remote stopping job when heartbeat is fresh", async () => {
+    const results: string[] = [];
+
+    const job = makeRemoteJob({ status: "stopping" as JobStatus });
+    const freshHeartbeat = Date.now() / 1000; // now
+    const heartbeats = new Map([[job.jobId, freshHeartbeat]]);
+
+    const provider = fakeProvider({ isRemote: true, isAliveResult: true });
+    const monitor = new JobHealthMonitor(
+      fakeStore([job], heartbeats),
+      fakeChain(provider),
+      fakeSpawner(),
+      DEFAULT_CONFIG,
+      async (jobId) => { results.push(jobId); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 0, "Worker still sending heartbeats — let it finish");
+  });
+
+  it("cancels local stopping job when no heartbeat and worker not running", async () => {
+    const results: { jobId: string; status: string }[] = [];
+
+    const job = makeJob({ status: "stopping" as JobStatus, provider: "local" });
+
+    const monitor = new JobHealthMonitor(
+      fakeStore([job]),
+      fakeChain(undefined),
+      fakeSpawner(false),
+      DEFAULT_CONFIG,
+      async (jobId, status) => { results.push({ jobId, status }); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, "cancelled");
+  });
+
+  it("cancels remote stopping job when no heartbeat and isAlive throws", async () => {
+    const results: { jobId: string; status: string }[] = [];
+
+    const job = makeRemoteJob({ status: "stopping" as JobStatus });
+
+    const provider = fakeProvider({ isRemote: true, isAliveThrows: true });
+    const monitor = new JobHealthMonitor(
+      fakeStore([job]),
+      fakeChain(provider),
+      fakeSpawner(),
+      DEFAULT_CONFIG,
+      async (jobId, status) => { results.push({ jobId, status }); },
+      silentLog,
+    );
+
+    await runHealthCheck(monitor);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].status, "cancelled");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Existing behavior preserved
 // ---------------------------------------------------------------------------
 

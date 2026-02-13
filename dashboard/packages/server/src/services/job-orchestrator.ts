@@ -236,7 +236,7 @@ export class JobOrchestrator {
 
   async handleJobComplete(
     jobId: string,
-    status: "completed" | "failed",
+    status: "completed" | "failed" | "cancelled",
     error?: string,
   ): Promise<void> {
     const job = await this.store.get(jobId);

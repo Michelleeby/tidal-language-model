@@ -27,7 +27,7 @@ export class JobHealthMonitor {
     private config: HealthMonitorConfig,
     private onJobFailed: (
       jobId: string,
-      status: "completed" | "failed",
+      status: "completed" | "failed" | "cancelled",
       error?: string,
     ) => Promise<void>,
     private log: FastifyBaseLogger,
@@ -105,6 +105,15 @@ export class JobHealthMonitor {
         // Running/completing/stopping jobs — check heartbeat
         const heartbeat = await this.store.getHeartbeat(job.jobId);
         if (heartbeat === null) {
+          // Stopping jobs with no heartbeat: worker has exited, safe to clean up
+          if (job.status === "stopping") {
+            this.log.info(
+              { jobId: job.jobId },
+              "Stopping job has no heartbeat — marking cancelled",
+            );
+            await this.onJobFailed(job.jobId, "cancelled", "Stopped by user");
+            continue;
+          }
           // Remote jobs: check if the instance is still alive
           if (isRemote) {
             if (provider) {
@@ -144,6 +153,15 @@ export class JobHealthMonitor {
 
         const age = Date.now() - heartbeat * 1000;
         if (age > this.config.heartbeatTimeoutMs) {
+          // Stopping jobs with stale heartbeat: worker stopped sending, safe to clean up
+          if (job.status === "stopping") {
+            this.log.info(
+              { jobId: job.jobId, ageMs: age },
+              "Stopping job heartbeat stale — marking cancelled",
+            );
+            await this.onJobFailed(job.jobId, "cancelled", "Stopped by user");
+            continue;
+          }
           // Remote jobs: check if the instance is still alive before killing
           if (isRemote && provider) {
             try {
