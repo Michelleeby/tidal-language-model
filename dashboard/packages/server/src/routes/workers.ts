@@ -3,7 +3,7 @@ import type { JobSignal, JobStatus } from "@tidal/shared";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import type { Readable } from "node:stream";
 import { JobStore } from "../services/job-store.js";
 import type { SSEManager } from "../services/sse-manager.js";
@@ -313,6 +313,58 @@ export default async function workerRoutes(fastify: FastifyInstance) {
         await fsp.unlink(tmpDest).catch(() => {});
         throw err;
       }
+    },
+  );
+
+  // GET /api/workers/:jobId/checkpoints/:filename — worker downloads a checkpoint file
+  fastify.get<{
+    Params: { jobId: string; filename: string };
+    Querystring: { expId?: string };
+  }>(
+    "/api/workers/:jobId/checkpoints/:filename",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { jobId, filename } = request.params;
+
+      if (!CHECKPOINT_FILENAME_RE.test(filename)) {
+        return reply
+          .status(400)
+          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.pth$/" });
+      }
+
+      const job = await store.get(jobId);
+      if (!job) {
+        return reply.status(404).send({ error: "Job not found" });
+      }
+
+      const expId = job.experimentId ?? request.query.expId;
+      if (!expId) {
+        return reply.status(400).send({
+          error:
+            "No experimentId on job — pass ?expId= query param as fallback",
+        });
+      }
+
+      const filePath = path.join(experimentsDir, expId, filename);
+
+      try {
+        await fsp.access(filePath);
+      } catch {
+        return reply
+          .status(404)
+          .send({ error: `Checkpoint not found: ${filename}` });
+      }
+
+      const stat = await fsp.stat(filePath);
+
+      return reply
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", stat.size)
+        .header(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        )
+        .send(createReadStream(filePath));
     },
   );
 

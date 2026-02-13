@@ -32,6 +32,8 @@ HEARTBEAT_INTERVAL = 10
 HEARTBEAT_TTL = 30
 SIGNAL_POLL_INTERVAL = 2
 UPLOAD_CHUNK_SIZE = 95 * 1024 * 1024  # 95MB — under Cloudflare's 100MB limit
+DOWNLOAD_MAX_RETRIES = 3
+DOWNLOAD_READ_SIZE = 1024 * 1024  # 1MB chunks for streaming reads
 
 
 # ── Transport abstraction ────────────────────────────────────────────
@@ -186,6 +188,15 @@ class WorkerAgent:
         job_type = job["config"]["type"]
         config = job["config"]
 
+        # Download checkpoint from dashboard before entering "running" state
+        try:
+            self._download_checkpoint(config)
+        except Exception as e:
+            self.transport.update_status(
+                self.job_id, "failed", error=str(e)
+            )
+            return
+
         self.transport.update_status(self.job_id, "running")
         self._start_heartbeat()
 
@@ -308,6 +319,152 @@ class WorkerAgent:
         sentinel = os.path.join(self._project_root, ".training_complete_signal")
         with open(sentinel, "w") as f:
             f.write(str(time.time()))
+
+    def _download_checkpoint(self, config: dict):
+        """Download a checkpoint file from the dashboard API before training.
+
+        Guard clauses:
+        - Not HttpTransport (local jobs have checkpoints on disk)
+        - No 'checkpoint' key in config
+        - File already exists on disk
+        """
+        if not isinstance(self.transport, HttpTransport):
+            return
+        checkpoint_path = config.get("checkpoint")
+        if not checkpoint_path:
+            return
+
+        # Parse "experiments/<expId>/<filename>"
+        parts = checkpoint_path.replace("\\", "/").split("/")
+        if len(parts) < 3 or parts[0] != "experiments":
+            raise RuntimeError(
+                f"Cannot parse checkpoint path: {checkpoint_path}"
+            )
+        exp_id = parts[1]
+        filename = parts[2]
+
+        dest = os.path.join(self._project_root, "experiments", exp_id, filename)
+        if os.path.exists(dest):
+            print(f"Checkpoint already exists: {dest}", file=sys.stderr)
+            return
+
+        os.makedirs(os.path.join(self._project_root, "experiments", exp_id), exist_ok=True)
+
+        parsed = urlparse(self.transport.api_url)
+        use_https = parsed.scheme == "https"
+        host = parsed.hostname
+        port = parsed.port or (443 if use_https else 80)
+        url_path = (
+            f"/api/workers/{self.job_id}/checkpoints/{filename}"
+            f"?expId={exp_id}"
+        )
+
+        tmp_dest = dest + ".tmp"
+        last_err = None
+
+        for attempt in range(DOWNLOAD_MAX_RETRIES):
+            try:
+                if use_https:
+                    conn = http.client.HTTPSConnection(host, port, timeout=300)
+                else:
+                    conn = http.client.HTTPConnection(host, port, timeout=300)
+
+                conn.putrequest("GET", url_path)
+                conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
+                conn.putheader("User-Agent", "TidalWorker/1.0")
+                conn.endheaders()
+
+                resp = conn.getresponse()
+
+                if resp.status == 404:
+                    self._cleanup_tmp(tmp_dest)
+                    raise RuntimeError(
+                        f"Checkpoint not found on server (404): {filename}"
+                    )
+
+                if resp.status >= 500:
+                    last_err = RuntimeError(
+                        f"Server error {resp.status} downloading {filename}"
+                    )
+                    if attempt < DOWNLOAD_MAX_RETRIES - 1:
+                        wait = 2 ** attempt
+                        print(
+                            f"HTTP {resp.status} downloading checkpoint "
+                            f"(attempt {attempt + 1}/{DOWNLOAD_MAX_RETRIES}) "
+                            f"— retrying in {wait}s",
+                            file=sys.stderr,
+                        )
+                        time.sleep(wait)
+                        continue
+                    self._cleanup_tmp(tmp_dest)
+                    raise RuntimeError(
+                        f"Failed to download checkpoint after {DOWNLOAD_MAX_RETRIES} attempts: "
+                        f"HTTP {resp.status}"
+                    )
+
+                if resp.status != 200:
+                    self._cleanup_tmp(tmp_dest)
+                    raise RuntimeError(
+                        f"Unexpected HTTP {resp.status} downloading {filename}"
+                    )
+
+                # Stream response body to temp file
+                expected_size = resp.getheader("content-length")
+                bytes_written = 0
+                with open(tmp_dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(DOWNLOAD_READ_SIZE)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        bytes_written += len(chunk)
+
+                conn.close()
+
+                # Verify Content-Length if provided
+                if expected_size is not None:
+                    expected = int(expected_size)
+                    if bytes_written != expected:
+                        self._cleanup_tmp(tmp_dest)
+                        raise RuntimeError(
+                            f"Content-Length mismatch: expected {expected} bytes, "
+                            f"got {bytes_written}"
+                        )
+
+                # Atomic rename
+                os.rename(tmp_dest, dest)
+                print(
+                    f"Downloaded checkpoint: {filename} ({bytes_written} bytes)",
+                    file=sys.stderr,
+                )
+                return
+
+            except RuntimeError:
+                raise
+            except Exception as e:
+                last_err = e
+                if attempt < DOWNLOAD_MAX_RETRIES - 1:
+                    wait = 2 ** attempt
+                    print(
+                        f"Download failed (attempt {attempt + 1}/{DOWNLOAD_MAX_RETRIES}): "
+                        f"{e} — retrying in {wait}s",
+                        file=sys.stderr,
+                    )
+                    time.sleep(wait)
+                    continue
+
+        self._cleanup_tmp(tmp_dest)
+        raise RuntimeError(
+            f"Failed to download checkpoint after {DOWNLOAD_MAX_RETRIES} attempts: {last_err}"
+        )
+
+    @staticmethod
+    def _cleanup_tmp(path: str):
+        """Remove a temp file if it exists."""
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
     def _final_checkpoint_sweep(self):
         """Safety net: upload any .pth files that background threads may have missed."""
