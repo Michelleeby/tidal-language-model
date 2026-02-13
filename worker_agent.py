@@ -478,7 +478,7 @@ class WorkerAgent:
             pass
 
     def _final_checkpoint_sweep(self):
-        """Safety net: upload any .pth files that background threads may have missed."""
+        """Safety net: upload .pth and .json result files that need to reach the dashboard."""
         exp_base = os.path.join(self._project_root, "experiments")
         if not os.path.isdir(exp_base):
             return
@@ -489,7 +489,7 @@ class WorkerAgent:
             if not os.path.isdir(exp_dir):
                 continue
             for fname in os.listdir(exp_dir):
-                if not fname.endswith(".pth"):
+                if not (fname.endswith(".pth") or fname.endswith(".json")):
                     continue
                 filepath = os.path.join(exp_dir, fname)
                 print(f"Final sweep: uploading {filepath}", file=sys.stderr)

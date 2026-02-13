@@ -9,7 +9,7 @@ import { JobStore } from "../services/job-store.js";
 import type { SSEManager } from "../services/sse-manager.js";
 import { ExperimentArchiver } from "../services/experiment-archiver.js";
 
-const CHECKPOINT_FILENAME_RE = /^[\w.-]+\.pth$/;
+const ARTIFACT_FILENAME_RE = /^[\w.-]+\.(pth|json)$/;
 
 export default async function workerRoutes(fastify: FastifyInstance) {
   const store = new JobStore(fastify.redis);
@@ -186,10 +186,10 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       const { jobId, filename } = request.params;
 
       // Validate filename to prevent path traversal
-      if (!CHECKPOINT_FILENAME_RE.test(filename)) {
+      if (!ARTIFACT_FILENAME_RE.test(filename)) {
         return reply
           .status(400)
-          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.pth$/" });
+          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.(pth|json)$/" });
       }
 
       // Resolve experiment ID from job or query param fallback
@@ -337,10 +337,10 @@ export default async function workerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { jobId, filename } = request.params;
 
-      if (!CHECKPOINT_FILENAME_RE.test(filename)) {
+      if (!ARTIFACT_FILENAME_RE.test(filename)) {
         return reply
           .status(400)
-          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.pth$/" });
+          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.(pth|json)$/" });
       }
 
       const job = await store.get(jobId);

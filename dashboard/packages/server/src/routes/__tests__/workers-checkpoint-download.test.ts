@@ -89,7 +89,7 @@ function seedJob(
 // ---------------------------------------------------------------------------
 
 describe("GET /api/workers/:jobId/checkpoints/:filename — filename validation", () => {
-  it("rejects filenames without .pth extension", async () => {
+  it("rejects filenames without .pth or .json extension", async () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
     seedJob(app, "job-1");
@@ -100,6 +100,22 @@ describe("GET /api/workers/:jobId/checkpoints/:filename — filename validation"
     });
     assert.equal(resp.statusCode, 400);
     assert.match(resp.json().error, /Invalid filename/);
+
+    await app.close();
+  });
+
+  it("accepts valid .json filenames", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+    seedJob(app, "job-1", { experimentId: "exp-1" });
+
+    // File doesn't exist → 404, but filename validation passed
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/workers/job-1/checkpoints/ablation_results.json",
+    });
+    assert.equal(resp.statusCode, 404);
+    assert.match(resp.json().error, /Checkpoint not found/);
 
     await app.close();
   });
