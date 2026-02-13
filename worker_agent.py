@@ -31,6 +31,7 @@ UPDATES_CHANNEL = "tidal:job:updates"
 HEARTBEAT_INTERVAL = 10
 HEARTBEAT_TTL = 30
 SIGNAL_POLL_INTERVAL = 2
+UPLOAD_CHUNK_SIZE = 95 * 1024 * 1024  # 95MB — under Cloudflare's 100MB limit
 
 
 # ── Transport abstraction ────────────────────────────────────────────
@@ -325,14 +326,34 @@ class WorkerAgent:
                 self._upload_checkpoint(filepath, exp_id, fname)
 
     def _upload_checkpoint(self, filepath: str, exp_id: str, filename: str):
-        """Stream a checkpoint file to the dashboard API."""
+        """Stream a checkpoint file to the dashboard API, chunking if needed."""
+        assert isinstance(self.transport, HttpTransport)
+        file_size = os.path.getsize(filepath)
+
+        if file_size <= UPLOAD_CHUNK_SIZE:
+            self._upload_checkpoint_single(filepath, exp_id, filename, file_size)
+        else:
+            import math
+            total_chunks = math.ceil(file_size / UPLOAD_CHUNK_SIZE)
+            print(f"Uploading {filename} ({file_size} bytes) in {total_chunks} chunks", file=sys.stderr)
+            for chunk_idx in range(total_chunks):
+                offset = chunk_idx * UPLOAD_CHUNK_SIZE
+                length = min(UPLOAD_CHUNK_SIZE, file_size - offset)
+                self._upload_checkpoint_chunk(
+                    filepath, exp_id, filename,
+                    chunk_idx, total_chunks, offset, length,
+                )
+
+    def _upload_checkpoint_single(
+        self, filepath: str, exp_id: str, filename: str, file_size: int,
+    ):
+        """Upload a complete checkpoint in a single request."""
         assert isinstance(self.transport, HttpTransport)
         parsed = urlparse(self.transport.api_url)
         use_https = parsed.scheme == "https"
         host = parsed.hostname
         port = parsed.port or (443 if use_https else 80)
 
-        file_size = os.path.getsize(filepath)
         url_path = (
             f"/api/workers/{self.job_id}/checkpoints/{filename}"
             f"?expId={exp_id}"
@@ -351,13 +372,12 @@ class WorkerAgent:
             conn.putheader("User-Agent", "TidalWorker/1.0")
             conn.endheaders()
 
-            chunk_size = 1024 * 1024  # 1MB
             with open(filepath, "rb") as f:
                 while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
+                    data = f.read(1024 * 1024)
+                    if not data:
                         break
-                    conn.send(chunk)
+                    conn.send(data)
 
             resp = conn.getresponse()
             body = resp.read().decode()[:200]
@@ -369,6 +389,66 @@ class WorkerAgent:
                 print(f"Upload failed for {filename}: HTTP {resp.status} {body}", file=sys.stderr)
         except Exception as e:
             print(f"Upload error for {filename}: {e}", file=sys.stderr)
+
+    def _upload_checkpoint_chunk(
+        self, filepath: str, exp_id: str, filename: str,
+        chunk_idx: int, total_chunks: int, offset: int, length: int,
+    ):
+        """Upload one chunk of a checkpoint file."""
+        assert isinstance(self.transport, HttpTransport)
+        parsed = urlparse(self.transport.api_url)
+        use_https = parsed.scheme == "https"
+        host = parsed.hostname
+        port = parsed.port or (443 if use_https else 80)
+
+        url_path = (
+            f"/api/workers/{self.job_id}/checkpoints/{filename}"
+            f"?expId={exp_id}&chunk={chunk_idx}&totalChunks={total_chunks}"
+        )
+
+        try:
+            if use_https:
+                conn = http.client.HTTPSConnection(host, port, timeout=300)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=300)
+
+            conn.putrequest("PUT", url_path)
+            conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
+            conn.putheader("Content-Type", "application/octet-stream")
+            conn.putheader("Content-Length", str(length))
+            conn.putheader("User-Agent", "TidalWorker/1.0")
+            conn.endheaders()
+
+            sent = 0
+            with open(filepath, "rb") as f:
+                f.seek(offset)
+                while sent < length:
+                    read_size = min(1024 * 1024, length - sent)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    conn.send(data)
+                    sent += len(data)
+
+            resp = conn.getresponse()
+            body = resp.read().decode()[:200]
+            conn.close()
+
+            if 200 <= resp.status < 300:
+                print(
+                    f"Uploaded chunk {chunk_idx + 1}/{total_chunks} of {filename} ({length} bytes)",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"Upload failed for chunk {chunk_idx + 1}/{total_chunks} of {filename}: HTTP {resp.status} {body}",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(
+                f"Upload error for chunk {chunk_idx + 1}/{total_chunks} of {filename}: {e}",
+                file=sys.stderr,
+            )
 
     def _start_heartbeat(self):
         """Thread: send heartbeat every 10s."""

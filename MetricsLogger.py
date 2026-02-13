@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 HTTP_BATCH_SIZE = 50
 HTTP_FLUSH_INTERVAL = 30  # seconds
+UPLOAD_CHUNK_SIZE = 95 * 1024 * 1024  # 95MB — under Cloudflare's 100MB limit
 
 
 class MetricsLogger:
@@ -184,13 +185,36 @@ class MetricsLogger:
         t.start()
 
     def _upload_file(self, filepath: str, filename: str, retries: int = 3):
-        """Stream a file to the dashboard checkpoint endpoint with retries."""
+        """Stream a file to the dashboard checkpoint endpoint with retries.
+
+        Files larger than UPLOAD_CHUNK_SIZE are split into multiple requests
+        to stay under Cloudflare's 100MB body size limit.
+        """
+        file_size = os.path.getsize(filepath)
+        if file_size <= UPLOAD_CHUNK_SIZE:
+            self._upload_single(filepath, filename, file_size, retries)
+        else:
+            import math
+            total_chunks = math.ceil(file_size / UPLOAD_CHUNK_SIZE)
+            logger.info(
+                "Uploading %s (%d bytes) in %d chunks",
+                filename, file_size, total_chunks,
+            )
+            for chunk_idx in range(total_chunks):
+                offset = chunk_idx * UPLOAD_CHUNK_SIZE
+                length = min(UPLOAD_CHUNK_SIZE, file_size - offset)
+                self._upload_chunk(
+                    filepath, filename, chunk_idx, total_chunks,
+                    offset, length, retries,
+                )
+
+    def _upload_single(self, filepath: str, filename: str, file_size: int, retries: int):
+        """Upload a complete file in a single request."""
         parsed = urlparse(self._http_url)
         use_https = parsed.scheme == "https"
         host = parsed.hostname
         port = parsed.port or (443 if use_https else 80)
 
-        file_size = os.path.getsize(filepath)
         url_path = (
             f"/api/workers/{self._http_job_id}/checkpoints/{filename}"
             f"?expId={self.exp_id}"
@@ -211,13 +235,12 @@ class MetricsLogger:
                 conn.putheader("User-Agent", "TidalMetrics/1.0")
                 conn.endheaders()
 
-                chunk_size = 1024 * 1024  # 1MB
                 with open(filepath, "rb") as f:
                     while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
+                        data = f.read(1024 * 1024)
+                        if not data:
                             break
-                        conn.send(chunk)
+                        conn.send(data)
 
                 resp = conn.getresponse()
                 body = resp.read()
@@ -255,6 +278,89 @@ class MetricsLogger:
 
         logger.warning(
             "Checkpoint upload failed after %d attempts: %s", retries, last_err,
+        )
+
+    def _upload_chunk(
+        self, filepath: str, filename: str,
+        chunk_idx: int, total_chunks: int,
+        offset: int, length: int, retries: int,
+    ):
+        """Upload one chunk of a file."""
+        parsed = urlparse(self._http_url)
+        use_https = parsed.scheme == "https"
+        host = parsed.hostname
+        port = parsed.port or (443 if use_https else 80)
+
+        url_path = (
+            f"/api/workers/{self._http_job_id}/checkpoints/{filename}"
+            f"?expId={self.exp_id}&chunk={chunk_idx}&totalChunks={total_chunks}"
+        )
+
+        last_err = None
+        for attempt in range(retries):
+            try:
+                if use_https:
+                    conn = http.client.HTTPSConnection(host, port, timeout=300)
+                else:
+                    conn = http.client.HTTPConnection(host, port, timeout=300)
+
+                conn.putrequest("PUT", url_path)
+                conn.putheader("Authorization", f"Bearer {self._http_token}")
+                conn.putheader("Content-Type", "application/octet-stream")
+                conn.putheader("Content-Length", str(length))
+                conn.putheader("User-Agent", "TidalMetrics/1.0")
+                conn.endheaders()
+
+                sent = 0
+                with open(filepath, "rb") as f:
+                    f.seek(offset)
+                    while sent < length:
+                        read_size = min(1024 * 1024, length - sent)
+                        data = f.read(read_size)
+                        if not data:
+                            break
+                        conn.send(data)
+                        sent += len(data)
+
+                resp = conn.getresponse()
+                body = resp.read()
+                conn.close()
+
+                if 200 <= resp.status < 300:
+                    logger.info(
+                        "Uploaded chunk %d/%d of %s (%d bytes)",
+                        chunk_idx + 1, total_chunks, filename, length,
+                    )
+                    return
+                elif resp.status >= 500 and attempt < retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "HTTP %d uploading chunk %d/%d of %s (attempt %d/%d) — retrying in %ds",
+                        resp.status, chunk_idx + 1, total_chunks, filename,
+                        attempt + 1, retries, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                else:
+                    logger.warning(
+                        "HTTP %d uploading chunk %d/%d of %s: %s",
+                        resp.status, chunk_idx + 1, total_chunks, filename,
+                        body.decode()[:200],
+                    )
+                    return
+            except Exception as e:
+                last_err = e
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
+                    logger.debug(
+                        "Chunk upload failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt + 1, retries, e, wait,
+                    )
+                    time.sleep(wait)
+
+        logger.warning(
+            "Chunk %d/%d upload failed after %d attempts: %s",
+            chunk_idx + 1, total_chunks, retries, last_err,
         )
 
     def _report_experiment_id(self):

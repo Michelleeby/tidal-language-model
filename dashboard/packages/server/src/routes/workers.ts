@@ -161,9 +161,11 @@ export default async function workerRoutes(fastify: FastifyInstance) {
   );
 
   // PUT /api/workers/:jobId/checkpoints/:filename — worker uploads a checkpoint file
+  // Supports chunked uploads via ?chunk=N&totalChunks=M query params to stay
+  // under Cloudflare's 100MB body size limit.
   fastify.put<{
     Params: { jobId: string; filename: string };
-    Querystring: { expId?: string };
+    Querystring: { expId?: string; chunk?: string; totalChunks?: string };
   }>(
     "/api/workers/:jobId/checkpoints/:filename",
     { preHandler: [fastify.verifyAuth] },
@@ -195,22 +197,117 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       await fsp.mkdir(expDir, { recursive: true });
 
       const dest = path.join(expDir, filename);
-      const tmpDest = dest + ".tmp";
+      const chunkParam = request.query.chunk;
+      const totalChunksParam = request.query.totalChunks;
+      const isChunked =
+        chunkParam !== undefined && totalChunksParam !== undefined;
 
+      if (!isChunked) {
+        // Single-file upload (small checkpoints or non-Cloudflare paths)
+        const tmpDest = dest + ".tmp";
+        try {
+          const bodyStream = request.body as Readable;
+          await pipeline(bodyStream, createWriteStream(tmpDest));
+          await fsp.rename(tmpDest, dest);
+
+          const stat = await fsp.stat(dest);
+          fastify.log.info(
+            { jobId, expId, filename, sizeBytes: stat.size },
+            "Checkpoint uploaded",
+          );
+          return reply.send({ ok: true, filename, sizeBytes: stat.size });
+        } catch (err) {
+          await fsp.unlink(tmpDest).catch(() => {});
+          throw err;
+        }
+      }
+
+      // Chunked upload — write part file, assemble when all parts arrive
+      const chunkIdx = parseInt(chunkParam, 10);
+      const totalChunks = parseInt(totalChunksParam, 10);
+      if (
+        isNaN(chunkIdx) ||
+        isNaN(totalChunks) ||
+        chunkIdx < 0 ||
+        chunkIdx >= totalChunks ||
+        totalChunks < 1
+      ) {
+        return reply
+          .status(400)
+          .send({ error: "Invalid chunk/totalChunks params" });
+      }
+
+      const partFile = `${dest}.part.${chunkIdx}`;
+      const tmpPart = partFile + ".tmp";
       try {
         const bodyStream = request.body as Readable;
-        await pipeline(bodyStream, createWriteStream(tmpDest));
+        await pipeline(bodyStream, createWriteStream(tmpPart));
+        await fsp.rename(tmpPart, partFile);
+      } catch (err) {
+        await fsp.unlink(tmpPart).catch(() => {});
+        throw err;
+      }
+
+      // Check if all parts have arrived
+      const partsPresent = await Promise.all(
+        Array.from({ length: totalChunks }, (_, i) =>
+          fsp
+            .access(`${dest}.part.${i}`)
+            .then(() => true)
+            .catch(() => false),
+        ),
+      );
+
+      if (!partsPresent.every(Boolean)) {
+        fastify.log.info(
+          { jobId, expId, filename, chunkIdx, totalChunks },
+          "Chunk received, waiting for remaining parts",
+        );
+        return reply.send({
+          ok: true,
+          filename,
+          chunk: chunkIdx,
+          totalChunks,
+          assembled: false,
+        });
+      }
+
+      // All parts present — concatenate into final file
+      const tmpDest = dest + ".assembling";
+      try {
+        const ws = createWriteStream(tmpDest);
+        for (let i = 0; i < totalChunks; i++) {
+          const { createReadStream } = await import("node:fs");
+          const rs = createReadStream(`${dest}.part.${i}`);
+          await pipeline(rs, ws, { end: false });
+        }
+        ws.end();
+        await new Promise<void>((resolve, reject) => {
+          ws.on("finish", resolve);
+          ws.on("error", reject);
+        });
+
         await fsp.rename(tmpDest, dest);
+
+        // Clean up part files
+        await Promise.all(
+          Array.from({ length: totalChunks }, (_, i) =>
+            fsp.unlink(`${dest}.part.${i}`).catch(() => {}),
+          ),
+        );
 
         const stat = await fsp.stat(dest);
         fastify.log.info(
-          { jobId, expId, filename, sizeBytes: stat.size },
-          "Checkpoint uploaded",
+          { jobId, expId, filename, sizeBytes: stat.size, totalChunks },
+          "Chunked checkpoint assembled",
         );
-
-        return reply.send({ ok: true, filename, sizeBytes: stat.size });
+        return reply.send({
+          ok: true,
+          filename,
+          sizeBytes: stat.size,
+          assembled: true,
+        });
       } catch (err) {
-        // Clean up partial temp file
         await fsp.unlink(tmpDest).catch(() => {});
         throw err;
       }
