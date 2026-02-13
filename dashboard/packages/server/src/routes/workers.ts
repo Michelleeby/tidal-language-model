@@ -92,6 +92,7 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       expId: string;
       points?: Array<Record<string, unknown>>;
       status?: Record<string, unknown>;
+      rlLatest?: Record<string, unknown>;
     };
   }>(
     "/api/workers/:jobId/metrics",
@@ -102,7 +103,7 @@ export default async function workerRoutes(fastify: FastifyInstance) {
         return reply.status(503).send({ error: "Redis unavailable" });
       }
 
-      const { expId, points, status } = request.body;
+      const { expId, points, status, rlLatest } = request.body;
       if (!expId) {
         return reply.status(400).send({ error: "expId is required" });
       }
@@ -129,6 +130,16 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       // Write status
       if (status) {
         pipe.set(`tidal:status:${expId}`, JSON.stringify(status), "EX", 900);
+      }
+
+      // Write RL metrics (latest snapshot for dashboard polling)
+      if (rlLatest) {
+        pipe.set(
+          `tidal:rl:${expId}:latest`,
+          JSON.stringify(rlLatest),
+          "EX",
+          600,
+        );
       }
 
       await pipe.exec();

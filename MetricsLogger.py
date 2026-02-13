@@ -161,6 +161,17 @@ class MetricsLogger:
 
         logger.warning("Metrics POST failed after %d attempts: %s", retries, last_err)
 
+    def _enqueue_rl_http(self, data_point: dict):
+        """Forward RL metrics to the dashboard API via the rlLatest field."""
+        if not self._http_enabled:
+            return
+        body: dict = {"expId": self.exp_id, "rlLatest": data_point}
+        threading.Thread(
+            target=self._http_forward,
+            args=(body,),
+            daemon=True,
+        ).start()
+
     def _stop_http_flush(self):
         """Cancel the periodic flush timer."""
         if self._http_flush_timer:
@@ -461,6 +472,8 @@ class MetricsLogger:
             def _write(r):
                 r.set(f"tidal:rl:{self.exp_id}:latest", serialized, ex=600)
             self._redis_write(_write)
+
+            self._enqueue_rl_http(data_point)
 
     def finalize(self):
         """Mark training as complete."""
