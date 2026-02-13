@@ -233,6 +233,8 @@ class WorkerAgent:
             args += ["--rl-config", config["rlConfigPath"]]
         if config.get("checkpoint"):
             args += ["--checkpoint", config["checkpoint"]]
+        if config.get("timesteps"):
+            args += ["--timesteps", str(config["timesteps"])]
         return self._spawn_and_monitor(args)
 
     def _spawn_and_monitor(self, args: list[str]) -> int:

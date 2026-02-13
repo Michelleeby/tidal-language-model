@@ -1,8 +1,6 @@
 import os
 import sys
 import argparse
-import hashlib
-import subprocess
 import shutil
 import torch
 import time
@@ -13,24 +11,7 @@ yaml = YAML(typ="safe")
 from Trainer import Trainer
 from Evaluator import Evaluator
 from Utils import setup_logger
-
-
-def get_git_commit_hash():
-    try:
-        commit_hash = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"]
-        ).strip().decode("utf-8")
-        return commit_hash
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "nogit"
-
-
-def get_file_hash(filepath):
-    sha256_hash = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()[:10]
+from experiment_utils import get_git_commit_hash, get_file_hash, report_experiment_id_to_job
 
 
 def main():
@@ -65,24 +46,7 @@ def main():
     shutil.copy(args.config, os.path.join(experiment_dir, "config.yaml"))
 
     # 2b. Report experiment ID to Redis job record (if launched by worker agent)
-    job_id = os.environ.get("TIDAL_JOB_ID")
-    if job_id:
-        try:
-            import json
-            import redis as redis_lib
-            r = redis_lib.from_url(
-                os.environ.get("REDIS_URL", "redis://localhost:6379"),
-                decode_responses=True,
-            )
-            job_raw = r.hget("tidal:jobs", job_id)
-            if job_raw:
-                job = json.loads(job_raw)
-                job["experimentId"] = experiment_id
-                job["updatedAt"] = time.time()
-                r.hset("tidal:jobs", job_id, json.dumps(job))
-                r.publish("tidal:job:updates", json.dumps({"jobId": job_id}))
-        except Exception:
-            pass
+    report_experiment_id_to_job(experiment_id)
 
     # 3. Setup Logger
     logger = setup_logger("MainOrchestrator", os.path.join(experiment_dir, "main.log"), config)

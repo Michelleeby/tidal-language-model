@@ -68,8 +68,11 @@ export default function PlaygroundPage() {
             value={checkpoint}
             onChange={(e) => {
               setCheckpoint(e.target.value);
-              const filename = e.target.value.split("/").pop() ?? "";
-              if (filename.startsWith("rl_checkpoint")) {
+              // Auto-select gating mode based on checkpoint phase metadata
+              const selected = checkpointsData?.checkpoints.find(
+                (cp) => cp.path === e.target.value,
+              );
+              if (selected?.phase === "rl") {
                 setGatingMode("learned");
               }
             }}

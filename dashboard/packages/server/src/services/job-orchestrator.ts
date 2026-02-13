@@ -13,6 +13,8 @@ import type { ProvisioningChain } from "./provisioning-chain.js";
 import type { WorkerSpawner } from "./worker-spawner.js";
 import type { SSEManager } from "./sse-manager.js";
 import type { ExperimentArchiver } from "./experiment-archiver.js";
+import type { JobPolicyRegistry } from "./job-policy.js";
+import { JobHealthMonitor, type HealthMonitorConfig } from "./job-health-monitor.js";
 
 export interface OrchestratorConfig {
   defaultProvider: ComputeProviderType;
@@ -39,7 +41,7 @@ const TERMINAL_STATUSES: Set<JobStatus> = new Set([
 ]);
 
 export class JobOrchestrator {
-  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private healthMonitor: JobHealthMonitor;
   private config: OrchestratorConfig;
 
   constructor(
@@ -48,22 +50,38 @@ export class JobOrchestrator {
     private spawner: WorkerSpawner,
     private sseManager: SSEManager,
     private log: FastifyBaseLogger,
+    private policyRegistry: JobPolicyRegistry,
     config?: Partial<OrchestratorConfig>,
     private archiver?: ExperimentArchiver,
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.healthTimer = setInterval(
-      () => this.healthCheck(),
-      this.config.healthCheckIntervalMs,
+
+    const monitorConfig: HealthMonitorConfig = {
+      healthCheckIntervalMs: this.config.healthCheckIntervalMs,
+      heartbeatTimeoutMs: this.config.heartbeatTimeoutMs,
+      staleStartupTimeoutMs: this.config.staleStartupTimeoutMs,
+      remoteStartupTimeoutMs: this.config.remoteStartupTimeoutMs,
+    };
+
+    this.healthMonitor = new JobHealthMonitor(
+      store,
+      chain,
+      spawner,
+      monitorConfig,
+      (jobId, status, error) => this.handleJobComplete(jobId, status, error),
+      log,
     );
+    this.healthMonitor.start();
   }
 
   async createJob(request: CreateJobRequest): Promise<TrainingJob> {
-    // Enforce one active LM job at a time
-    if (request.type === "lm-training") {
-      const active = await this.getActiveJob("lm-training");
-      if (active) {
-        throw new Error("An LM training job is already running");
+    // Enforce per-type concurrency via policy
+    const policy = this.policyRegistry.get(request.type);
+    if (policy) {
+      const activeJobs = await this.store.listActive();
+      const blocked = policy.checkConcurrency(activeJobs);
+      if (blocked) {
+        throw new Error(blocked);
       }
     }
 
@@ -109,7 +127,8 @@ export class JobOrchestrator {
         return failed!;
       }
 
-      const result = await provider.provision(job);
+      const gpuTier = policy?.gpuTier();
+      const result = await provider.provision(job, gpuTier);
       if (!result.success) {
         const failed = await this.store.update(job.jobId, {
           status: "failed",
@@ -233,9 +252,11 @@ export class JobOrchestrator {
 
     // Archive experiment data from Redis to disk before TTLs expire
     if (job?.experimentId && this.archiver) {
-      this.archiver.archive(job.experimentId).catch((err) => {
+      try {
+        await this.archiver.archive(job.experimentId);
+      } catch (err) {
         this.log.error({ expId: job.experimentId, err }, "Archival failed in handleJobComplete");
-      });
+      }
     }
 
     // Deprovision remote instances on completion
@@ -248,97 +269,8 @@ export class JobOrchestrator {
   }
 
   stop(): void {
-    if (this.healthTimer) {
-      clearInterval(this.healthTimer);
-      this.healthTimer = null;
-    }
+    this.healthMonitor.stop();
     this.spawner.cleanup();
-  }
-
-  private async healthCheck(): Promise<void> {
-    try {
-      const active = await this.store.listActive();
-      for (const job of active) {
-        if (TERMINAL_STATUSES.has(job.status)) continue;
-
-        const provider = this.chain.getProvider(job.provider);
-        const isRemote = provider?.isRemote ?? false;
-
-        // Jobs stuck in startup phases (pending/provisioning/starting)
-        if (
-          job.status === "pending" ||
-          job.status === "provisioning" ||
-          job.status === "starting"
-        ) {
-          const age = Date.now() - job.updatedAt;
-          const timeout = isRemote
-            ? this.config.remoteStartupTimeoutMs
-            : this.config.staleStartupTimeoutMs;
-          if (age > timeout) {
-            this.log.warn(
-              { jobId: job.jobId, status: job.status, ageMs: age },
-              "Job stuck in startup — marking failed",
-            );
-            await this.handleJobComplete(
-              job.jobId,
-              "failed",
-              `Stuck in ${job.status} for ${Math.round(age / 1000)}s`,
-            );
-          }
-          continue;
-        }
-
-        // Running/completing/stopping jobs — check heartbeat
-        const heartbeat = await this.store.getHeartbeat(job.jobId);
-        if (heartbeat === null) {
-          // Remote jobs: rely on heartbeat only (no local process to check)
-          if (isRemote) continue;
-          // Local jobs: check if worker process is still running
-          if (!this.spawner.isRunning(job.jobId)) {
-            this.log.warn(
-              { jobId: job.jobId },
-              "Worker not running, no heartbeat — marking failed",
-            );
-            await this.handleJobComplete(
-              job.jobId,
-              "failed",
-              "Worker process not found",
-            );
-          }
-          continue;
-        }
-
-        const age = Date.now() - heartbeat * 1000;
-        if (age > this.config.heartbeatTimeoutMs) {
-          // Remote jobs: check if the instance is still alive before killing
-          if (isRemote && provider) {
-            try {
-              const alive = await provider.isAlive(job);
-              if (alive) {
-                this.log.info(
-                  { jobId: job.jobId, ageMs: age },
-                  "Heartbeat stale but instance still alive — skipping",
-                );
-                continue;
-              }
-            } catch {
-              // isAlive check failed, proceed with timeout
-            }
-          }
-          this.log.warn(
-            { jobId: job.jobId, ageMs: age },
-            "Heartbeat stale — marking failed",
-          );
-          await this.handleJobComplete(
-            job.jobId,
-            "failed",
-            "Worker heartbeat timeout",
-          );
-        }
-      }
-    } catch {
-      // Non-fatal health check error
-    }
   }
 
   private broadcast(job: TrainingJob): void {

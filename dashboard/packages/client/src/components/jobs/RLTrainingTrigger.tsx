@@ -19,6 +19,9 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
   const { data: activeData } = useActiveJob();
   const createJob = useCreateJob();
   const [selectedCheckpoint, setSelectedCheckpoint] = useState("");
+  const [configPath, setConfigPath] = useState("configs/base_config.yaml");
+  const [rlConfigPath, setRlConfigPath] = useState("configs/rl_config.yaml");
+  const [timesteps, setTimesteps] = useState("");
 
   const activeJob = activeData?.job ?? null;
   const hasActiveRLJob =
@@ -34,9 +37,10 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
     if (!selectedCheckpoint) return;
     createJob.mutate({
       type: "rl-training",
-      configPath: "configs/base_config.yaml",
-      rlConfigPath: "configs/rl_config.yaml",
+      configPath,
+      rlConfigPath,
       checkpoint: selectedCheckpoint,
+      timesteps: timesteps ? parseInt(timesteps, 10) : undefined,
     });
   };
 
@@ -70,6 +74,28 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
                 </option>
               ))}
             </select>
+
+            <input
+              type="text"
+              value={configPath}
+              onChange={(e) => setConfigPath(e.target.value)}
+              placeholder="Base config"
+              className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 w-44"
+            />
+            <input
+              type="text"
+              value={rlConfigPath}
+              onChange={(e) => setRlConfigPath(e.target.value)}
+              placeholder="RL config"
+              className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 w-40"
+            />
+            <input
+              type="text"
+              value={timesteps}
+              onChange={(e) => setTimesteps(e.target.value.replace(/\D/g, ""))}
+              placeholder="Timesteps (optional)"
+              className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 w-36"
+            />
 
             <button
               onClick={handleStart}

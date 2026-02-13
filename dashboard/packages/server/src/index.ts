@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, validateConfig, type ServerConfig } from "./config.js";
 import redisPlugin from "./plugins/redis.js";
 import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
@@ -26,6 +26,19 @@ declare module "fastify" {
 
 async function main() {
   const config = loadConfig();
+
+  // Validate config before constructing the server
+  const issues = validateConfig(config);
+  for (const issue of issues) {
+    if (issue.level === "error") {
+      console.error(`Config error: ${issue.message}`);
+    } else {
+      console.warn(`Config warning: ${issue.message}`);
+    }
+  }
+  if (issues.some((i) => i.level === "error")) {
+    process.exit(1);
+  }
 
   const fastify = Fastify({
     logger: {

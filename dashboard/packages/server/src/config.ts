@@ -2,6 +2,49 @@ import path from "node:path";
 
 import type { ComputeProviderType } from "@tidal/shared";
 
+export interface ConfigWarning {
+  level: "warn" | "error";
+  message: string;
+}
+
+/**
+ * Validate server config at startup. Returns a list of warnings/errors.
+ * Callers should log warnings and throw on errors.
+ */
+export function validateConfig(config: ServerConfig): ConfigWarning[] {
+  const issues: ConfigWarning[] = [];
+
+  if (!config.authToken) {
+    issues.push({
+      level: "warn",
+      message: "TIDAL_AUTH_TOKEN is not set — worker auth and remote jobs will not work",
+    });
+  }
+
+  if (config.defaultComputeProvider === "vastai") {
+    if (!config.vastaiApiKey) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is vastai but VASTAI_API_KEY is not set",
+      });
+    }
+    if (!config.dashboardUrl) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is vastai but TIDAL_DASHBOARD_URL is not set",
+      });
+    }
+    if (!config.repoUrl) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is vastai but TIDAL_REPO_URL is not set",
+      });
+    }
+  }
+
+  return issues;
+}
+
 export interface ServerConfig {
   port: number;
   host: string;

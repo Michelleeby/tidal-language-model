@@ -7,16 +7,27 @@ const SIGNAL_PREFIX = "tidal:job:";
 const UPDATES_CHANNEL = "tidal:job:updates";
 const HEARTBEAT_PREFIX = "tidal:worker:";
 
-const SIGNAL_TTL = 300;
-
 const TERMINAL_STATUSES: Set<JobStatus> = new Set([
   "completed",
   "failed",
   "cancelled",
 ]);
 
+export interface JobStoreConfig {
+  /** TTL for signal keys in seconds (default 300). */
+  signalTtl?: number;
+  /** TTL for heartbeat keys in seconds (default 30). */
+  heartbeatTtl?: number;
+}
+
 export class JobStore {
-  constructor(private redis: Redis | null) {}
+  private signalTtl: number;
+  private heartbeatTtl: number;
+
+  constructor(private redis: Redis | null, config?: JobStoreConfig) {
+    this.signalTtl = config?.signalTtl ?? 300;
+    this.heartbeatTtl = config?.heartbeatTtl ?? 30;
+  }
 
   private ensureRedis(): Redis {
     if (!this.redis) throw new Error("Redis unavailable");
@@ -73,7 +84,7 @@ export class JobStore {
   async sendSignal(jobId: string, signal: JobSignal): Promise<void> {
     const r = this.ensureRedis();
     const key = `${SIGNAL_PREFIX}${jobId}:signal`;
-    await r.set(key, signal, "EX", SIGNAL_TTL);
+    await r.set(key, signal, "EX", this.signalTtl);
     await r.publish(UPDATES_CHANNEL, JSON.stringify({ jobId, signal }));
   }
 
@@ -97,6 +108,6 @@ export class JobStore {
   async setHeartbeat(jobId: string): Promise<void> {
     const r = this.ensureRedis();
     const key = `${HEARTBEAT_PREFIX}${jobId}:heartbeat`;
-    await r.set(key, String(Date.now() / 1000), "EX", 30);
+    await r.set(key, String(Date.now() / 1000), "EX", this.heartbeatTtl);
   }
 }

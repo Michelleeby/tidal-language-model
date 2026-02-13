@@ -5,6 +5,8 @@ import path from "node:path";
 import type { ServerConfig } from "../config.js";
 import type { GenerateRequest, GenerateResponse } from "@tidal/shared";
 
+const DEFAULT_CONFIG_PATH = "configs/base_config.yaml";
+
 /**
  * Dual-mode generation bridge:
  * - If INFERENCE_URL is set → HTTP POST to the inference sidecar (production/Docker)
@@ -141,16 +143,32 @@ export class GenerationBridge {
     return (await res.json()) as GenerateResponse;
   }
 
+  /**
+   * Resolve the config path for generation: prefer the config.yaml saved in the
+   * experiment directory (copied there by Main.py), fall back to the default.
+   */
+  private async resolveConfigPath(checkpointPath: string): Promise<string> {
+    const expDir = path.dirname(checkpointPath);
+    const expConfig = path.join(expDir, "config.yaml");
+    try {
+      await fsp.access(expConfig);
+      return expConfig;
+    } catch {
+      return DEFAULT_CONFIG_PATH;
+    }
+  }
+
   private async generateViaSubprocess(
     req: GenerateRequest,
     modelCheckpoint: string,
     rlCheckpoint: string | undefined,
     start: number,
   ): Promise<GenerateResponse> {
+    const configPath = await this.resolveConfigPath(modelCheckpoint);
     const args = [
       "Generator.py",
       "--config",
-      "configs/base_config.yaml",
+      configPath,
       "--checkpoint",
       modelCheckpoint,
       "--prompt",

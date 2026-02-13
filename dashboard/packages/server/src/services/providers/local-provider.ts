@@ -3,6 +3,7 @@ import type {
   ComputeProvider,
   ProvisionResult,
 } from "../compute-provider.js";
+import type { GpuTier } from "../job-policy.js";
 import type { WorkerSpawner } from "../worker-spawner.js";
 
 export class LocalProvider implements ComputeProvider {
@@ -15,7 +16,7 @@ export class LocalProvider implements ComputeProvider {
     return true;
   }
 
-  async provision(_job: TrainingJob): Promise<ProvisionResult> {
+  async provision(_job: TrainingJob, _gpuTier?: GpuTier): Promise<ProvisionResult> {
     // Worker spawning is handled separately by WorkerSpawner
     return { success: true };
   }

@@ -73,9 +73,11 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       if (status === "completed" || status === "failed") {
         const expId = updated.experimentId;
         if (expId) {
-          archiver.archive(expId).catch((err) => {
+          try {
+            await archiver.archive(expId);
+          } catch (err) {
             fastify.log.error({ expId, err }, "Archival failed");
-          });
+          }
         }
       }
 

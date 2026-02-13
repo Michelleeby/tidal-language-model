@@ -15,6 +15,7 @@ import { LocalProvider } from "../services/providers/local-provider.js";
 import { AWSProvider } from "../services/providers/aws-provider.js";
 import { VastAIProvider } from "../services/providers/vastai-provider.js";
 import { ExperimentArchiver } from "../services/experiment-archiver.js";
+import { JobPolicyRegistry } from "../services/job-policy.js";
 
 export default async function jobRoutes(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
@@ -41,12 +42,14 @@ export default async function jobRoutes(fastify: FastifyInstance) {
     config.experimentsDir,
     fastify.log,
   );
+  const policyRegistry = new JobPolicyRegistry();
   const orchestrator = new JobOrchestrator(
     store,
     chain,
     spawner,
     fastify.sseManager,
     fastify.log,
+    policyRegistry,
     { defaultProvider: config.defaultComputeProvider },
     archiver,
   );

@@ -31,9 +31,7 @@ Usage:
 import os
 import sys
 import argparse
-import hashlib
 import shutil
-import subprocess
 import time
 
 import torch
@@ -47,25 +45,9 @@ from GatingModulator import GatingModulator
 from RewardComputer import RewardComputer
 from RLTrainer import PPOTrainer, run_ablation_study
 from MetricsLogger import MetricsLogger
+from experiment_utils import get_git_commit_hash, get_file_hash, resolve_device
 
 yaml = YAML(typ="safe")
-
-
-def get_git_commit_hash():
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"]
-        ).strip().decode("utf-8")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "nogit"
-
-
-def get_file_hash(filepath):
-    sha256_hash = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()[:10]
 
 
 def load_model(config, checkpoint_path, device):
@@ -160,11 +142,7 @@ def main():
     if args.timesteps is not None:
         merged_config["RL_TOTAL_TIMESTEPS"] = args.timesteps
 
-    device_str = merged_config.get("DEVICE", "auto")
-    if device_str == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(device_str)
+    device = resolve_device(merged_config)
     print(f"Using device: {device}")
 
     if args.experiment_dir:

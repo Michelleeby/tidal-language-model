@@ -3,6 +3,7 @@ import type {
   ComputeProvider,
   ProvisionResult,
 } from "../compute-provider.js";
+import type { GpuTier } from "../job-policy.js";
 
 export class AWSProvider implements ComputeProvider {
   readonly type = "aws" as const;
@@ -12,7 +13,7 @@ export class AWSProvider implements ComputeProvider {
     return false;
   }
 
-  async provision(_job: TrainingJob): Promise<ProvisionResult> {
+  async provision(_job: TrainingJob, _gpuTier?: GpuTier): Promise<ProvisionResult> {
     return { success: false, error: "AWS provider not implemented" };
   }
 

@@ -50,11 +50,15 @@ export default function TrainingControlBar() {
   const [confirmStop, setConfirmStop] = useState(false);
 
   const activeJob = activeData?.job ?? null;
-  const hasActiveJob = activeJob != null &&
-    !["completed", "failed", "cancelled"].includes(activeJob.status);
+  // Only block the LM Start button when an LM job is active (not RL jobs)
+  const hasActiveLMJob = (jobsData?.jobs ?? []).some(
+    (j) =>
+      j.type === "lm-training" &&
+      !["completed", "failed", "cancelled"].includes(j.status),
+  );
 
   // Find most recent failed job (within last 5 minutes) to show error
-  const recentFailedJob = !hasActiveJob
+  const recentFailedJob = !hasActiveLMJob
     ? (jobsData?.jobs ?? [])
         .filter((j) => j.status === "failed" && j.completedAt && Date.now() - j.completedAt < 300_000)
         .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))[0] ?? null
@@ -110,7 +114,7 @@ export default function TrainingControlBar() {
       {!showStartDialog ? (
         <button
           onClick={() => setShowStartDialog(true)}
-          disabled={hasActiveJob || createJob.isPending}
+          disabled={hasActiveLMJob || createJob.isPending}
           className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           Start Training

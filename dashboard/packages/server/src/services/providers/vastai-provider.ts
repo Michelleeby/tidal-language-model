@@ -4,14 +4,18 @@ import type {
   ComputeProvider,
   ProvisionResult,
 } from "../compute-provider.js";
+import type { GpuTier } from "../job-policy.js";
 
 const VASTAI_API = "https://console.vast.ai/api/v0";
-const MIN_GPU_RAM_MB = 16_000;
-const MIN_CPU_CORES = 16;
 const MIN_INET_DOWN_MBPS = 800;
 const MIN_INET_UP_MBPS = 800;
 const MIN_RELIABILITY = 0.99;
 const DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
+
+const GPU_TIERS: Record<GpuTier, { minGpuRamMb: number; minCpuCores: number }> = {
+  standard: { minGpuRamMb: 16_000, minCpuCores: 16 },
+  light:    { minGpuRamMb: 8_000,  minCpuCores: 8  },
+};
 
 export interface VastAIProviderConfig {
   apiKey: string | null;
@@ -52,7 +56,7 @@ export class VastAIProvider implements ComputeProvider {
     return this.apiKey !== null && this.apiKey.length > 0;
   }
 
-  async provision(job: TrainingJob): Promise<ProvisionResult> {
+  async provision(job: TrainingJob, gpuTier?: GpuTier): Promise<ProvisionResult> {
     if (!this.apiKey) {
       return { success: false, error: "vast.ai API key not configured" };
     }
@@ -65,7 +69,7 @@ export class VastAIProvider implements ComputeProvider {
 
     try {
       // 1. Search for cheapest GPU offer
-      const offer = await this.findCheapestOffer();
+      const offer = await this.findCheapestOffer(gpuTier ?? "standard");
       if (!offer) {
         return { success: false, error: "No suitable vast.ai GPU offers found" };
       }
@@ -131,10 +135,11 @@ export class VastAIProvider implements ComputeProvider {
     }
   }
 
-  private async findCheapestOffer(): Promise<VastOffer | null> {
+  private async findCheapestOffer(tier: GpuTier): Promise<VastOffer | null> {
+    const { minGpuRamMb, minCpuCores } = GPU_TIERS[tier];
     const query = JSON.stringify({
-      gpu_ram: { gte: MIN_GPU_RAM_MB },
-      cpu_cores_effective: { gte: MIN_CPU_CORES },
+      gpu_ram: { gte: minGpuRamMb },
+      cpu_cores_effective: { gte: minCpuCores },
       inet_down: { gte: MIN_INET_DOWN_MBPS },
       inet_up: { gte: MIN_INET_UP_MBPS },
       rentable: { eq: true },
