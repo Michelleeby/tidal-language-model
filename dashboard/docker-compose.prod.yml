@@ -16,6 +16,8 @@ services:
     build:
       context: ..
       dockerfile: inference.Dockerfile
+      args:
+        PLUGIN: tidal
     restart: unless-stopped
     volumes:
       - experiments:/data/experiments

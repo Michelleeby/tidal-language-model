@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+ARG PLUGIN=tidal
+
 # Install CPU-only PyTorch first (much smaller than CUDA variant)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
@@ -9,17 +11,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements-inference.txt .
 RUN pip install --no-cache-dir -r requirements-inference.txt
 
-# Copy only the Python files needed for inference
-COPY TransformerLM.py .
-COPY DataPipeline.py .
-COPY Generator.py .
-COPY GatingPolicyAgent.py .
-COPY GatingModulator.py .
-COPY GatingEnvironment.py .
-COPY inference_server.py .
-
-# Copy config files (tracked in git, needed at runtime)
-COPY configs/ configs/
+# Copy entire plugin directory — all .py files land flat in /app,
+# configs/ at /app/configs/. Matches inference_server.py import style.
+COPY plugins/${PLUGIN}/ .
 
 # Pre-download GPT-2 tokenizer into the image so first request is fast
 RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('gpt2')"

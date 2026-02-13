@@ -1,0 +1,11 @@
+tidal-env/
+legacy_research/
+.git/
+node_modules/
+dashboard/node_modules/
+**/__pycache__/
+**/*.pyc
+**/data_cache/
+plugins/*/tests/
+.vscode/
+.idea/
