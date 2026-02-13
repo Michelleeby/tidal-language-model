@@ -371,6 +371,8 @@ class PPOTrainer:
             checkpoint_path,
         )
         print(f"Saved checkpoint: {checkpoint_path}")
+        if self.metrics_logger is not None:
+            self.metrics_logger.upload_checkpoint(checkpoint_path)
 
     def load_checkpoint(self, checkpoint_path: str):
         checkpoint = torch.load(checkpoint_path, map_location=self.device)

@@ -197,6 +197,7 @@ class Trainer:
             "scaler_state_dict": self.scaler.state_dict(),
             "epoch": epoch,
         }, checkpoint_path)
+        self.metrics_logger.upload_checkpoint(checkpoint_path)
 
     def _load_checkpoint(self, checkpoint_path):
         self.logger.info(f"Loading model from checkpoint: {checkpoint_path}")
@@ -332,6 +333,7 @@ class Trainer:
             self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
             state_dict = self.model._orig_mod.state_dict() if hasattr(self.model, "_orig_mod") else self.model.state_dict()
             torch.save(state_dict, final_model_path)
+            self.metrics_logger.upload_checkpoint(final_model_path)
 
             self.metrics_logger.finalize()
 

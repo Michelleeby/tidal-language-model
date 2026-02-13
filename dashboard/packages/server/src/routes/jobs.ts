@@ -14,6 +14,7 @@ import { WorkerSpawner } from "../services/worker-spawner.js";
 import { LocalProvider } from "../services/providers/local-provider.js";
 import { AWSProvider } from "../services/providers/aws-provider.js";
 import { VastAIProvider } from "../services/providers/vastai-provider.js";
+import { ExperimentArchiver } from "../services/experiment-archiver.js";
 
 export default async function jobRoutes(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
@@ -35,6 +36,11 @@ export default async function jobRoutes(fastify: FastifyInstance) {
       log: fastify.log,
     }),
   ]);
+  const archiver = new ExperimentArchiver(
+    fastify.redis,
+    config.experimentsDir,
+    fastify.log,
+  );
   const orchestrator = new JobOrchestrator(
     store,
     chain,
@@ -42,6 +48,7 @@ export default async function jobRoutes(fastify: FastifyInstance) {
     fastify.sseManager,
     fastify.log,
     { defaultProvider: config.defaultComputeProvider },
+    archiver,
   );
 
   fastify.addHook("onClose", () => orchestrator.stop());

@@ -1,11 +1,33 @@
 import type { FastifyInstance } from "fastify";
 import type { JobSignal, JobStatus } from "@tidal/shared";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createWriteStream } from "node:fs";
+import type { Readable } from "node:stream";
 import { JobStore } from "../services/job-store.js";
 import type { SSEManager } from "../services/sse-manager.js";
+import { ExperimentArchiver } from "../services/experiment-archiver.js";
+
+const CHECKPOINT_FILENAME_RE = /^[\w.-]+\.pth$/;
 
 export default async function workerRoutes(fastify: FastifyInstance) {
   const store = new JobStore(fastify.redis);
   const sseManager: SSEManager = fastify.sseManager;
+  const experimentsDir = fastify.serverConfig.experimentsDir;
+  const archiver = new ExperimentArchiver(
+    fastify.redis,
+    experimentsDir,
+    fastify.log,
+  );
+
+  // Register raw body parser for checkpoint uploads — pass stream through as-is
+  fastify.addContentTypeParser(
+    "application/octet-stream",
+    (_req: unknown, payload: Readable, done: (err: Error | null, body?: Readable) => void) => {
+      done(null, payload);
+    },
+  );
 
   // POST /api/workers/:jobId/heartbeat — worker sends heartbeat
   fastify.post<{ Params: { jobId: string } }>(
@@ -46,6 +68,17 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       }
 
       sseManager.broadcastJobUpdate(updated);
+
+      // Archive experiment data to disk before Redis TTLs expire
+      if (status === "completed" || status === "failed") {
+        const expId = updated.experimentId;
+        if (expId) {
+          archiver.archive(expId).catch((err) => {
+            fastify.log.error({ expId, err }, "Archival failed");
+          });
+        }
+      }
+
       return reply.send({ ok: true, status: updated.status });
     },
   );
@@ -99,6 +132,88 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       await pipe.exec();
 
       return reply.send({ ok: true, ingested: points?.length ?? 0 });
+    },
+  );
+
+  // PATCH /api/workers/:jobId/experiment-id — worker reports its experiment ID
+  fastify.patch<{
+    Params: { jobId: string };
+    Body: { experimentId: string };
+  }>(
+    "/api/workers/:jobId/experiment-id",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { jobId } = request.params;
+      const { experimentId } = request.body;
+
+      if (!experimentId) {
+        return reply.status(400).send({ error: "experimentId is required" });
+      }
+
+      const updated = await store.update(jobId, { experimentId });
+      if (!updated) {
+        return reply.status(404).send({ error: "Job not found" });
+      }
+
+      sseManager.broadcastJobUpdate(updated);
+      return reply.send({ ok: true, experimentId });
+    },
+  );
+
+  // PUT /api/workers/:jobId/checkpoints/:filename — worker uploads a checkpoint file
+  fastify.put<{
+    Params: { jobId: string; filename: string };
+    Querystring: { expId?: string };
+  }>(
+    "/api/workers/:jobId/checkpoints/:filename",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { jobId, filename } = request.params;
+
+      // Validate filename to prevent path traversal
+      if (!CHECKPOINT_FILENAME_RE.test(filename)) {
+        return reply
+          .status(400)
+          .send({ error: "Invalid filename — must match /^[\\w.-]+\\.pth$/" });
+      }
+
+      // Resolve experiment ID from job or query param fallback
+      const job = await store.get(jobId);
+      if (!job) {
+        return reply.status(404).send({ error: "Job not found" });
+      }
+
+      const expId = job.experimentId ?? request.query.expId;
+      if (!expId) {
+        return reply.status(400).send({
+          error:
+            "No experimentId on job — pass ?expId= query param as fallback",
+        });
+      }
+
+      const expDir = path.join(experimentsDir, expId);
+      await fsp.mkdir(expDir, { recursive: true });
+
+      const dest = path.join(expDir, filename);
+      const tmpDest = dest + ".tmp";
+
+      try {
+        const bodyStream = request.body as Readable;
+        await pipeline(bodyStream, createWriteStream(tmpDest));
+        await fsp.rename(tmpDest, dest);
+
+        const stat = await fsp.stat(dest);
+        fastify.log.info(
+          { jobId, expId, filename, sizeBytes: stat.size },
+          "Checkpoint uploaded",
+        );
+
+        return reply.send({ ok: true, filename, sizeBytes: stat.size });
+      } catch (err) {
+        // Clean up partial temp file
+        await fsp.unlink(tmpDest).catch(() => {});
+        throw err;
+      }
     },
   );
 

@@ -12,6 +12,7 @@ import type { JobStore } from "./job-store.js";
 import type { ProvisioningChain } from "./provisioning-chain.js";
 import type { WorkerSpawner } from "./worker-spawner.js";
 import type { SSEManager } from "./sse-manager.js";
+import type { ExperimentArchiver } from "./experiment-archiver.js";
 
 export interface OrchestratorConfig {
   defaultProvider: ComputeProviderType;
@@ -48,6 +49,7 @@ export class JobOrchestrator {
     private sseManager: SSEManager,
     private log: FastifyBaseLogger,
     config?: Partial<OrchestratorConfig>,
+    private archiver?: ExperimentArchiver,
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.healthTimer = setInterval(
@@ -228,6 +230,13 @@ export class JobOrchestrator {
 
     const updated = await this.store.update(jobId, patch);
     if (updated) this.broadcast(updated);
+
+    // Archive experiment data from Redis to disk before TTLs expire
+    if (job?.experimentId && this.archiver) {
+      this.archiver.archive(job.experimentId).catch((err) => {
+        this.log.error({ expId: job.experimentId, err }, "Archival failed in handleJobComplete");
+      });
+    }
 
     // Deprovision remote instances on completion
     if (job) {

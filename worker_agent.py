@@ -7,6 +7,7 @@ and reports status back.
 """
 
 import argparse
+import http.client
 import json
 import os
 import signal
@@ -17,6 +18,7 @@ import time
 import urllib.request
 import urllib.error
 from abc import ABC, abstractmethod
+from urllib.parse import urlparse
 
 import redis as redis_lib
 
@@ -198,6 +200,8 @@ class WorkerAgent:
                 return
 
             if exit_code == 0:
+                if isinstance(self.transport, HttpTransport):
+                    self._final_checkpoint_sweep()
                 self.transport.update_status(self.job_id, "completed")
             else:
                 tail = self._get_stderr_tail()
@@ -301,6 +305,70 @@ class WorkerAgent:
         sentinel = os.path.join(self._project_root, ".training_complete_signal")
         with open(sentinel, "w") as f:
             f.write(str(time.time()))
+
+    def _final_checkpoint_sweep(self):
+        """Safety net: upload any .pth files that background threads may have missed."""
+        exp_base = os.path.join(self._project_root, "experiments")
+        if not os.path.isdir(exp_base):
+            return
+
+        assert isinstance(self.transport, HttpTransport)
+        for exp_id in os.listdir(exp_base):
+            exp_dir = os.path.join(exp_base, exp_id)
+            if not os.path.isdir(exp_dir):
+                continue
+            for fname in os.listdir(exp_dir):
+                if not fname.endswith(".pth"):
+                    continue
+                filepath = os.path.join(exp_dir, fname)
+                print(f"Final sweep: uploading {filepath}", file=sys.stderr)
+                self._upload_checkpoint(filepath, exp_id, fname)
+
+    def _upload_checkpoint(self, filepath: str, exp_id: str, filename: str):
+        """Stream a checkpoint file to the dashboard API."""
+        assert isinstance(self.transport, HttpTransport)
+        parsed = urlparse(self.transport.api_url)
+        use_https = parsed.scheme == "https"
+        host = parsed.hostname
+        port = parsed.port or (443 if use_https else 80)
+
+        file_size = os.path.getsize(filepath)
+        url_path = (
+            f"/api/workers/{self.job_id}/checkpoints/{filename}"
+            f"?expId={exp_id}"
+        )
+
+        try:
+            if use_https:
+                conn = http.client.HTTPSConnection(host, port, timeout=300)
+            else:
+                conn = http.client.HTTPConnection(host, port, timeout=300)
+
+            conn.putrequest("PUT", url_path)
+            conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
+            conn.putheader("Content-Type", "application/octet-stream")
+            conn.putheader("Content-Length", str(file_size))
+            conn.putheader("User-Agent", "TidalWorker/1.0")
+            conn.endheaders()
+
+            chunk_size = 1024 * 1024  # 1MB
+            with open(filepath, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    conn.send(chunk)
+
+            resp = conn.getresponse()
+            body = resp.read().decode()[:200]
+            conn.close()
+
+            if 200 <= resp.status < 300:
+                print(f"Uploaded {filename} ({file_size} bytes)", file=sys.stderr)
+            else:
+                print(f"Upload failed for {filename}: HTTP {resp.status} {body}", file=sys.stderr)
+        except Exception as e:
+            print(f"Upload error for {filename}: {e}", file=sys.stderr)
 
     def _start_heartbeat(self):
         """Thread: send heartbeat every 10s."""

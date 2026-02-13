@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import time
@@ -6,6 +7,7 @@ import threading
 import urllib.request
 import urllib.error
 from collections import deque
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +166,112 @@ class MetricsLogger:
             self._http_flush_timer.cancel()
             self._http_flush_timer = None
 
+    # ── Checkpoint upload ────────────────────────────────────────────────
+
+    def upload_checkpoint(self, checkpoint_path: str):
+        """Upload a checkpoint file to the dashboard API (no-op if HTTP disabled)."""
+        if not self._http_enabled:
+            return
+        if not os.path.isfile(checkpoint_path):
+            logger.warning("Checkpoint file not found for upload: %s", checkpoint_path)
+            return
+        filename = os.path.basename(checkpoint_path)
+        t = threading.Thread(
+            target=self._upload_file,
+            args=(checkpoint_path, filename),
+            daemon=True,
+        )
+        t.start()
+
+    def _upload_file(self, filepath: str, filename: str, retries: int = 3):
+        """Stream a file to the dashboard checkpoint endpoint with retries."""
+        parsed = urlparse(self._http_url)
+        use_https = parsed.scheme == "https"
+        host = parsed.hostname
+        port = parsed.port or (443 if use_https else 80)
+
+        file_size = os.path.getsize(filepath)
+        url_path = (
+            f"/api/workers/{self._http_job_id}/checkpoints/{filename}"
+            f"?expId={self.exp_id}"
+        )
+
+        last_err = None
+        for attempt in range(retries):
+            try:
+                if use_https:
+                    conn = http.client.HTTPSConnection(host, port, timeout=300)
+                else:
+                    conn = http.client.HTTPConnection(host, port, timeout=300)
+
+                conn.putrequest("PUT", url_path)
+                conn.putheader("Authorization", f"Bearer {self._http_token}")
+                conn.putheader("Content-Type", "application/octet-stream")
+                conn.putheader("Content-Length", str(file_size))
+                conn.putheader("User-Agent", "TidalMetrics/1.0")
+                conn.endheaders()
+
+                chunk_size = 1024 * 1024  # 1MB
+                with open(filepath, "rb") as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        conn.send(chunk)
+
+                resp = conn.getresponse()
+                body = resp.read()
+                conn.close()
+
+                if 200 <= resp.status < 300:
+                    logger.info(
+                        "Uploaded checkpoint %s (%d bytes): %s",
+                        filename, file_size, body.decode()[:200],
+                    )
+                    return
+                elif resp.status >= 500 and attempt < retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "HTTP %d uploading %s (attempt %d/%d) — retrying in %ds",
+                        resp.status, filename, attempt + 1, retries, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                else:
+                    logger.warning(
+                        "HTTP %d uploading checkpoint %s: %s",
+                        resp.status, filename, body.decode()[:200],
+                    )
+                    return
+            except Exception as e:
+                last_err = e
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
+                    logger.debug(
+                        "Checkpoint upload failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt + 1, retries, e, wait,
+                    )
+                    time.sleep(wait)
+
+        logger.warning(
+            "Checkpoint upload failed after %d attempts: %s", retries, last_err,
+        )
+
+    def _report_experiment_id(self):
+        """Tell the dashboard API which experiment this job belongs to."""
+        url = f"{self._http_url}/api/workers/{self._http_job_id}/experiment-id"
+        data = json.dumps({"experimentId": self.exp_id}).encode()
+        req = urllib.request.Request(url, data=data, method="PATCH")
+        req.add_header("Authorization", f"Bearer {self._http_token}")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "TidalMetrics/1.0")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+                logger.info("Reported experiment ID %s for job %s", self.exp_id, self._http_job_id)
+        except Exception as e:
+            logger.warning("Failed to report experiment ID: %s", e)
+
     # ── File I/O ─────────────────────────────────────────────────────────
 
     def _initialize_files(self, reset_metrics: bool = True):
@@ -174,6 +282,8 @@ class MetricsLogger:
             "start_time": time.time(),
             "last_update": time.time(),
         })
+        if self._http_enabled:
+            self._report_experiment_id()
 
     def _update_status(self, status_data: dict):
         with open(self.status_file, "w") as f:
