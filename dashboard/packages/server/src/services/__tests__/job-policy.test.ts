@@ -85,8 +85,8 @@ describe("RLTrainingPolicy", () => {
     assert.ok(result.includes("already running"));
   });
 
-  it("returns 'light' GPU tier", () => {
-    assert.equal(policy.gpuTier(), "light");
+  it("returns 'standard' GPU tier", () => {
+    assert.equal(policy.gpuTier(), "standard");
   });
 });
 

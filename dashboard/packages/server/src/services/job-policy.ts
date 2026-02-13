@@ -1,6 +1,6 @@
 import type { JobType, TrainingJob } from "@tidal/shared";
 
-export type GpuTier = "standard" | "light";
+export type GpuTier = "standard";
 
 export interface JobPolicy {
   readonly type: JobType;
@@ -36,7 +36,7 @@ export class RLTrainingPolicy implements JobPolicy {
   }
 
   gpuTier(): GpuTier {
-    return "light";
+    return "standard";
   }
 }
 

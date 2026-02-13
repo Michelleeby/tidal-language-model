@@ -15,7 +15,6 @@ const DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
 
 const GPU_TIERS: Record<GpuTier, { minGpuRamMb: number; minCpuCores: number }> = {
   standard: { minGpuRamMb: 16_000, minCpuCores: 16 },
-  light:    { minGpuRamMb: 8_000,  minCpuCores: 8  },
 };
 
 export interface VastAIProviderConfig {
