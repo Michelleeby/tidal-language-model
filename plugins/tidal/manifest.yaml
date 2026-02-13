@@ -1,0 +1,146 @@
+# Tidal Gated Transformer LM — Plugin Manifest
+# This file describes everything the dashboard needs to know about
+# the tidal model plugin: training phases, checkpoints, generation,
+# metrics, and infrastructure.
+
+name: tidal
+displayName: Tidal Gated Transformer LM
+version: 1.0.0
+description: >
+  A gated transformer language model (~30.7M params) trained on TinyStories
+  with PPO-based RL gating control for creativity, focus, and stability.
+
+# ── Training phases ──────────────────────────────────────────────────
+
+trainingPhases:
+  - id: lm-training
+    displayName: Language Model Pretraining
+    entrypoint: Main.py
+    configFiles:
+      - configs/base_config.yaml
+    args:
+      config: "--config"
+      resume: "--resume"
+    concurrency: 1
+    gpuTier: standard
+
+  - id: rl-training
+    displayName: RL Gating Controller
+    entrypoint: train_rl.py
+    configFiles:
+      - configs/base_config.yaml
+      - configs/rl_config.yaml
+    args:
+      config: "--config"
+      rlConfig: "--rl-config"
+      checkpoint: "--checkpoint"
+      timesteps: "--timesteps"
+    concurrency: 1
+    gpuTier: standard
+
+# ── Checkpoint patterns ──────────────────────────────────────────────
+
+checkpointPatterns:
+  - phase: foundational
+    glob: "checkpoint_foundational_epoch_*.pth"
+    epochCapture: "epoch_(\\d+)"
+  - phase: rl
+    glob: "rl_checkpoint_iter_*.pth"
+    epochCapture: "iter_(\\d+)"
+  - phase: rl
+    glob: "rl_checkpoint_final.pth"
+  - phase: final
+    glob: "*_v*.pth"
+    excludePrefix: "rl_"
+
+# ── Generation ───────────────────────────────────────────────────────
+
+generation:
+  entrypoint: Generator.py
+  args:
+    config: "--config"
+    checkpoint: "--checkpoint"
+    prompt: "--prompt"
+    maxTokens: "--max_tokens"
+    temperature: "--temperature"
+    topK: "--top_k"
+    rlAgent: "--rl-agent"
+    rlCheckpoint: "--rl-checkpoint"
+  defaultConfigPath: configs/base_config.yaml
+  modes:
+    - id: none
+      displayName: No Gating
+      requiresRLCheckpoint: false
+    - id: fixed
+      displayName: Fixed Gating
+      requiresRLCheckpoint: false
+    - id: learned
+      displayName: Learned Gating (RL)
+      requiresRLCheckpoint: true
+  parameters:
+    - id: temperature
+      displayName: Temperature
+      min: 0.1
+      max: 2.0
+      step: 0.1
+      default: 0.8
+    - id: topK
+      displayName: Top-K
+      min: 1
+      max: 200
+      step: 1
+      default: 50
+    - id: maxTokens
+      displayName: Max Tokens
+      min: 10
+      max: 500
+      step: 10
+      default: 50
+  modelCheckpointPatterns:
+    - "checkpoint_foundational_epoch_*.pth"
+    - "*_v*.pth"
+  rlCheckpointPatterns:
+    - "rl_checkpoint_final.pth"
+    - "rl_checkpoint_iter_*.pth"
+
+# ── Metrics ──────────────────────────────────────────────────────────
+
+metrics:
+  redisPrefix: "tidal"
+  lm:
+    directory: dashboard_metrics
+    historyFile: metrics.jsonl
+    statusFile: status.json
+    latestFile: latest.json
+    primaryKeys:
+      - "Losses/Total"
+      - "Learning Rate"
+  rl:
+    directory: rl_metrics
+    metricsFile: rl_training_metrics.json
+    primaryKeys:
+      - episode_rewards
+      - policy_loss
+      - value_loss
+      - entropy
+
+# ── Redis keys (used by worker_agent, job store, SSE) ────────────────
+
+redis:
+  jobsHash: "tidal:jobs"
+  jobsActiveSet: "tidal:jobs:active"
+  signalPrefix: "tidal:job:"
+  heartbeatPrefix: "tidal:worker:"
+  updatesChannel: "tidal:job:updates"
+  experimentsSet: "tidal:experiments"
+
+# ── Infrastructure ───────────────────────────────────────────────────
+
+infrastructure:
+  pythonEnv: tidal-env
+  dockerImage: "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime"
+  requirementsFile: requirements.txt
+  gpuTiers:
+    standard:
+      minGpuRamMb: 16000
+      minCpuCores: 16

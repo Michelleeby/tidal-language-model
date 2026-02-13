@@ -3,23 +3,38 @@ import { accessSync } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { ServerConfig } from "../config.js";
-import type { GenerateRequest, GenerateResponse } from "@tidal/shared";
+import type { GenerateRequest, GenerateResponse, PluginManifest } from "@tidal/shared";
 
-const DEFAULT_CONFIG_PATH = "configs/base_config.yaml";
+/**
+ * Convert a manifest glob pattern to a RegExp for matching filenames.
+ */
+function globToRegex(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const pattern = escaped.replace(/\*/g, ".*");
+  return new RegExp(`^${pattern}$`);
+}
 
 /**
  * Dual-mode generation bridge:
- * - If INFERENCE_URL is set → HTTP POST to the inference sidecar (production/Docker)
- * - Else if pythonBin exists → subprocess spawn (local dev)
- * - Else → 503 error
+ * - If INFERENCE_URL is set -> HTTP POST to the inference sidecar (production/Docker)
+ * - Else if pythonBin exists -> subprocess spawn (local dev)
+ * - Else -> 503 error
+ *
+ * Uses the plugin manifest to determine CLI args, checkpoint patterns,
+ * and gating modes instead of hardcoded values.
  */
 export class GenerationBridge {
   private inferenceUrl: string | null;
   private subprocessAvailable: boolean;
+  private manifest: PluginManifest | undefined;
 
-  constructor(private config: ServerConfig) {
+  constructor(
+    private config: ServerConfig,
+    manifest?: PluginManifest,
+  ) {
     this.inferenceUrl = config.inferenceUrl;
     this.subprocessAvailable = false;
+    this.manifest = manifest;
 
     if (!this.inferenceUrl) {
       try {
@@ -44,18 +59,18 @@ export class GenerationBridge {
     req: GenerateRequest,
   ): Promise<{ modelCheckpoint: string; rlCheckpoint?: string }> {
     const basename = path.basename(req.checkpoint);
-    const isRLCheckpoint = basename.startsWith("rl_checkpoint");
+    const isRLCheckpoint = this.isRLCheckpointFile(basename);
 
     let rlCheckpoint = req.rlCheckpoint;
     let modelCheckpoint = req.checkpoint;
 
     if (isRLCheckpoint) {
-      // The user selected an RL checkpoint — find the model checkpoint
+      // The user selected an RL checkpoint -- find the model checkpoint
       rlCheckpoint = req.checkpoint;
       const expDir = path.dirname(req.checkpoint);
       modelCheckpoint = await this.findModelCheckpoint(expDir);
     } else if (req.gatingMode === "learned" && !rlCheckpoint) {
-      // Learned mode but no RL checkpoint specified — auto-find one
+      // Learned mode but no RL checkpoint specified -- auto-find one
       const expDir = path.dirname(req.checkpoint);
       const found = await this.findRLCheckpoint(expDir);
       if (found) rlCheckpoint = found;
@@ -64,18 +79,28 @@ export class GenerationBridge {
     return { modelCheckpoint, rlCheckpoint };
   }
 
+  /** Check if a filename matches any RL checkpoint pattern from the manifest. */
+  private isRLCheckpointFile(filename: string): boolean {
+    const patterns = this.manifest?.generation.rlCheckpointPatterns ?? [];
+    return patterns.some((glob) => globToRegex(glob).test(filename));
+  }
+
+  /** Check if a filename matches any model checkpoint pattern from the manifest. */
+  private isModelCheckpointFile(filename: string): boolean {
+    const patterns = this.manifest?.generation.modelCheckpointPatterns ?? [];
+    return patterns.some((glob) => globToRegex(glob).test(filename));
+  }
+
   /** Find the best model checkpoint in an experiment directory. */
   private async findModelCheckpoint(expDir: string): Promise<string> {
     const entries = await fsp.readdir(expDir);
-    // Prefer final model, then highest-epoch foundational checkpoint
-    const finalModel = entries.find((f) => f.endsWith(".pth") && f.includes("_v") && !f.startsWith("rl_"));
-    if (finalModel) return path.join(expDir, finalModel);
-
-    const epochCheckpoints = entries
-      .filter((f) => f.startsWith("checkpoint_foundational"))
+    // Sort descending to get highest-numbered checkpoint first
+    const modelFiles = entries
+      .filter((f) => f.endsWith(".pth") && this.isModelCheckpointFile(f))
       .sort()
       .reverse();
-    if (epochCheckpoints.length > 0) return path.join(expDir, epochCheckpoints[0]);
+
+    if (modelFiles.length > 0) return path.join(expDir, modelFiles[0]);
 
     throw new Error(`No model checkpoint found in ${expDir}`);
   }
@@ -83,16 +108,12 @@ export class GenerationBridge {
   /** Find the best RL checkpoint in an experiment directory. */
   private async findRLCheckpoint(expDir: string): Promise<string | null> {
     const entries = await fsp.readdir(expDir);
-    const final = entries.find((f) => f === "rl_checkpoint_final.pth");
-    if (final) return path.join(expDir, final);
-
-    const iterCheckpoints = entries
-      .filter((f) => f.startsWith("rl_checkpoint_iter_"))
+    const rlFiles = entries
+      .filter((f) => f.endsWith(".pth") && this.isRLCheckpointFile(f))
       .sort()
       .reverse();
-    if (iterCheckpoints.length > 0) return path.join(expDir, iterCheckpoints[0]);
 
-    return null;
+    return rlFiles.length > 0 ? path.join(expDir, rlFiles[0]) : null;
   }
 
   async generate(req: GenerateRequest): Promise<GenerateResponse> {
@@ -145,7 +166,7 @@ export class GenerationBridge {
 
   /**
    * Resolve the config path for generation: prefer the config.yaml saved in the
-   * experiment directory (copied there by Main.py), fall back to the default.
+   * experiment directory (copied there by Main.py), fall back to manifest default.
    */
   private async resolveConfigPath(checkpointPath: string): Promise<string> {
     const expDir = path.dirname(checkpointPath);
@@ -154,7 +175,7 @@ export class GenerationBridge {
       await fsp.access(expConfig);
       return expConfig;
     } catch {
-      return DEFAULT_CONFIG_PATH;
+      return this.manifest?.generation.defaultConfigPath ?? "configs/base_config.yaml";
     }
   }
 
@@ -164,25 +185,24 @@ export class GenerationBridge {
     rlCheckpoint: string | undefined,
     start: number,
   ): Promise<GenerateResponse> {
+    const gen = this.manifest?.generation;
+    const argMap = gen?.args ?? {};
     const configPath = await this.resolveConfigPath(modelCheckpoint);
-    const args = [
-      "Generator.py",
-      "--config",
-      configPath,
-      "--checkpoint",
-      modelCheckpoint,
-      "--prompt",
-      req.prompt,
-      "--max_tokens",
-      String(req.maxTokens ?? 50),
-      "--temperature",
-      String(req.temperature ?? 0.8),
-      "--top_k",
-      String(req.topK ?? 50),
-    ];
+    const entrypoint = gen?.entrypoint ?? "Generator.py";
+
+    const args = [entrypoint];
+
+    // Build CLI args from manifest arg mapping
+    if (argMap.config) args.push(argMap.config, configPath);
+    if (argMap.checkpoint) args.push(argMap.checkpoint, modelCheckpoint);
+    if (argMap.prompt) args.push(argMap.prompt, req.prompt);
+    if (argMap.maxTokens) args.push(argMap.maxTokens, String(req.maxTokens ?? 50));
+    if (argMap.temperature) args.push(argMap.temperature, String(req.temperature ?? 0.8));
+    if (argMap.topK) args.push(argMap.topK, String(req.topK ?? 50));
 
     if (req.gatingMode === "learned" && rlCheckpoint) {
-      args.push("--rl-agent", "--rl-checkpoint", rlCheckpoint);
+      if (argMap.rlAgent) args.push(argMap.rlAgent);
+      if (argMap.rlCheckpoint) args.push(argMap.rlCheckpoint, rlCheckpoint);
     }
 
     const text = await this.runPython(args);
@@ -215,7 +235,8 @@ export class GenerationBridge {
         if (code === 0) {
           resolve(stdout);
         } else {
-          reject(new Error(`Generator.py exited with code ${code}: ${stderr}`));
+          const entrypoint = this.manifest?.generation.entrypoint ?? "Generator.py";
+          reject(new Error(`${entrypoint} exited with code ${code}: ${stderr}`));
         }
       });
 

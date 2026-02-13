@@ -1,6 +1,7 @@
 import type { JobType, TrainingJob } from "@tidal/shared";
+import type { PluginRegistry } from "./plugin-registry.js";
 
-export type GpuTier = "standard";
+export type GpuTier = string;
 
 export interface JobPolicy {
   readonly type: JobType;
@@ -10,43 +11,55 @@ export interface JobPolicy {
   gpuTier(): GpuTier;
 }
 
-export class LMTrainingPolicy implements JobPolicy {
-  readonly type: JobType = "lm-training";
+/**
+ * A generic job policy driven by manifest training phase config.
+ * Replaces the old LMTrainingPolicy / RLTrainingPolicy classes.
+ */
+export class ManifestJobPolicy implements JobPolicy {
+  readonly type: JobType;
+
+  constructor(
+    type: JobType,
+    private displayName: string,
+    private concurrency: number,
+    private tier: string,
+  ) {
+    this.type = type;
+  }
 
   checkConcurrency(activeJobs: TrainingJob[]): string | null {
-    const existing = activeJobs.find((j) => j.type === "lm-training");
-    return existing
-      ? "An LM training job is already running"
-      : null;
+    const sameType = activeJobs.filter((j) => j.type === this.type);
+    if (sameType.length >= this.concurrency) {
+      return `A ${this.displayName} job is already running (max ${this.concurrency})`;
+    }
+    return null;
   }
 
   gpuTier(): GpuTier {
-    return "standard";
-  }
-}
-
-export class RLTrainingPolicy implements JobPolicy {
-  readonly type: JobType = "rl-training";
-
-  checkConcurrency(activeJobs: TrainingJob[]): string | null {
-    const existing = activeJobs.find((j) => j.type === "rl-training");
-    return existing
-      ? "An RL training job is already running"
-      : null;
-  }
-
-  gpuTier(): GpuTier {
-    return "standard";
+    return this.tier;
   }
 }
 
 export class JobPolicyRegistry {
   private policies: Map<JobType, JobPolicy>;
 
-  constructor() {
+  constructor(pluginRegistry?: PluginRegistry) {
     this.policies = new Map();
-    this.register(new LMTrainingPolicy());
-    this.register(new RLTrainingPolicy());
+
+    if (pluginRegistry) {
+      for (const plugin of pluginRegistry.list()) {
+        for (const phase of plugin.trainingPhases) {
+          this.register(
+            new ManifestJobPolicy(
+              phase.id,
+              phase.displayName,
+              phase.concurrency,
+              phase.gpuTier,
+            ),
+          );
+        }
+      }
+    }
   }
 
   register(policy: JobPolicy): void {

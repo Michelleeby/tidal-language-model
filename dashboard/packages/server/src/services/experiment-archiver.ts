@@ -2,6 +2,39 @@ import type { FastifyBaseLogger } from "fastify";
 import type { Redis } from "ioredis";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import type { MetricsConfig } from "@tidal/shared";
+
+export interface ArchiverConfig {
+  redisPrefix: string;
+  lmDirectory: string;
+  lmHistoryFile: string;
+  lmStatusFile: string;
+  lmLatestFile: string;
+  rlDirectory: string;
+  rlMetricsFile: string;
+}
+
+const DEFAULT_CONFIG: ArchiverConfig = {
+  redisPrefix: "tidal",
+  lmDirectory: "dashboard_metrics",
+  lmHistoryFile: "metrics.jsonl",
+  lmStatusFile: "status.json",
+  lmLatestFile: "latest.json",
+  rlDirectory: "rl_metrics",
+  rlMetricsFile: "rl_training_metrics.json",
+};
+
+export function archiverConfigFromManifest(metrics: MetricsConfig): ArchiverConfig {
+  return {
+    redisPrefix: metrics.redisPrefix,
+    lmDirectory: metrics.lm.directory,
+    lmHistoryFile: metrics.lm.historyFile,
+    lmStatusFile: metrics.lm.statusFile,
+    lmLatestFile: metrics.lm.latestFile,
+    rlDirectory: metrics.rl.directory,
+    rlMetricsFile: metrics.rl.metricsFile,
+  };
+}
 
 /**
  * Archives experiment data from Redis to disk so it survives
@@ -12,11 +45,16 @@ import * as path from "node:path";
  * and MetricsReader expect on disk.
  */
 export class ExperimentArchiver {
+  private ac: ArchiverConfig;
+
   constructor(
     private redis: Redis | null,
     private experimentsDir: string,
     private log: FastifyBaseLogger,
-  ) {}
+    config?: ArchiverConfig,
+  ) {
+    this.ac = config ?? DEFAULT_CONFIG;
+  }
 
   /**
    * Archive all Redis data for an experiment to disk.
@@ -33,25 +71,26 @@ export class ExperimentArchiver {
       return;
     }
 
+    const prefix = this.ac.redisPrefix;
     const expDir = path.join(this.experimentsDir, expId);
-    const dashboardDir = path.join(expDir, "dashboard_metrics");
-    const rlDir = path.join(expDir, "rl_metrics");
+    const dashboardDir = path.join(expDir, this.ac.lmDirectory);
+    const rlDir = path.join(expDir, this.ac.rlDirectory);
 
     await fsp.mkdir(dashboardDir, { recursive: true });
 
     let archived = 0;
 
-    // 1. Metrics history list → metrics.jsonl
+    // 1. Metrics history list -> JSONL
     try {
       const history = await this.redis.lrange(
-        `tidal:metrics:${expId}:history`,
+        `${prefix}:metrics:${expId}:history`,
         0,
         -1,
       );
       if (history.length > 0) {
         const jsonl = history.map((line) => line.trimEnd()).join("\n") + "\n";
         await fsp.writeFile(
-          path.join(dashboardDir, "metrics.jsonl"),
+          path.join(dashboardDir, this.ac.lmHistoryFile),
           jsonl,
           "utf-8",
         );
@@ -65,12 +104,12 @@ export class ExperimentArchiver {
       this.log.error({ expId, err }, "Failed to archive metrics history");
     }
 
-    // 2. Status → status.json
+    // 2. Status
     try {
-      const status = await this.redis.get(`tidal:status:${expId}`);
+      const status = await this.redis.get(`${prefix}:status:${expId}`);
       if (status) {
         await fsp.writeFile(
-          path.join(dashboardDir, "status.json"),
+          path.join(dashboardDir, this.ac.lmStatusFile),
           status,
           "utf-8",
         );
@@ -80,12 +119,12 @@ export class ExperimentArchiver {
       this.log.error({ expId, err }, "Failed to archive status");
     }
 
-    // 3. Latest metrics → latest.json
+    // 3. Latest metrics
     try {
-      const latest = await this.redis.get(`tidal:metrics:${expId}:latest`);
+      const latest = await this.redis.get(`${prefix}:metrics:${expId}:latest`);
       if (latest) {
         await fsp.writeFile(
-          path.join(dashboardDir, "latest.json"),
+          path.join(dashboardDir, this.ac.lmLatestFile),
           latest,
           "utf-8",
         );
@@ -95,13 +134,13 @@ export class ExperimentArchiver {
       this.log.error({ expId, err }, "Failed to archive latest metrics");
     }
 
-    // 4. RL metrics → rl_training_metrics.json
+    // 4. RL metrics
     try {
-      const rl = await this.redis.get(`tidal:rl:${expId}:latest`);
+      const rl = await this.redis.get(`${prefix}:rl:${expId}:latest`);
       if (rl) {
         await fsp.mkdir(rlDir, { recursive: true });
         await fsp.writeFile(
-          path.join(rlDir, "rl_training_metrics.json"),
+          path.join(rlDir, this.ac.rlMetricsFile),
           rl,
           "utf-8",
         );

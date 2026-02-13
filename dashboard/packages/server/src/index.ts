@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, validateConfig, type ServerConfig } from "./config.js";
+import { PluginRegistry } from "./services/plugin-registry.js";
 import redisPlugin from "./plugins/redis.js";
 import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
@@ -18,10 +19,12 @@ import generateRoutes from "./routes/generate.js";
 import sseRoutes from "./routes/sse.js";
 import jobRoutes from "./routes/jobs.js";
 import workerRoutes from "./routes/workers.js";
+import pluginsRoutes from "./routes/plugins.js";
 
 declare module "fastify" {
   interface FastifyInstance {
     serverConfig: ServerConfig;
+    pluginRegistry: PluginRegistry;
   }
 }
 
@@ -54,6 +57,13 @@ async function main() {
   // Decorate with config
   fastify.decorate("serverConfig", config);
 
+  // Load plugin manifests
+  const pluginRegistry = new PluginRegistry(
+    path.join(config.projectRoot, "plugins"),
+  );
+  await pluginRegistry.load();
+  fastify.decorate("pluginRegistry", pluginRegistry);
+
   // Plugins (order matters: redis before sse, auth/rate-limit after redis, all before routes)
   await fastify.register(corsPlugin);
   await fastify.register(redisPlugin, { url: config.redisUrl });
@@ -73,6 +83,7 @@ async function main() {
   await fastify.register(sseRoutes);
   await fastify.register(jobRoutes);
   await fastify.register(workerRoutes);
+  await fastify.register(pluginsRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

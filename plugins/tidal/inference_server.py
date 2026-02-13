@@ -15,9 +15,15 @@ Environment variables:
 """
 
 import os
+import sys
 import time
 import logging
 from collections import OrderedDict
+
+# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import torch
 from flask import Flask, request, jsonify

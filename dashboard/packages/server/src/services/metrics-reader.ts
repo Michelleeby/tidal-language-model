@@ -3,16 +3,64 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type Redis from "ioredis";
-import type { MetricPoint, TrainingStatus, RLTrainingMetrics } from "@tidal/shared";
+import type { MetricPoint, TrainingStatus, RLTrainingMetrics, MetricsConfig } from "@tidal/shared";
+
+export interface MetricsReaderConfig {
+  /** Redis key prefix, e.g. "tidal" */
+  redisPrefix: string;
+  /** LM metrics directory name, e.g. "dashboard_metrics" */
+  lmDirectory: string;
+  /** LM history filename, e.g. "metrics.jsonl" */
+  lmHistoryFile: string;
+  /** LM status filename, e.g. "status.json" */
+  lmStatusFile: string;
+  /** LM latest filename, e.g. "latest.json" */
+  lmLatestFile: string;
+  /** RL metrics directory name, e.g. "rl_metrics" */
+  rlDirectory: string;
+  /** RL metrics filename, e.g. "rl_training_metrics.json" */
+  rlMetricsFile: string;
+}
+
+/**
+ * Build MetricsReaderConfig from a plugin's MetricsConfig.
+ */
+export function metricsReaderConfigFromManifest(metrics: MetricsConfig): MetricsReaderConfig {
+  return {
+    redisPrefix: metrics.redisPrefix,
+    lmDirectory: metrics.lm.directory,
+    lmHistoryFile: metrics.lm.historyFile,
+    lmStatusFile: metrics.lm.statusFile,
+    lmLatestFile: metrics.lm.latestFile,
+    rlDirectory: metrics.rl.directory,
+    rlMetricsFile: metrics.rl.metricsFile,
+  };
+}
+
+/** Default config matching the original hardcoded values. */
+export const DEFAULT_METRICS_CONFIG: MetricsReaderConfig = {
+  redisPrefix: "tidal",
+  lmDirectory: "dashboard_metrics",
+  lmHistoryFile: "metrics.jsonl",
+  lmStatusFile: "status.json",
+  lmLatestFile: "latest.json",
+  rlDirectory: "rl_metrics",
+  rlMetricsFile: "rl_training_metrics.json",
+};
 
 /**
  * Reads metrics from Redis (primary) or JSONL files (fallback).
  */
 export class MetricsReader {
+  private mc: MetricsReaderConfig;
+
   constructor(
     private redis: Redis | null,
     private experimentsDir: string,
-  ) {}
+    metricsConfig?: MetricsReaderConfig,
+  ) {
+    this.mc = metricsConfig ?? DEFAULT_METRICS_CONFIG;
+  }
 
   /** Read recent metrics (last `window` points). */
   async getRecentMetrics(
@@ -22,7 +70,7 @@ export class MetricsReader {
     // Try Redis first
     if (this.redis) {
       try {
-        const key = `tidal:metrics:${expId}:history`;
+        const key = `${this.mc.redisPrefix}:metrics:${expId}:history`;
         const raw = await this.redis.lrange(key, -window, -1);
         if (raw.length > 0) {
           return raw.map((s) => JSON.parse(s) as MetricPoint);
@@ -42,8 +90,8 @@ export class MetricsReader {
     const filePath = path.join(
       this.experimentsDir,
       expId,
-      "dashboard_metrics",
-      "metrics.jsonl",
+      this.mc.lmDirectory,
+      this.mc.lmHistoryFile,
     );
 
     if (fs.existsSync(filePath)) {
@@ -67,7 +115,7 @@ export class MetricsReader {
     // Fallback: read full history from Redis list
     if (this.redis) {
       try {
-        const key = `tidal:metrics:${expId}:history`;
+        const key = `${this.mc.redisPrefix}:metrics:${expId}:history`;
         const raw = await this.redis.lrange(key, 0, -1);
         if (raw.length > 0) {
           return raw.map((s) => JSON.parse(s) as MetricPoint);
@@ -84,7 +132,7 @@ export class MetricsReader {
   async getStatus(expId: string): Promise<TrainingStatus | null> {
     if (this.redis) {
       try {
-        const raw = await this.redis.get(`tidal:status:${expId}`);
+        const raw = await this.redis.get(`${this.mc.redisPrefix}:status:${expId}`);
         if (raw) return JSON.parse(raw) as TrainingStatus;
       } catch {
         // Fall through
@@ -94,8 +142,8 @@ export class MetricsReader {
     const filePath = path.join(
       this.experimentsDir,
       expId,
-      "dashboard_metrics",
-      "status.json",
+      this.mc.lmDirectory,
+      this.mc.lmStatusFile,
     );
     try {
       const content = await fsp.readFile(filePath, "utf-8");
@@ -109,7 +157,7 @@ export class MetricsReader {
   async getLatest(expId: string): Promise<MetricPoint | null> {
     if (this.redis) {
       try {
-        const raw = await this.redis.get(`tidal:metrics:${expId}:latest`);
+        const raw = await this.redis.get(`${this.mc.redisPrefix}:metrics:${expId}:latest`);
         if (raw) return JSON.parse(raw) as MetricPoint;
       } catch {
         // Fall through
@@ -119,8 +167,8 @@ export class MetricsReader {
     const filePath = path.join(
       this.experimentsDir,
       expId,
-      "dashboard_metrics",
-      "latest.json",
+      this.mc.lmDirectory,
+      this.mc.lmLatestFile,
     );
     try {
       const content = await fsp.readFile(filePath, "utf-8");
@@ -134,7 +182,7 @@ export class MetricsReader {
   async getRLMetrics(expId: string): Promise<RLTrainingMetrics | null> {
     if (this.redis) {
       try {
-        const raw = await this.redis.get(`tidal:rl:${expId}:latest`);
+        const raw = await this.redis.get(`${this.mc.redisPrefix}:rl:${expId}:latest`);
         if (raw) return JSON.parse(raw) as RLTrainingMetrics;
       } catch {
         // Fall through
@@ -145,8 +193,8 @@ export class MetricsReader {
     const filePath = path.join(
       this.experimentsDir,
       expId,
-      "rl_metrics",
-      "rl_training_metrics.json",
+      this.mc.rlDirectory,
+      this.mc.rlMetricsFile,
     );
     try {
       const content = await fsp.readFile(filePath, "utf-8");
@@ -164,8 +212,8 @@ export class MetricsReader {
     const filePath = path.join(
       this.experimentsDir,
       expId,
-      "dashboard_metrics",
-      "metrics.jsonl",
+      this.mc.lmDirectory,
+      this.mc.lmHistoryFile,
     );
 
     if (!fs.existsSync(filePath)) return [];

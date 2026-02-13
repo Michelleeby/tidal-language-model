@@ -7,7 +7,14 @@ Supports standard generation and RL-controlled gated generation.
 
 import torch
 import os
+import sys
 import argparse
+
+# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from ruamel.yaml import YAML
 
 from TransformerLM import TransformerLM

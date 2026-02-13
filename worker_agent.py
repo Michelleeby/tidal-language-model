@@ -20,6 +20,8 @@ import urllib.error
 from abc import ABC, abstractmethod
 from urllib.parse import urlparse
 
+from ruamel.yaml import YAML
+
 import redis as redis_lib
 
 
@@ -178,6 +180,56 @@ class WorkerAgent:
         self._heartbeat_stop.set()
         sys.exit(128 + signum)
 
+    # ── Manifest helpers ────────────────────────────────────────────────
+
+    def _load_manifest(self, plugin_name: str) -> dict:
+        """Load a plugin manifest from plugins/<name>/manifest.yaml."""
+        manifest_path = os.path.join(
+            self._project_root, "plugins", plugin_name, "manifest.yaml"
+        )
+        if not os.path.exists(manifest_path):
+            raise FileNotFoundError(
+                f"Plugin manifest not found: {manifest_path}"
+            )
+        yaml = YAML()
+        with open(manifest_path) as f:
+            return dict(yaml.load(f))
+
+    def _find_phase(self, manifest: dict, job_type: str) -> dict:
+        """Look up a training phase by ID in a manifest."""
+        for phase in manifest["trainingPhases"]:
+            if phase["id"] == job_type:
+                return dict(phase)
+        available = [p["id"] for p in manifest["trainingPhases"]]
+        raise ValueError(
+            f"Unknown job type '{job_type}' for plugin '{manifest['name']}'. "
+            f"Available phases: {available}"
+        )
+
+    def _build_command(self, phase: dict, config: dict, plugin_dir: str) -> list[str]:
+        """Build subprocess args from a manifest phase and job config."""
+        entrypoint = os.path.join(plugin_dir, phase["entrypoint"])
+        args = [sys.executable, entrypoint]
+
+        # Map from manifest arg key to config field name
+        ARG_CONFIG_MAP = {
+            "config": "configPath",
+            "resume": "resumeExpDir",
+            "rlConfig": "rlConfigPath",
+            "checkpoint": "checkpoint",
+            "timesteps": "timesteps",
+        }
+
+        for arg_key, cli_flag in phase.get("args", {}).items():
+            config_key = ARG_CONFIG_MAP.get(arg_key, arg_key)
+            value = config.get(config_key)
+            if value is not None:
+                args += [cli_flag, str(value)]
+
+        return args
+
+    # ── Main entry point ──────────────────────────────────────────────
+
     def run(self):
         """Main entry point: read job, start heartbeat, spawn training, monitor."""
         job = self.transport.get_job(self.job_id)
@@ -201,15 +253,7 @@ class WorkerAgent:
         self._start_heartbeat()
 
         try:
-            if job_type == "lm-training":
-                exit_code = self._run_lm_training(config)
-            elif job_type == "rl-training":
-                exit_code = self._run_rl_training(config)
-            else:
-                self.transport.update_status(
-                    self.job_id, "failed", error=f"Unknown job type: {job_type}"
-                )
-                return
+            exit_code = self._run_training(config)
 
             if exit_code == 0:
                 if isinstance(self.transport, HttpTransport):
@@ -226,38 +270,32 @@ class WorkerAgent:
         finally:
             self._heartbeat_stop.set()
 
-    def _run_lm_training(self, config: dict) -> int:
-        args = [
-            sys.executable, "Main.py",
-            "--config", config["configPath"],
-        ]
-        if config.get("resumeExpDir"):
-            args += ["--resume", config["resumeExpDir"]]
-        return self._spawn_and_monitor(args)
+    def _run_training(self, config: dict) -> int:
+        """Build and run a training command from the plugin manifest."""
+        plugin_name = config.get("plugin", "tidal")
+        manifest = self._load_manifest(plugin_name)
+        phase = self._find_phase(manifest, config["type"])
+        plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)
+        args = self._build_command(phase, config, plugin_dir)
+        redis_prefix = manifest.get("metrics", {}).get("redisPrefix", "tidal")
+        return self._spawn_and_monitor(args, redis_prefix=redis_prefix)
 
-    def _run_rl_training(self, config: dict) -> int:
-        args = [
-            sys.executable, "train_rl.py",
-            "--config", config["configPath"],
-        ]
-        if config.get("rlConfigPath"):
-            args += ["--rl-config", config["rlConfigPath"]]
-        if config.get("checkpoint"):
-            args += ["--checkpoint", config["checkpoint"]]
-        if config.get("timesteps"):
-            args += ["--timesteps", str(config["timesteps"])]
-        return self._spawn_and_monitor(args)
-
-    def _spawn_and_monitor(self, args: list[str]) -> int:
+    def _spawn_and_monitor(self, args: list[str], redis_prefix: str = "tidal") -> int:
         """Spawn subprocess and poll for signals every 2 seconds."""
         env = {
             **os.environ,
             "PYTHONUNBUFFERED": "1",
+            "TRAINING_JOB_ID": self.job_id,
+            # Keep legacy name for backward compatibility during transition
             "TIDAL_JOB_ID": self.job_id,
+            "METRICS_REDIS_PREFIX": redis_prefix,
         }
 
         # Pass API credentials so MetricsLogger can forward metrics remotely
         if hasattr(self.transport, "api_url"):
+            env["TRAINING_API_URL"] = self.transport.api_url
+            env["TRAINING_AUTH_TOKEN"] = self.transport.auth_token
+            # Keep legacy names for backward compatibility during transition
             env["TIDAL_API_URL"] = self.transport.api_url
             env["TIDAL_AUTH_TOKEN"] = self.transport.auth_token
 

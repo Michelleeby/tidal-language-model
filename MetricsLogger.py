@@ -26,10 +26,11 @@ class MetricsLogger:
     falls back to disk-only mode with a single warning.
     """
 
-    def __init__(self, experiment_dir: str, max_history: int = 10000, reset_metrics: bool = True):
+    def __init__(self, experiment_dir: str, max_history: int = 10000, reset_metrics: bool = True, redis_prefix: str | None = None):
         self.experiment_dir = experiment_dir
         self.max_history = max_history
         self.exp_id = os.path.basename(experiment_dir)
+        self._redis_prefix = redis_prefix or os.environ.get("METRICS_REDIS_PREFIX", "tidal")
 
         self.metrics_dir = os.path.join(experiment_dir, "dashboard_metrics")
         os.makedirs(self.metrics_dir, exist_ok=True)
@@ -48,9 +49,10 @@ class MetricsLogger:
         self._init_redis()
 
         # HTTP forwarding for remote workers (vast.ai → dashboard API)
-        self._http_url = os.environ.get("TIDAL_API_URL")
-        self._http_token = os.environ.get("TIDAL_AUTH_TOKEN")
-        self._http_job_id = os.environ.get("TIDAL_JOB_ID")
+        # Accept both TRAINING_* (new) and TIDAL_* (legacy) env vars
+        self._http_url = os.environ.get("TRAINING_API_URL") or os.environ.get("TIDAL_API_URL")
+        self._http_token = os.environ.get("TRAINING_AUTH_TOKEN") or os.environ.get("TIDAL_AUTH_TOKEN")
+        self._http_job_id = os.environ.get("TRAINING_JOB_ID") or os.environ.get("TIDAL_JOB_ID")
         self._http_enabled = bool(
             self._http_url and self._http_token and self._http_job_id
         )
@@ -408,11 +410,11 @@ class MetricsLogger:
 
         def _write(r):
             r.set(
-                f"tidal:status:{self.exp_id}",
+                f"{self._redis_prefix}:status:{self.exp_id}",
                 json.dumps(status_data),
                 ex=900,
             )
-            r.sadd("tidal:experiments", self.exp_id)
+            r.sadd(f"{self._redis_prefix}:experiments", self.exp_id)
         self._redis_write(_write)
 
         if self._http_enabled:
@@ -446,9 +448,9 @@ class MetricsLogger:
 
             def _write(r):
                 pipe = r.pipeline()
-                pipe.set(f"tidal:metrics:{self.exp_id}:latest", serialized, ex=600)
-                pipe.rpush(f"tidal:metrics:{self.exp_id}:history", serialized)
-                pipe.ltrim(f"tidal:metrics:{self.exp_id}:history", -50000, -1)
+                pipe.set(f"{self._redis_prefix}:metrics:{self.exp_id}:latest", serialized, ex=600)
+                pipe.rpush(f"{self._redis_prefix}:metrics:{self.exp_id}:history", serialized)
+                pipe.ltrim(f"{self._redis_prefix}:metrics:{self.exp_id}:history", -50000, -1)
                 pipe.execute()
             self._redis_write(_write)
 
@@ -470,7 +472,7 @@ class MetricsLogger:
             serialized = json.dumps(data_point)
 
             def _write(r):
-                r.set(f"tidal:rl:{self.exp_id}:latest", serialized, ex=600)
+                r.set(f"{self._redis_prefix}:rl:{self.exp_id}:latest", serialized, ex=600)
             self._redis_write(_write)
 
             self._enqueue_rl_http(data_point)

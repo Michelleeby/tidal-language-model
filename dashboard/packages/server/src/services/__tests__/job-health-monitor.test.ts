@@ -27,7 +27,7 @@ function makeJob(overrides: Partial<TrainingJob> = {}): TrainingJob {
     type: "lm-training",
     status: "running",
     provider: "local",
-    config: { type: "lm-training", configPath: "configs/base_config.yaml" },
+    config: { type: "lm-training", plugin: "tidal", configPath: "configs/base_config.yaml" },
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,

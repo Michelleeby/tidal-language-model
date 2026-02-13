@@ -1,12 +1,18 @@
 import type { FastifyInstance } from "fastify";
-import { MetricsReader } from "../services/metrics-reader.js";
+import { MetricsReader, metricsReaderConfigFromManifest } from "../services/metrics-reader.js";
 import { lttbDownsample } from "../services/downsampler.js";
 import type { MetricsResponse } from "@tidal/shared";
 
 export default async function metricsRoutes(fastify: FastifyInstance) {
+  const plugin = fastify.pluginRegistry.getDefault();
+  const metricsConfig = plugin
+    ? metricsReaderConfigFromManifest(plugin.metrics)
+    : undefined;
+
   const reader = new MetricsReader(
     fastify.redis,
     fastify.serverConfig.experimentsDir,
+    metricsConfig,
   );
 
   fastify.get<{

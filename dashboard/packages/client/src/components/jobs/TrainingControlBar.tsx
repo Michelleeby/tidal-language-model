@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useActiveJob, useCreateJob, useSignalJob, useCancelJob, useJobs } from "../../hooks/useJobs.js";
+import { usePlugin } from "../../hooks/usePlugin.js";
 import type { JobStatus } from "@tidal/shared";
 
 const STATUS_COLORS: Record<JobStatus, string> = {
@@ -43,9 +44,16 @@ export default function TrainingControlBar() {
   const createJob = useCreateJob();
   const signalJob = useSignalJob();
   const cancelJob = useCancelJob();
+  const { manifest } = usePlugin();
+
+  // Derive LM training phase config from manifest
+  const lmPhase = manifest?.trainingPhases.find((p) => p.id === "lm-training");
+  const defaultConfigPath = lmPhase?.configFiles[0]
+    ? `plugins/${manifest!.name}/${lmPhase.configFiles[0]}`
+    : "plugins/tidal/configs/base_config.yaml";
 
   const [showStartDialog, setShowStartDialog] = useState(false);
-  const [configPath, setConfigPath] = useState("configs/base_config.yaml");
+  const [configPath, setConfigPath] = useState(defaultConfigPath);
   const [resumeDir, setResumeDir] = useState("");
   const [confirmStop, setConfirmStop] = useState(false);
 
@@ -68,6 +76,7 @@ export default function TrainingControlBar() {
     createJob.mutate(
       {
         type: "lm-training",
+        plugin: manifest?.name ?? "tidal",
         configPath,
         resumeExpDir: resumeDir || undefined,
       },

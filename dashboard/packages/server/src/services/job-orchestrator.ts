@@ -93,6 +93,7 @@ export class JobOrchestrator {
       provider: request.provider ?? this.config.defaultProvider,
       config: {
         type: request.type,
+        plugin: request.plugin,
         configPath: request.configPath,
         resumeExpDir: request.resumeExpDir,
         checkpoint: request.checkpoint,

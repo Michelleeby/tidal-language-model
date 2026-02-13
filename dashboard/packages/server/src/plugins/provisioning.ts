@@ -15,6 +15,7 @@ declare module "fastify" {
 
 export default fp(async function provisioningPlugin(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
+  const plugin = fastify.pluginRegistry?.getDefault();
 
   const spawner = new WorkerSpawner(
     config.projectRoot,
@@ -32,6 +33,8 @@ export default fp(async function provisioningPlugin(fastify: FastifyInstance) {
       authToken: config.authToken,
       repoUrl: config.repoUrl,
       log: fastify.log,
+      dockerImage: plugin?.infrastructure.dockerImage,
+      gpuTiers: plugin?.infrastructure.gpuTiers,
     }),
   ]);
 

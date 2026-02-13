@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 import type Redis from "ioredis";
-import type { SSEEvent, TrainingJob } from "@tidal/shared";
+import type { SSEEvent, TrainingJob, RedisConfig } from "@tidal/shared";
 
 interface Client {
   reply: FastifyReply;
@@ -12,6 +12,32 @@ interface GlobalClient {
   reply: FastifyReply;
 }
 
+export interface SSEManagerConfig {
+  /** Redis key prefix, e.g. "tidal" */
+  redisPrefix: string;
+  /** Redis jobs hash key, e.g. "tidal:jobs" */
+  jobsHash: string;
+  /** Redis job updates channel, e.g. "tidal:job:updates" */
+  updatesChannel: string;
+}
+
+const DEFAULT_CONFIG: SSEManagerConfig = {
+  redisPrefix: "tidal",
+  jobsHash: "tidal:jobs",
+  updatesChannel: "tidal:job:updates",
+};
+
+/**
+ * Build SSEManagerConfig from a plugin's RedisConfig.
+ */
+export function sseConfigFromManifest(redis: RedisConfig): SSEManagerConfig {
+  return {
+    redisPrefix: redis.jobsHash.split(":")[0],
+    jobsHash: redis.jobsHash,
+    updatesChannel: redis.updatesChannel,
+  };
+}
+
 /**
  * Manages SSE connections, polling Redis for updates and pushing events.
  */
@@ -20,11 +46,14 @@ export class SSEManager {
   private globalClients = new Set<GlobalClient>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private subscriber: Redis | null = null;
+  private sc: SSEManagerConfig;
 
   constructor(
     private redis: Redis | null,
     private pollIntervalMs: number = 2000,
+    config?: SSEManagerConfig,
   ) {
+    this.sc = config ?? DEFAULT_CONFIG;
     this.subscribeToJobUpdates();
   }
 
@@ -105,12 +134,12 @@ export class SSEManager {
     try {
       // Create a dedicated subscriber connection (ioredis requirement)
       this.subscriber = this.redis.duplicate();
-      await this.subscriber.subscribe("tidal:job:updates");
+      await this.subscriber.subscribe(this.sc.updatesChannel);
       this.subscriber.on("message", async (_channel, message) => {
         try {
           const { jobId } = JSON.parse(message);
           if (!jobId || !this.redis) return;
-          const raw = await this.redis.hget("tidal:jobs", jobId);
+          const raw = await this.redis.hget(this.sc.jobsHash, jobId);
           if (raw) {
             this.broadcastJobUpdate(JSON.parse(raw));
           }
@@ -119,18 +148,19 @@ export class SSEManager {
         }
       });
     } catch {
-      // Redis pub/sub not available — global clients rely on polling
+      // Redis pub/sub not available -- global clients rely on polling
     }
   }
 
   private async poll() {
     if (!this.redis) return;
+    const prefix = this.sc.redisPrefix;
 
     for (const [expId, clients] of this.clients) {
       try {
         // Check latest metrics
         const metricsRaw = await this.redis.get(
-          `tidal:metrics:${expId}:latest`,
+          `${prefix}:metrics:${expId}:latest`,
         );
         if (metricsRaw) {
           const metrics = JSON.parse(metricsRaw);
@@ -143,7 +173,7 @@ export class SSEManager {
         }
 
         // Check status
-        const statusRaw = await this.redis.get(`tidal:status:${expId}`);
+        const statusRaw = await this.redis.get(`${prefix}:status:${expId}`);
         if (statusRaw) {
           const status = JSON.parse(statusRaw);
           for (const client of clients) {
@@ -152,7 +182,7 @@ export class SSEManager {
         }
 
         // Check RL metrics
-        const rlRaw = await this.redis.get(`tidal:rl:${expId}:latest`);
+        const rlRaw = await this.redis.get(`${prefix}:rl:${expId}:latest`);
         if (rlRaw) {
           for (const client of clients) {
             this.sendEvent(client, {

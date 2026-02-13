@@ -58,6 +58,7 @@ async function buildApp(experimentsDir: string): Promise<FastifyInstance> {
   app.decorate("redis", redisMock as unknown as Redis);
   app.decorate("serverConfig", { experimentsDir } as unknown as ServerConfig);
   app.decorate("sseManager", { broadcastJobUpdate: () => {} } as unknown as SSEManager);
+  app.decorate("pluginRegistry", { getDefault: () => undefined } as any);
   app.decorate("verifyAuth", async () => {});
 
   await app.register(workerRoutes);
@@ -76,7 +77,7 @@ function seedJob(
     type: "rl-training",
     status: "starting",
     provider: "vastai",
-    config: { type: "rl-training", configPath: "configs/base_config.yaml" },
+    config: { type: "rl-training", plugin: "tidal", configPath: "configs/base_config.yaml" },
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,

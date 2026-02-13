@@ -14,6 +14,8 @@ import type {
   JobResponse,
   JobSignalRequest,
   JobSignalResponse,
+  PluginsListResponse,
+  PluginResponse,
 } from "@tidal/shared";
 import { getAuthToken, requestAuth } from "../hooks/useAuth.js";
 
@@ -98,4 +100,9 @@ export const api = {
     fetchJson<JobSignalResponse>(`${BASE}/jobs/${jobId}/cancel`, {
       method: "POST",
     }),
+
+  getPlugins: () => fetchJson<PluginsListResponse>(`${BASE}/plugins`),
+
+  getPlugin: (name: string) =>
+    fetchJson<PluginResponse>(`${BASE}/plugins/${name}`),
 };

@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { CheckpointsResponse, CheckpointInfo } from "@tidal/shared";
+import { classifyCheckpoint } from "../services/checkpoint-classifier.js";
 
 export default async function checkpointsRoutes(fastify: FastifyInstance) {
   fastify.get<{
@@ -10,6 +11,9 @@ export default async function checkpointsRoutes(fastify: FastifyInstance) {
   }>("/api/experiments/:expId/checkpoints", async (request) => {
     const { expId } = request.params;
     const expDir = path.join(fastify.serverConfig.experimentsDir, expId);
+
+    const plugin = fastify.pluginRegistry.getDefault();
+    const patterns = plugin?.checkpointPatterns ?? [];
 
     const checkpoints: CheckpointInfo[] = [];
 
@@ -20,21 +24,7 @@ export default async function checkpointsRoutes(fastify: FastifyInstance) {
         const filePath = path.join(expDir, filename);
         const stat = await fsp.stat(filePath);
 
-        // Parse phase and epoch from filename
-        let phase = "unknown";
-        let epoch: number | undefined;
-
-        if (filename.startsWith("checkpoint_foundational")) {
-          phase = "foundational";
-          const match = filename.match(/epoch_(\d+)/);
-          if (match) epoch = parseInt(match[1], 10);
-        } else if (filename.startsWith("rl_checkpoint")) {
-          phase = "rl";
-          const match = filename.match(/iter_(\d+)/);
-          if (match) epoch = parseInt(match[1], 10);
-        } else if (filename.includes("_v")) {
-          phase = "final";
-        }
+        const { phase, epoch } = classifyCheckpoint(filename, patterns);
 
         checkpoints.push({
           filename,

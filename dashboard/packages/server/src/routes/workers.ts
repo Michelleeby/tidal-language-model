@@ -5,20 +5,28 @@ import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import type { Readable } from "node:stream";
-import { JobStore } from "../services/job-store.js";
+import { JobStore, jobStoreKeysFromManifest } from "../services/job-store.js";
 import type { SSEManager } from "../services/sse-manager.js";
-import { ExperimentArchiver } from "../services/experiment-archiver.js";
+import { ExperimentArchiver, archiverConfigFromManifest } from "../services/experiment-archiver.js";
 
 const ARTIFACT_FILENAME_RE = /^[\w.-]+\.(pth|json)$/;
 
 export default async function workerRoutes(fastify: FastifyInstance) {
-  const store = new JobStore(fastify.redis);
+  const plugin = fastify.pluginRegistry.getDefault();
+  const storeKeys = plugin
+    ? jobStoreKeysFromManifest(plugin.redis)
+    : undefined;
+  const store = new JobStore(fastify.redis, undefined, storeKeys);
   const sseManager: SSEManager = fastify.sseManager;
   const experimentsDir = fastify.serverConfig.experimentsDir;
+  const archiverConf = plugin
+    ? archiverConfigFromManifest(plugin.metrics)
+    : undefined;
   const archiver = new ExperimentArchiver(
     fastify.redis,
     experimentsDir,
     fastify.log,
+    archiverConf,
   );
 
   // Register raw body parser for checkpoint uploads — pass stream through as-is

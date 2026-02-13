@@ -3,7 +3,8 @@ import { GenerationBridge } from "../services/generation-bridge.js";
 import type { GenerateRequest, GenerateResponse } from "@tidal/shared";
 
 export default async function generateRoutes(fastify: FastifyInstance) {
-  const bridge = new GenerationBridge(fastify.serverConfig);
+  const plugin = fastify.pluginRegistry.getDefault();
+  const bridge = new GenerationBridge(fastify.serverConfig, plugin);
 
   fastify.post<{
     Body: GenerateRequest;

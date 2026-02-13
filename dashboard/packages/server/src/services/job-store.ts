@@ -1,11 +1,5 @@
 import type Redis from "ioredis";
-import type { TrainingJob, JobSignal, JobStatus } from "@tidal/shared";
-
-const JOBS_HASH = "tidal:jobs";
-const ACTIVE_SET = "tidal:jobs:active";
-const SIGNAL_PREFIX = "tidal:job:";
-const UPDATES_CHANNEL = "tidal:job:updates";
-const HEARTBEAT_PREFIX = "tidal:worker:";
+import type { TrainingJob, JobSignal, JobStatus, RedisConfig } from "@tidal/shared";
 
 const TERMINAL_STATUSES: Set<JobStatus> = new Set([
   "completed",
@@ -20,13 +14,48 @@ export interface JobStoreConfig {
   heartbeatTtl?: number;
 }
 
+export interface JobStoreRedisKeys {
+  jobsHash: string;
+  activeSet: string;
+  signalPrefix: string;
+  heartbeatPrefix: string;
+  updatesChannel: string;
+}
+
+const DEFAULT_REDIS_KEYS: JobStoreRedisKeys = {
+  jobsHash: "tidal:jobs",
+  activeSet: "tidal:jobs:active",
+  signalPrefix: "tidal:job:",
+  heartbeatPrefix: "tidal:worker:",
+  updatesChannel: "tidal:job:updates",
+};
+
+/**
+ * Build JobStoreRedisKeys from a plugin's RedisConfig.
+ */
+export function jobStoreKeysFromManifest(redis: RedisConfig): JobStoreRedisKeys {
+  return {
+    jobsHash: redis.jobsHash,
+    activeSet: redis.jobsActiveSet,
+    signalPrefix: redis.signalPrefix,
+    heartbeatPrefix: redis.heartbeatPrefix,
+    updatesChannel: redis.updatesChannel,
+  };
+}
+
 export class JobStore {
   private signalTtl: number;
   private heartbeatTtl: number;
+  private keys: JobStoreRedisKeys;
 
-  constructor(private redis: Redis | null, config?: JobStoreConfig) {
+  constructor(
+    private redis: Redis | null,
+    config?: JobStoreConfig,
+    redisKeys?: JobStoreRedisKeys,
+  ) {
     this.signalTtl = config?.signalTtl ?? 300;
     this.heartbeatTtl = config?.heartbeatTtl ?? 30;
+    this.keys = redisKeys ?? DEFAULT_REDIS_KEYS;
   }
 
   private ensureRedis(): Redis {
@@ -36,15 +65,15 @@ export class JobStore {
 
   async create(job: TrainingJob): Promise<void> {
     const r = this.ensureRedis();
-    await r.hset(JOBS_HASH, job.jobId, JSON.stringify(job));
+    await r.hset(this.keys.jobsHash, job.jobId, JSON.stringify(job));
     if (!TERMINAL_STATUSES.has(job.status)) {
-      await r.sadd(ACTIVE_SET, job.jobId);
+      await r.sadd(this.keys.activeSet, job.jobId);
     }
   }
 
   async get(jobId: string): Promise<TrainingJob | null> {
     const r = this.ensureRedis();
-    const raw = await r.hget(JOBS_HASH, jobId);
+    const raw = await r.hget(this.keys.jobsHash, jobId);
     return raw ? (JSON.parse(raw) as TrainingJob) : null;
   }
 
@@ -53,61 +82,61 @@ export class JobStore {
     patch: Partial<TrainingJob>,
   ): Promise<TrainingJob | null> {
     const r = this.ensureRedis();
-    const raw = await r.hget(JOBS_HASH, jobId);
+    const raw = await r.hget(this.keys.jobsHash, jobId);
     if (!raw) return null;
 
     const job: TrainingJob = { ...JSON.parse(raw), ...patch, updatedAt: Date.now() };
-    await r.hset(JOBS_HASH, jobId, JSON.stringify(job));
+    await r.hset(this.keys.jobsHash, jobId, JSON.stringify(job));
 
     if (TERMINAL_STATUSES.has(job.status)) {
-      await r.srem(ACTIVE_SET, jobId);
+      await r.srem(this.keys.activeSet, jobId);
     }
 
-    await r.publish(UPDATES_CHANNEL, JSON.stringify({ jobId }));
+    await r.publish(this.keys.updatesChannel, JSON.stringify({ jobId }));
     return job;
   }
 
   async list(): Promise<TrainingJob[]> {
     const r = this.ensureRedis();
-    const all = await r.hgetall(JOBS_HASH);
+    const all = await r.hgetall(this.keys.jobsHash);
     return Object.values(all).map((raw) => JSON.parse(raw) as TrainingJob);
   }
 
   async listActive(): Promise<TrainingJob[]> {
     const r = this.ensureRedis();
-    const ids = await r.smembers(ACTIVE_SET);
+    const ids = await r.smembers(this.keys.activeSet);
     if (ids.length === 0) return [];
-    const raws = await r.hmget(JOBS_HASH, ...ids);
+    const raws = await r.hmget(this.keys.jobsHash, ...ids);
     return raws.filter(Boolean).map((raw) => JSON.parse(raw!) as TrainingJob);
   }
 
   async sendSignal(jobId: string, signal: JobSignal): Promise<void> {
     const r = this.ensureRedis();
-    const key = `${SIGNAL_PREFIX}${jobId}:signal`;
+    const key = `${this.keys.signalPrefix}${jobId}:signal`;
     await r.set(key, signal, "EX", this.signalTtl);
-    await r.publish(UPDATES_CHANNEL, JSON.stringify({ jobId, signal }));
+    await r.publish(this.keys.updatesChannel, JSON.stringify({ jobId, signal }));
   }
 
   async readSignal(jobId: string): Promise<JobSignal | null> {
     const r = this.ensureRedis();
-    const val = await r.get(`${SIGNAL_PREFIX}${jobId}:signal`);
+    const val = await r.get(`${this.keys.signalPrefix}${jobId}:signal`);
     return val as JobSignal | null;
   }
 
   async clearSignal(jobId: string): Promise<void> {
     const r = this.ensureRedis();
-    await r.del(`${SIGNAL_PREFIX}${jobId}:signal`);
+    await r.del(`${this.keys.signalPrefix}${jobId}:signal`);
   }
 
   async getHeartbeat(jobId: string): Promise<number | null> {
     const r = this.ensureRedis();
-    const val = await r.get(`${HEARTBEAT_PREFIX}${jobId}:heartbeat`);
+    const val = await r.get(`${this.keys.heartbeatPrefix}${jobId}:heartbeat`);
     return val ? parseFloat(val) : null;
   }
 
   async setHeartbeat(jobId: string): Promise<void> {
     const r = this.ensureRedis();
-    const key = `${HEARTBEAT_PREFIX}${jobId}:heartbeat`;
+    const key = `${this.keys.heartbeatPrefix}${jobId}:heartbeat`;
     await r.set(key, String(Date.now() / 1000), "EX", this.heartbeatTtl);
   }
 }

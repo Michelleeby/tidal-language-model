@@ -22,7 +22,8 @@ export class WorkerSpawner {
           ...process.env,
           PYTHONUNBUFFERED: "1",
           REDIS_URL: this.redisUrl,
-          TIDAL_JOB_ID: jobId,
+          TRAINING_JOB_ID: jobId,
+          TIDAL_JOB_ID: jobId, // backward compat
         },
         stdio: ["ignore", "pipe", "pipe"],
         // Start a new process group so we can kill worker + all children

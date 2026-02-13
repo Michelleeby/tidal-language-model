@@ -2,20 +2,48 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useExperiments } from "../hooks/useExperiments.js";
 import { useCheckpoints } from "../hooks/useMetrics.js";
+import { usePlugin } from "../hooks/usePlugin.js";
 import { api } from "../api/client.js";
-import type { GenerateRequest } from "@tidal/shared";
+import type { GenerateRequest, GenerationMode } from "@tidal/shared";
+
+/** Fallback modes when manifest hasn't loaded yet */
+const DEFAULT_MODES: GenerationMode[] = [
+  { id: "none", displayName: "None", requiresRLCheckpoint: false },
+  { id: "random", displayName: "Random", requiresRLCheckpoint: false },
+  { id: "fixed", displayName: "Fixed", requiresRLCheckpoint: false },
+  { id: "learned", displayName: "Learned (RL)", requiresRLCheckpoint: true },
+];
 
 export default function PlaygroundPage() {
   const { data: expData } = useExperiments();
+  const { manifest } = usePlugin();
   const [expId, setExpId] = useState<string | null>(null);
   const { data: checkpointsData } = useCheckpoints(expId);
 
+  // Read generation config from manifest (with sensible defaults)
+  const modes = manifest?.generation.modes ?? DEFAULT_MODES;
+  const params = manifest?.generation.parameters ?? [];
+
   const [prompt, setPrompt] = useState("Once upon a time");
   const [checkpoint, setCheckpoint] = useState("");
-  const [temperature, setTemperature] = useState(0.8);
-  const [topK, setTopK] = useState(50);
-  const [maxTokens, setMaxTokens] = useState(50);
-  const [gatingMode, setGatingMode] = useState<GenerateRequest["gatingMode"]>("none");
+  const [gatingMode, setGatingMode] = useState<string>("none");
+
+  // Dynamic parameter values — keyed by parameter ID
+  const [paramValues, setParamValues] = useState<Record<string, number>>(() => {
+    const defaults: Record<string, number> = {};
+    for (const p of params) {
+      defaults[p.id] = p.default;
+    }
+    // Provide hardcoded fallback defaults if manifest hasn't loaded
+    if (!defaults.temperature) defaults.temperature = 0.8;
+    if (!defaults.topK) defaults.topK = 50;
+    if (!defaults.maxTokens) defaults.maxTokens = 50;
+    return defaults;
+  });
+
+  const setParam = (id: string, value: number) => {
+    setParamValues((prev) => ({ ...prev, [id]: value }));
+  };
 
   const generateMutation = useMutation({
     mutationFn: (body: GenerateRequest) => api.generate(body),
@@ -26,12 +54,15 @@ export default function PlaygroundPage() {
     generateMutation.mutate({
       checkpoint,
       prompt,
-      maxTokens,
-      temperature,
-      topK,
-      gatingMode,
+      maxTokens: paramValues.maxTokens ?? 50,
+      temperature: paramValues.temperature ?? 0.8,
+      topK: paramValues.topK ?? 50,
+      gatingMode: gatingMode as GenerateRequest["gatingMode"],
     });
   };
+
+  // Find mode that requires RL checkpoint for auto-selection
+  const learnedMode = modes.find((m) => m.requiresRLCheckpoint);
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -68,12 +99,12 @@ export default function PlaygroundPage() {
             value={checkpoint}
             onChange={(e) => {
               setCheckpoint(e.target.value);
-              // Auto-select gating mode based on checkpoint phase metadata
+              // Auto-select learned gating mode when RL checkpoint selected
               const selected = checkpointsData?.checkpoints.find(
                 (cp) => cp.path === e.target.value,
               );
-              if (selected?.phase === "rl") {
-                setGatingMode("learned");
+              if (selected?.phase === "rl" && learnedMode) {
+                setGatingMode(learnedMode.id);
               }
             }}
             disabled={!expId}
@@ -99,50 +130,72 @@ export default function PlaygroundPage() {
         />
       </div>
 
-      {/* Parameters */}
+      {/* Parameters — dynamically rendered from manifest */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">
-            Temperature: {temperature}
-          </label>
-          <input
-            type="range"
-            min="0.1"
-            max="2.0"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">
-            Top-K: {topK}
-          </label>
-          <input
-            type="range"
-            min="1"
-            max="200"
-            step="1"
-            value={topK}
-            onChange={(e) => setTopK(parseInt(e.target.value))}
-            className="w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">
-            Max Tokens: {maxTokens}
-          </label>
-          <input
-            type="range"
-            min="10"
-            max="200"
-            step="10"
-            value={maxTokens}
-            onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-            className="w-full"
-          />
-        </div>
+        {params.length > 0
+          ? params.map((p) => (
+              <div key={p.id}>
+                <label className="block text-xs text-gray-500 mb-1">
+                  {p.displayName}: {paramValues[p.id] ?? p.default}
+                </label>
+                <input
+                  type="range"
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  value={paramValues[p.id] ?? p.default}
+                  onChange={(e) => setParam(p.id, parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            ))
+          : /* Fallback when manifest hasn't loaded */
+            <>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Temperature: {paramValues.temperature}
+                </label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="2.0"
+                  step="0.1"
+                  value={paramValues.temperature}
+                  onChange={(e) => setParam("temperature", parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Top-K: {paramValues.topK}
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="200"
+                  step="1"
+                  value={paramValues.topK}
+                  onChange={(e) => setParam("topK", parseInt(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Max Tokens: {paramValues.maxTokens}
+                </label>
+                <input
+                  type="range"
+                  min="10"
+                  max="200"
+                  step="10"
+                  value={paramValues.maxTokens}
+                  onChange={(e) => setParam("maxTokens", parseInt(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </>}
+
+        {/* Gating mode — always rendered, options from manifest */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">
             Gating Mode
@@ -150,14 +203,13 @@ export default function PlaygroundPage() {
           <select
             className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200"
             value={gatingMode}
-            onChange={(e) =>
-              setGatingMode(e.target.value as GenerateRequest["gatingMode"])
-            }
+            onChange={(e) => setGatingMode(e.target.value)}
           >
-            <option value="none">None</option>
-            <option value="random">Random</option>
-            <option value="fixed">Fixed</option>
-            <option value="learned">Learned (RL)</option>
+            {modes.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
           </select>
         </div>
       </div>

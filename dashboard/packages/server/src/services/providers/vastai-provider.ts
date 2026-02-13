@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
-import type { TrainingJob } from "@tidal/shared";
+import type { TrainingJob, GpuTierSpec } from "@tidal/shared";
 import type {
   ComputeProvider,
   ProvisionResult,
@@ -11,9 +11,9 @@ const TERMINAL_INSTANCE_STATUSES = new Set(["exited", "offline", "error"]);
 const MIN_INET_DOWN_MBPS = 800;
 const MIN_INET_UP_MBPS = 800;
 const MIN_RELIABILITY = 0.99;
-const DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
 
-const GPU_TIERS: Record<GpuTier, { minGpuRamMb: number; minCpuCores: number }> = {
+const DEFAULT_DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
+const DEFAULT_GPU_TIERS: Record<string, GpuTierSpec> = {
   standard: { minGpuRamMb: 16_000, minCpuCores: 16 },
 };
 
@@ -23,6 +23,8 @@ export interface VastAIProviderConfig {
   authToken: string | null;
   repoUrl: string | null;
   log: FastifyBaseLogger;
+  dockerImage?: string;
+  gpuTiers?: Record<string, GpuTierSpec>;
 }
 
 interface VastOffer {
@@ -43,6 +45,8 @@ export class VastAIProvider implements ComputeProvider {
   private authToken: string | null;
   private repoUrl: string | null;
   private log: FastifyBaseLogger;
+  private dockerImage: string;
+  private gpuTiers: Record<string, GpuTierSpec>;
 
   constructor(config: VastAIProviderConfig) {
     this.apiKey = config.apiKey;
@@ -50,6 +54,8 @@ export class VastAIProvider implements ComputeProvider {
     this.authToken = config.authToken;
     this.repoUrl = config.repoUrl;
     this.log = config.log;
+    this.dockerImage = config.dockerImage ?? DEFAULT_DOCKER_IMAGE;
+    this.gpuTiers = config.gpuTiers ?? DEFAULT_GPU_TIERS;
   }
 
   async canProvision(): Promise<boolean> {
@@ -124,7 +130,7 @@ export class VastAIProvider implements ComputeProvider {
     const instanceId = job.providerMeta?.instanceId;
     if (!instanceId || !this.apiKey) return false;
 
-    // No try/catch — let network errors propagate as throws so callers
+    // No try/catch -- let network errors propagate as throws so callers
     // can distinguish "confirmed dead" (false) from "inconclusive" (throw).
     const res = await fetch(`${VASTAI_API}/instances/${instanceId}/`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -144,10 +150,10 @@ export class VastAIProvider implements ComputeProvider {
   }
 
   private async findCheapestOffer(tier: GpuTier): Promise<VastOffer | null> {
-    const { minGpuRamMb, minCpuCores } = GPU_TIERS[tier];
+    const tierSpec = this.gpuTiers[tier] ?? DEFAULT_GPU_TIERS["standard"];
     const query = JSON.stringify({
-      gpu_ram: { gte: minGpuRamMb },
-      cpu_cores_effective: { gte: minCpuCores },
+      gpu_ram: { gte: tierSpec.minGpuRamMb },
+      cpu_cores_effective: { gte: tierSpec.minCpuCores },
       inet_down: { gte: MIN_INET_DOWN_MBPS },
       inet_up: { gte: MIN_INET_UP_MBPS },
       rentable: { eq: true },
@@ -180,7 +186,7 @@ export class VastAIProvider implements ComputeProvider {
       },
       body: JSON.stringify({
         client_id: "me",
-        image: DOCKER_IMAGE,
+        image: this.dockerImage,
         disk: 20,
         onstart: onStartScript,
       }),

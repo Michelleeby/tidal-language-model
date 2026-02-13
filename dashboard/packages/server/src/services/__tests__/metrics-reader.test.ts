@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import type Redis from "ioredis";
 import type { MetricPoint, TrainingStatus } from "@tidal/shared";
-import { MetricsReader } from "../metrics-reader.js";
+import { MetricsReader, type MetricsReaderConfig } from "../metrics-reader.js";
 import { ExperimentDiscovery } from "../experiment-discovery.js";
 
 // ---------------------------------------------------------------------------
@@ -198,6 +198,76 @@ describe("MetricsReader.getStatus()", () => {
 
     assert.ok(result);
     assert.equal(result.status, "completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MetricsReader with custom prefix
+// ---------------------------------------------------------------------------
+
+describe("MetricsReader with custom prefix", () => {
+  const customConfig: MetricsReaderConfig = {
+    redisPrefix: "mymodel",
+    lmDirectory: "custom_metrics",
+    lmHistoryFile: "history.jsonl",
+    lmStatusFile: "state.json",
+    lmLatestFile: "current.json",
+    rlDirectory: "rl_data",
+    rlMetricsFile: "rl_data.json",
+  };
+
+  it("reads metrics from custom Redis prefix", async () => {
+    tmpDir = await freshTmpDir();
+    const redisPoints = [makePoint(100)];
+    const store: MockStore = {
+      lists: new Map([
+        [
+          `mymodel:metrics:${EXP_ID}:history`,
+          redisPoints.map((p) => JSON.stringify(p)),
+        ],
+      ]),
+      keys: new Map(),
+      sets: new Map(),
+    };
+
+    const reader = new MetricsReader(createRedisMock(store), tmpDir, customConfig);
+    const result = await reader.getFullHistory(EXP_ID);
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].step, 100);
+  });
+
+  it("reads status from custom Redis prefix", async () => {
+    tmpDir = await freshTmpDir();
+    const status = makeStatus("training");
+
+    const store: MockStore = {
+      lists: new Map(),
+      keys: new Map([[`mymodel:status:${EXP_ID}`, JSON.stringify(status)]]),
+      sets: new Map(),
+    };
+
+    const reader = new MetricsReader(createRedisMock(store), tmpDir, customConfig);
+    const result = await reader.getStatus(EXP_ID);
+
+    assert.ok(result);
+    assert.equal(result.status, "training");
+  });
+
+  it("reads from custom JSONL directory and filename", async () => {
+    tmpDir = await freshTmpDir();
+    const metricsDir = path.join(tmpDir, EXP_ID, "custom_metrics");
+    await fsp.mkdir(metricsDir, { recursive: true });
+
+    const points = [makePoint(50)];
+    const jsonl = points.map((p) => JSON.stringify(p)).join("\n") + "\n";
+    await fsp.writeFile(path.join(metricsDir, "history.jsonl"), jsonl);
+
+    const reader = new MetricsReader(null, tmpDir, customConfig);
+    const result = await reader.getFullHistory(EXP_ID);
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].step, 50);
   });
 });
 

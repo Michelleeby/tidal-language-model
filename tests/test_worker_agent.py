@@ -453,7 +453,7 @@ class TestRunDownloadIntegration(unittest.TestCase):
             call_order.append(("download", None))
 
         with patch.object(agent, "_download_checkpoint", side_effect=fake_download):
-            with patch.object(agent, "_run_rl_training", return_value=0):
+            with patch.object(agent, "_run_training", return_value=0):
                 with patch.object(agent, "_final_checkpoint_sweep"):
                     agent.run()
 
@@ -506,7 +506,7 @@ class TestRunDownloadIntegration(unittest.TestCase):
         transport.update_status = MagicMock()
 
         with patch.object(agent, "_download_checkpoint", side_effect=RuntimeError("fail")):
-            with patch.object(agent, "_run_rl_training") as mock_train:
+            with patch.object(agent, "_run_training") as mock_train:
                 agent.run()
                 mock_train.assert_not_called()
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useActiveJob, useCreateJob } from "../../hooks/useJobs.js";
 import { useCheckpoints } from "../../hooks/useMetrics.js";
+import { usePlugin } from "../../hooks/usePlugin.js";
 import type { JobStatus } from "@tidal/shared";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -18,9 +19,21 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
   const { data: checkpointsData } = useCheckpoints(selectedExpId);
   const { data: activeData } = useActiveJob();
   const createJob = useCreateJob();
+  const { manifest } = usePlugin();
+
+  // Derive RL training phase config from manifest
+  const rlPhase = manifest?.trainingPhases.find((p) => p.id === "rl-training");
+  const pluginPrefix = manifest ? `plugins/${manifest.name}/` : "plugins/tidal/";
+  const defaultConfigPath = rlPhase?.configFiles[0]
+    ? `${pluginPrefix}${rlPhase.configFiles[0]}`
+    : `${pluginPrefix}configs/base_config.yaml`;
+  const defaultRlConfigPath = rlPhase?.configFiles[1]
+    ? `${pluginPrefix}${rlPhase.configFiles[1]}`
+    : `${pluginPrefix}configs/rl_config.yaml`;
+
   const [selectedCheckpoint, setSelectedCheckpoint] = useState("");
-  const [configPath, setConfigPath] = useState("configs/base_config.yaml");
-  const [rlConfigPath, setRlConfigPath] = useState("configs/rl_config.yaml");
+  const [configPath, setConfigPath] = useState(defaultConfigPath);
+  const [rlConfigPath, setRlConfigPath] = useState(defaultRlConfigPath);
   const [timesteps, setTimesteps] = useState("");
 
   const activeJob = activeData?.job ?? null;
@@ -37,6 +50,7 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
     if (!selectedCheckpoint) return;
     createJob.mutate({
       type: "rl-training",
+      plugin: manifest?.name ?? "tidal",
       configPath,
       rlConfigPath,
       checkpoint: selectedCheckpoint,

@@ -3,14 +3,34 @@ import path from "node:path";
 import type Redis from "ioredis";
 import type { ExperimentSummary, TrainingStatus } from "@tidal/shared";
 
+export interface ExperimentDiscoveryConfig {
+  /** Redis key prefix, e.g. "tidal" */
+  redisPrefix: string;
+  /** LM metrics directory name, e.g. "dashboard_metrics" */
+  lmDirectory: string;
+  /** LM status filename, e.g. "status.json" */
+  lmStatusFile: string;
+}
+
+const DEFAULT_CONFIG: ExperimentDiscoveryConfig = {
+  redisPrefix: "tidal",
+  lmDirectory: "dashboard_metrics",
+  lmStatusFile: "status.json",
+};
+
 /**
  * Discovers experiments from Redis (set of IDs) or filesystem.
  */
 export class ExperimentDiscovery {
+  private dc: ExperimentDiscoveryConfig;
+
   constructor(
     private redis: Redis | null,
     private experimentsDir: string,
-  ) {}
+    config?: ExperimentDiscoveryConfig,
+  ) {
+    this.dc = config ?? DEFAULT_CONFIG;
+  }
 
   async listExperiments(): Promise<ExperimentSummary[]> {
     const ids = await this.getExperimentIds();
@@ -30,7 +50,7 @@ export class ExperimentDiscovery {
     // Try Redis first
     if (this.redis) {
       try {
-        const ids = await this.redis.smembers("tidal:experiments");
+        const ids = await this.redis.smembers(`${this.dc.redisPrefix}:experiments`);
         if (ids.length > 0) return ids;
       } catch {
         // Fall through
@@ -70,17 +90,17 @@ export class ExperimentDiscovery {
       const hasAblation = entries.includes("ablation_results.json");
       const checkpoints = entries.filter((f) => f.endsWith(".pth"));
 
-      // Read status — try disk first, then Redis
+      // Read status -- try disk first, then Redis
       let status: TrainingStatus | null = null;
-      const statusPath = path.join(expPath, "dashboard_metrics", "status.json");
+      const statusPath = path.join(expPath, this.dc.lmDirectory, this.dc.lmStatusFile);
       try {
         const raw = await fsp.readFile(statusPath, "utf-8");
         status = JSON.parse(raw);
       } catch {
-        // No status file on disk — try Redis
+        // No status file on disk -- try Redis
         if (this.redis) {
           try {
-            const raw = await this.redis.get(`tidal:status:${id}`);
+            const raw = await this.redis.get(`${this.dc.redisPrefix}:status:${id}`);
             if (raw) status = JSON.parse(raw);
           } catch {
             // No Redis status either
@@ -99,7 +119,7 @@ export class ExperimentDiscovery {
         checkpoints,
       };
     } catch {
-      // No local directory — try Redis (remote experiment)
+      // No local directory -- try Redis (remote experiment)
       return this.getRedisOnlySummary(id);
     }
   }
@@ -114,7 +134,7 @@ export class ExperimentDiscovery {
     if (!this.redis) return null;
 
     try {
-      const statusRaw = await this.redis.get(`tidal:status:${id}`);
+      const statusRaw = await this.redis.get(`${this.dc.redisPrefix}:status:${id}`);
       const status: TrainingStatus | null = statusRaw
         ? JSON.parse(statusRaw)
         : null;

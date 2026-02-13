@@ -2,7 +2,8 @@
 
 export type ComputeProviderType = "local" | "vastai" | "aws";
 
-export type JobType = "lm-training" | "rl-training";
+/** Job type is now a string determined by the plugin manifest (e.g. "lm-training", "rl-training"). */
+export type JobType = string;
 
 export type JobStatus =
   | "pending"
@@ -21,6 +22,7 @@ export type JobSignal = "complete" | "stop";
 
 export interface JobConfig {
   type: JobType;
+  plugin: string;
   configPath: string;
   resumeExpDir?: string;
   checkpoint?: string;
@@ -47,6 +49,7 @@ export interface TrainingJob {
 
 export interface CreateJobRequest {
   type: JobType;
+  plugin: string;
   configPath: string;
   provider?: ComputeProviderType;
   resumeExpDir?: string;

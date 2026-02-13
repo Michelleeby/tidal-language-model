@@ -7,20 +7,28 @@ import type {
   JobSignalRequest,
   JobSignalResponse,
 } from "@tidal/shared";
-import { JobStore } from "../services/job-store.js";
+import { JobStore, jobStoreKeysFromManifest } from "../services/job-store.js";
 import { JobOrchestrator } from "../services/job-orchestrator.js";
-import { ExperimentArchiver } from "../services/experiment-archiver.js";
+import { ExperimentArchiver, archiverConfigFromManifest } from "../services/experiment-archiver.js";
 import { JobPolicyRegistry } from "../services/job-policy.js";
 
 export default async function jobRoutes(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
-  const store = new JobStore(fastify.redis);
+  const plugin = fastify.pluginRegistry.getDefault();
+  const storeKeys = plugin
+    ? jobStoreKeysFromManifest(plugin.redis)
+    : undefined;
+  const store = new JobStore(fastify.redis, undefined, storeKeys);
+  const archiverConf = plugin
+    ? archiverConfigFromManifest(plugin.metrics)
+    : undefined;
   const archiver = new ExperimentArchiver(
     fastify.redis,
     config.experimentsDir,
     fastify.log,
+    archiverConf,
   );
-  const policyRegistry = new JobPolicyRegistry();
+  const policyRegistry = new JobPolicyRegistry(fastify.pluginRegistry);
   const orchestrator = new JobOrchestrator(
     store,
     fastify.provisioningChain,

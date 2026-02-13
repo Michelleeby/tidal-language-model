@@ -1,6 +1,6 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { SSEManager } from "../services/sse-manager.js";
+import { SSEManager, sseConfigFromManifest } from "../services/sse-manager.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -9,7 +9,12 @@ declare module "fastify" {
 }
 
 export default fp(async function ssePlugin(fastify: FastifyInstance) {
-  const manager = new SSEManager(fastify.redis);
+  const plugin = fastify.pluginRegistry?.getDefault();
+  const sseConfig = plugin
+    ? sseConfigFromManifest(plugin.redis)
+    : undefined;
+
+  const manager = new SSEManager(fastify.redis, undefined, sseConfig);
 
   fastify.decorate("sseManager", manager);
 
