@@ -350,9 +350,11 @@ class WorkerAgent:
         exp_id = parts[idx + 1]
         filename = parts[idx + 2]
 
-        dest = os.path.join(self._project_root, "experiments", exp_id, filename)
+        local_path = os.path.join("experiments", exp_id, filename)
+        dest = os.path.join(self._project_root, local_path)
         if os.path.exists(dest):
             print(f"Checkpoint already exists: {dest}", file=sys.stderr)
+            config["checkpoint"] = local_path
             return
 
         os.makedirs(os.path.join(self._project_root, "experiments", exp_id), exist_ok=True)
@@ -440,6 +442,8 @@ class WorkerAgent:
 
                 # Atomic rename
                 os.rename(tmp_dest, dest)
+                # Rewrite config to local relative path so train_rl.py finds it
+                config["checkpoint"] = local_path
                 print(
                     f"Downloaded checkpoint: {filename} ({bytes_written} bytes)",
                     file=sys.stderr,

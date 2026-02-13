@@ -153,6 +153,54 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             final = os.path.join(tmpdir, "experiments", "20260213-exp-abc", "checkpoint_epoch_5.pth")
             self.assertTrue(os.path.exists(final))
 
+    def test_rewrites_config_checkpoint_to_local_path(self):
+        """After download, config['checkpoint'] is rewritten to a local relative path."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            body = b"model data"
+
+            fake_resp = FakeResponse(200, body, {
+                "content-length": str(len(body)),
+            })
+            mock_conn = MagicMock()
+            mock_conn.getresponse.return_value = fake_resp
+
+            config = {
+                "checkpoint": "/data/experiments/exp-xyz/model.pth",
+            }
+            with patch("http.client.HTTPConnection", return_value=mock_conn):
+                agent._download_checkpoint(config)
+
+            self.assertEqual(
+                config["checkpoint"],
+                os.path.join("experiments", "exp-xyz", "model.pth"),
+            )
+
+    def test_rewrites_config_when_file_already_exists(self):
+        """Config path is rewritten even when skipping download (file exists)."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            exp_dir = os.path.join(tmpdir, "experiments", "exp-abc")
+            os.makedirs(exp_dir)
+            with open(os.path.join(exp_dir, "model.pth"), "wb") as f:
+                f.write(b"existing")
+
+            config = {
+                "checkpoint": "/data/experiments/exp-abc/model.pth",
+            }
+            agent._download_checkpoint(config)
+
+            self.assertEqual(
+                config["checkpoint"],
+                os.path.join("experiments", "exp-abc", "model.pth"),
+            )
+
     def test_creates_experiment_directory(self):
         """Creates experiments/<expId>/ if it doesn't exist."""
         transport = _make_http_transport()
