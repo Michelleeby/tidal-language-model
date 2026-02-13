@@ -125,17 +125,23 @@ export class VastAIProvider implements ComputeProvider {
     const instanceId = job.providerMeta?.instanceId;
     if (!instanceId || !this.apiKey) return false;
 
-    try {
-      const res = await fetch(`${VASTAI_API}/instances/${instanceId}/`, {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
-      });
-      if (!res.ok) return false;
-      const data = (await res.json()) as { actual_status?: string };
-      if (!data.actual_status) return false;
-      return !TERMINAL_INSTANCE_STATUSES.has(data.actual_status);
-    } catch {
-      return false;
+    // No try/catch — let network errors propagate as throws so callers
+    // can distinguish "confirmed dead" (false) from "inconclusive" (throw).
+    const res = await fetch(`${VASTAI_API}/instances/${instanceId}/`, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+
+    if (res.status === 404) return false; // instance destroyed
+
+    if (!res.ok) {
+      throw new Error(`vast.ai instance status check failed: ${res.status}`);
     }
+
+    const data = (await res.json()) as { actual_status?: string };
+    if (!data.actual_status) {
+      throw new Error("vast.ai returned no actual_status");
+    }
+    return !TERMINAL_INSTANCE_STATUSES.has(data.actual_status);
   }
 
   private async findCheapestOffer(tier: GpuTier): Promise<VastOffer | null> {
