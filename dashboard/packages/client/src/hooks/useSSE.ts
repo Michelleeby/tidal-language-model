@@ -31,7 +31,7 @@ export function useSSE(expId: string | null) {
 
     source.addEventListener("status", (e) => {
       const status: TrainingStatus = JSON.parse(e.data);
-      queryClient.setQueryData(["status", expId], { expId, status });
+      queryClient.setQueryData(["status", expId], status);
     });
 
     source.addEventListener("rl-metrics", (e) => {
