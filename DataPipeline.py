@@ -21,7 +21,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
-from datasets import load_dataset
 
 logger = logging.getLogger("DataPipeline")
 if not logger.handlers:
@@ -48,6 +47,8 @@ def get_tokenizer():
 
 def _load_dataset_prefer_cache(dataset_name, split):
     """Load HF dataset preferring local cache. Falls back to network on cache miss."""
+    from datasets import load_dataset
+
     try:
         os.environ["HF_HUB_OFFLINE"] = "1"
         return load_dataset(dataset_name, split=split)

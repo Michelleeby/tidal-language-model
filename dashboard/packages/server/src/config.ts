@@ -9,6 +9,7 @@ export interface ServerConfig {
   experimentsDir: string;
   pythonBin: string;
   projectRoot: string;
+  inferenceUrl: string | null;
   defaultComputeProvider: ComputeProviderType;
   authToken: string | null;
   vastaiApiKey: string | null;
@@ -35,6 +36,7 @@ export function loadConfig(): ServerConfig {
       process.env.PYTHON_BIN ??
       path.join(projectRoot, "tidal-env", "bin", "python"),
     projectRoot,
+    inferenceUrl: process.env.INFERENCE_URL ?? null,
     defaultComputeProvider:
       (process.env.DEFAULT_COMPUTE_PROVIDER as ComputeProviderType) ?? "local",
     authToken: process.env.TIDAL_AUTH_TOKEN ?? null,

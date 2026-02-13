@@ -1,14 +1,37 @@
 import { spawn } from "node:child_process";
+import { accessSync } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { ServerConfig } from "../config.js";
 import type { GenerateRequest, GenerateResponse } from "@tidal/shared";
 
 /**
- * Spawns Generator.py as a subprocess to generate text.
+ * Dual-mode generation bridge:
+ * - If INFERENCE_URL is set → HTTP POST to the inference sidecar (production/Docker)
+ * - Else if pythonBin exists → subprocess spawn (local dev)
+ * - Else → 503 error
  */
 export class GenerationBridge {
-  constructor(private config: ServerConfig) {}
+  private inferenceUrl: string | null;
+  private subprocessAvailable: boolean;
+
+  constructor(private config: ServerConfig) {
+    this.inferenceUrl = config.inferenceUrl;
+    this.subprocessAvailable = false;
+
+    if (!this.inferenceUrl) {
+      try {
+        accessSync(config.pythonBin);
+        this.subprocessAvailable = true;
+      } catch {
+        // No Python binary available
+      }
+    }
+  }
+
+  get available(): boolean {
+    return !!this.inferenceUrl || this.subprocessAvailable;
+  }
 
   /**
    * When the user selects an RL checkpoint as the main checkpoint, resolve
@@ -71,9 +94,59 @@ export class GenerationBridge {
   }
 
   async generate(req: GenerateRequest): Promise<GenerateResponse> {
+    if (!this.available) {
+      throw new Error(
+        "Text generation is not available on this host — no Python environment or inference service found. " +
+        "Generation requires either INFERENCE_URL or a local Python environment with model checkpoints.",
+      );
+    }
+
     const start = Date.now();
     const { modelCheckpoint, rlCheckpoint } = await this.resolveCheckpoints(req);
 
+    if (this.inferenceUrl) {
+      return this.generateViaHttp(req, modelCheckpoint, rlCheckpoint, start);
+    }
+    return this.generateViaSubprocess(req, modelCheckpoint, rlCheckpoint, start);
+  }
+
+  private async generateViaHttp(
+    req: GenerateRequest,
+    modelCheckpoint: string,
+    rlCheckpoint: string | undefined,
+    start: number,
+  ): Promise<GenerateResponse> {
+    const res = await fetch(`${this.inferenceUrl}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        checkpoint: modelCheckpoint,
+        prompt: req.prompt,
+        maxTokens: req.maxTokens ?? 50,
+        temperature: req.temperature ?? 0.8,
+        topK: req.topK ?? 50,
+        gatingMode: req.gatingMode ?? "none",
+        rlCheckpoint: rlCheckpoint,
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(
+        (body as { error?: string }).error ?? `Inference sidecar returned ${res.status}`,
+      );
+    }
+
+    return (await res.json()) as GenerateResponse;
+  }
+
+  private async generateViaSubprocess(
+    req: GenerateRequest,
+    modelCheckpoint: string,
+    rlCheckpoint: string | undefined,
+    start: number,
+  ): Promise<GenerateResponse> {
     const args = [
       "Generator.py",
       "--config",

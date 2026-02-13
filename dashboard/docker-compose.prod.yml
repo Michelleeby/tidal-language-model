@@ -12,6 +12,22 @@ services:
       timeout: 5s
       retries: 3
 
+  inference:
+    build:
+      context: ..
+      dockerfile: inference.Dockerfile
+    restart: unless-stopped
+    volumes:
+      - experiments:/data/experiments
+    environment:
+      - CONFIG_PATH=/app/configs/base_config.yaml
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   app:
     build:
       context: .
@@ -20,10 +36,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      inference:
+        condition: service_healthy
     environment:
       - PORT=4400
       - HOST=0.0.0.0
       - REDIS_URL=redis://redis:6379
+      - INFERENCE_URL=http://inference:5000
       - TIDAL_AUTH_TOKEN=${TIDAL_AUTH_TOKEN}
       - EXPERIMENTS_DIR=/data/experiments
       - DEFAULT_COMPUTE_PROVIDER=${DEFAULT_COMPUTE_PROVIDER:-local}

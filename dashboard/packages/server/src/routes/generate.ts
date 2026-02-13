@@ -7,8 +7,26 @@ export default async function generateRoutes(fastify: FastifyInstance) {
 
   fastify.post<{
     Body: GenerateRequest;
-    Reply: GenerateResponse;
-  }>("/api/generate", { preHandler: [fastify.rateLimit] }, async (request) => {
-    return bridge.generate(request.body);
+  }>("/api/generate", { preHandler: [fastify.rateLimit] }, async (request, reply) => {
+    if (!bridge.available) {
+      return reply.status(503).send({
+        error:
+          "Text generation is not available on this host — " +
+          "no inference service or Python environment found.",
+      });
+    }
+
+    try {
+      return await bridge.generate(request.body);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        message.includes("not available") ||
+        message.includes("Inference sidecar")
+      ) {
+        return reply.status(503).send({ error: message });
+      }
+      throw err;
+    }
   });
 }
