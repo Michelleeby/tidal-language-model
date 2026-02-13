@@ -9,34 +9,12 @@ import type {
 } from "@tidal/shared";
 import { JobStore } from "../services/job-store.js";
 import { JobOrchestrator } from "../services/job-orchestrator.js";
-import { ProvisioningChain } from "../services/provisioning-chain.js";
-import { WorkerSpawner } from "../services/worker-spawner.js";
-import { LocalProvider } from "../services/providers/local-provider.js";
-import { AWSProvider } from "../services/providers/aws-provider.js";
-import { VastAIProvider } from "../services/providers/vastai-provider.js";
 import { ExperimentArchiver } from "../services/experiment-archiver.js";
 import { JobPolicyRegistry } from "../services/job-policy.js";
 
 export default async function jobRoutes(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
   const store = new JobStore(fastify.redis);
-  const spawner = new WorkerSpawner(
-    config.projectRoot,
-    config.pythonBin,
-    config.redisUrl,
-    fastify.log,
-  );
-  const chain = new ProvisioningChain([
-    new LocalProvider(spawner),
-    new AWSProvider(),
-    new VastAIProvider({
-      apiKey: config.vastaiApiKey,
-      dashboardUrl: config.dashboardUrl,
-      authToken: config.authToken,
-      repoUrl: config.repoUrl,
-      log: fastify.log,
-    }),
-  ]);
   const archiver = new ExperimentArchiver(
     fastify.redis,
     config.experimentsDir,
@@ -45,8 +23,8 @@ export default async function jobRoutes(fastify: FastifyInstance) {
   const policyRegistry = new JobPolicyRegistry();
   const orchestrator = new JobOrchestrator(
     store,
-    chain,
-    spawner,
+    fastify.provisioningChain,
+    fastify.workerSpawner,
     fastify.sseManager,
     fastify.log,
     policyRegistry,

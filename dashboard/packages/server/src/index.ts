@@ -7,6 +7,7 @@ import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
 import authPlugin from "./plugins/auth.js";
 import rateLimitPlugin from "./plugins/rate-limit.js";
+import provisioningPlugin from "./plugins/provisioning.js";
 import experimentsRoutes from "./routes/experiments.js";
 import metricsRoutes from "./routes/metrics.js";
 import rlMetricsRoutes from "./routes/rl-metrics.js";
@@ -59,6 +60,7 @@ async function main() {
   await fastify.register(ssePlugin);
   await fastify.register(authPlugin);
   await fastify.register(rateLimitPlugin);
+  await fastify.register(provisioningPlugin);
 
   // API routes
   await fastify.register(experimentsRoutes);

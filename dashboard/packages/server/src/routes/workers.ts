@@ -69,7 +69,7 @@ export default async function workerRoutes(fastify: FastifyInstance) {
 
       sseManager.broadcastJobUpdate(updated);
 
-      // Archive experiment data to disk before Redis TTLs expire
+      // On terminal status: archive data and deprovision remote instances
       if (status === "completed" || status === "failed") {
         const expId = updated.experimentId;
         if (expId) {
@@ -77,6 +77,20 @@ export default async function workerRoutes(fastify: FastifyInstance) {
             await archiver.archive(expId);
           } catch (err) {
             fastify.log.error({ expId, err }, "Archival failed");
+          }
+        }
+
+        // Deprovision remote compute (e.g. destroy VastAI instance)
+        const provider = fastify.provisioningChain.getProvider(updated.provider);
+        if (provider?.isRemote) {
+          try {
+            await provider.deprovision(updated);
+            fastify.log.info(
+              { jobId, provider: updated.provider },
+              "Remote instance deprovisioned on job completion",
+            );
+          } catch (err) {
+            fastify.log.error({ jobId, err }, "Deprovision failed");
           }
         }
       }
