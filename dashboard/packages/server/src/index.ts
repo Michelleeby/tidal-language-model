@@ -21,6 +21,7 @@ import jobRoutes from "./routes/jobs.js";
 import workerRoutes from "./routes/workers.js";
 import pluginsRoutes from "./routes/plugins.js";
 import configsRoutes from "./routes/configs.js";
+import reportsRoutes from "./routes/reports.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -93,6 +94,7 @@ async function main() {
   await fastify.register(workerRoutes);
   await fastify.register(pluginsRoutes);
   await fastify.register(configsRoutes);
+  await fastify.register(reportsRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(
