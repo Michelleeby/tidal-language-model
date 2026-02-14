@@ -30,11 +30,15 @@ class TestInferenceDockerfile(unittest.TestCase):
                          "Expected ARG PLUGIN=<default> in inference.Dockerfile")
 
     def test_copies_plugin_directory(self):
-        """Dockerfile should COPY from plugins/${PLUGIN}/ instead of hardcoded files."""
-        # Should contain a COPY using the PLUGIN arg
-        pattern = re.compile(r"^COPY\s+plugins/\$\{?PLUGIN\}?/\s+\.", re.MULTILINE)
-        self.assertRegex(self.content, pattern,
-                         "Expected COPY plugins/${PLUGIN}/ . in inference.Dockerfile")
+        """Dockerfile should COPY plugins/__init__.py and plugins/${PLUGIN}/ preserving package structure."""
+        # Should copy the plugins package __init__.py
+        init_pattern = re.compile(r"^COPY\s+plugins/__init__\.py\s+plugins/__init__\.py", re.MULTILINE)
+        self.assertRegex(self.content, init_pattern,
+                         "Expected COPY plugins/__init__.py plugins/__init__.py in inference.Dockerfile")
+        # Should copy the plugin directory into plugins/${PLUGIN}/ (not flat into .)
+        plugin_pattern = re.compile(r"^COPY\s+plugins/\$\{?PLUGIN\}?/\s+plugins/\$\{?PLUGIN\}?/", re.MULTILINE)
+        self.assertRegex(self.content, plugin_pattern,
+                         "Expected COPY plugins/${PLUGIN}/ plugins/${PLUGIN}/ in inference.Dockerfile")
 
     def test_no_hardcoded_model_file_copies(self):
         """Dockerfile should NOT have individual COPY lines for model .py files."""
@@ -61,9 +65,9 @@ class TestInferenceDockerfile(unittest.TestCase):
         self.assertIn("AutoTokenizer.from_pretrained", self.content)
 
     def test_gunicorn_cmd_preserved(self):
-        """The CMD should still run gunicorn with inference_server:app."""
+        """The CMD should still run gunicorn with plugins.tidal.inference_server:app."""
         self.assertIn("gunicorn", self.content)
-        self.assertIn("inference_server:app", self.content)
+        self.assertIn("plugins.tidal.inference_server:app", self.content)
 
 
 class TestDockerignore(unittest.TestCase):

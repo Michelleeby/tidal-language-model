@@ -22,7 +22,7 @@ services:
     volumes:
       - experiments:/data/experiments
     environment:
-      - CONFIG_PATH=/app/configs/base_config.yaml
+      - CONFIG_PATH=/app/plugins/tidal/configs/base_config.yaml
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 15s
