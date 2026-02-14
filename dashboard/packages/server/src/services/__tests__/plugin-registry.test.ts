@@ -332,3 +332,96 @@ describe("Manifest field parsing", () => {
     assert.equal(plugin.infrastructure.gpuTiers["standard"].minGpuRamMb, 16000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Diagnostic logging
+// ---------------------------------------------------------------------------
+
+function mockLogger() {
+  const calls: Array<{ level: "info" | "warn"; message: string }> = [];
+  return {
+    calls,
+    info(msg: string) {
+      calls.push({ level: "info", message: msg });
+    },
+    warn(msg: string) {
+      calls.push({ level: "warn", message: msg });
+    },
+  };
+}
+
+describe("PluginRegistry diagnostic logging", () => {
+  it("logs successful plugin load and summary", async () => {
+    const tmpDir = await freshTmpDir();
+    await createPluginDir(tmpDir, "test-model", VALID_MANIFEST);
+
+    const logger = mockLogger();
+    const registry = new PluginRegistry(tmpDir, logger);
+    await registry.load();
+
+    const loadMsg = logger.calls.find(
+      (c) => c.level === "info" && c.message.includes("Loaded plugin: test-model"),
+    );
+    assert.ok(loadMsg, "should log info when a plugin loads successfully");
+
+    const summaryMsg = logger.calls.find(
+      (c) => c.level === "info" && c.message.includes("1 plugin(s) loaded"),
+    );
+    assert.ok(summaryMsg, "should log summary after loading");
+  });
+
+  it("warns when plugins directory does not exist", async () => {
+    const logger = mockLogger();
+    const registry = new PluginRegistry("/tmp/nonexistent-dir-99999", logger);
+    await registry.load();
+
+    const warnMsg = logger.calls.find(
+      (c) => c.level === "warn" && c.message.includes("not found"),
+    );
+    assert.ok(warnMsg, "should warn when plugins directory is missing");
+  });
+
+  it("warns when manifest fails validation", async () => {
+    const tmpDir = await freshTmpDir();
+    const invalidManifest = `
+name: bad-plugin
+version: 1.0.0
+`;
+    await createPluginDir(tmpDir, "bad-plugin", invalidManifest);
+
+    const logger = mockLogger();
+    const registry = new PluginRegistry(tmpDir, logger);
+    await registry.load();
+
+    const warnMsg = logger.calls.find(
+      (c) => c.level === "warn" && c.message.includes("bad-plugin"),
+    );
+    assert.ok(warnMsg, "should warn with directory name when manifest is invalid");
+  });
+
+  it("warns when manifest YAML fails to parse", async () => {
+    const tmpDir = await freshTmpDir();
+    const brokenYaml = "name: [unterminated";
+    await createPluginDir(tmpDir, "broken", brokenYaml);
+
+    const logger = mockLogger();
+    const registry = new PluginRegistry(tmpDir, logger);
+    await registry.load();
+
+    const warnMsg = logger.calls.find(
+      (c) => c.level === "warn" && c.message.includes("broken"),
+    );
+    assert.ok(warnMsg, "should warn when YAML fails to parse");
+  });
+
+  it("works without a logger (backwards compatible)", async () => {
+    const tmpDir = await freshTmpDir();
+    await createPluginDir(tmpDir, "test-model", VALID_MANIFEST);
+
+    // No logger argument — should not throw
+    const registry = new PluginRegistry(tmpDir);
+    await registry.load();
+
+    assert.equal(registry.list().length, 1);
+  });
+});

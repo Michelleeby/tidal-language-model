@@ -6,14 +6,32 @@ import type {
   TrainingPhase,
 } from "@tidal/shared";
 
+/** Minimal logger interface — compatible with Fastify's pino logger. */
+export interface RegistryLogger {
+  info(msg: string): void;
+  warn(msg: string): void;
+}
+
+/** No-op logger used when no logger is provided. */
+const nullLogger: RegistryLogger = {
+  info() {},
+  warn() {},
+};
+
 /**
  * Scans a plugins directory for manifest.yaml files and provides
  * typed access to plugin manifests.
  */
 export class PluginRegistry {
   private plugins = new Map<string, PluginManifest>();
+  private log: RegistryLogger;
 
-  constructor(private pluginsDir: string) {}
+  constructor(
+    private pluginsDir: string,
+    logger?: RegistryLogger,
+  ) {
+    this.log = logger ?? nullLogger;
+  }
 
   /** Scan the plugins directory and load all valid manifests. */
   async load(): Promise<void> {
@@ -26,7 +44,7 @@ export class PluginRegistry {
       });
       entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
-      // Directory doesn't exist — no plugins
+      this.log.warn(`Plugins directory not found: ${this.pluginsDir}`);
       return;
     }
 
@@ -38,11 +56,24 @@ export class PluginRegistry {
         const manifest = this.validate(parsed);
         if (manifest) {
           this.plugins.set(manifest.name, manifest);
+          this.log.info(
+            `Loaded plugin: ${manifest.name} v${manifest.version}`,
+          );
+        } else {
+          this.log.warn(
+            `Plugin manifest validation failed for '${dirName}' — missing required fields`,
+          );
         }
-      } catch {
-        // No manifest.yaml or invalid YAML — skip
+      } catch (err) {
+        this.log.warn(
+          `Failed to parse manifest in '${dirName}': ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
+
+    this.log.info(
+      `Plugin registry: ${this.plugins.size} plugin(s) loaded`,
+    );
   }
 
   /** Get a plugin by name. */

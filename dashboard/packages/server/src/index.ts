@@ -60,8 +60,14 @@ async function main() {
   // Load plugin manifests
   const pluginRegistry = new PluginRegistry(
     path.join(config.projectRoot, "plugins"),
+    fastify.log,
   );
   await pluginRegistry.load();
+  if (!pluginRegistry.getDefault()) {
+    fastify.log.warn(
+      "No default plugin available — checkpoint classification and generation will not work",
+    );
+  }
   fastify.decorate("pluginRegistry", pluginRegistry);
 
   // Plugins (order matters: redis before sse, auth/rate-limit after redis, all before routes)

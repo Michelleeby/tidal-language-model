@@ -13,6 +13,11 @@ export default async function checkpointsRoutes(fastify: FastifyInstance) {
     const expDir = path.join(fastify.serverConfig.experimentsDir, expId);
 
     const plugin = fastify.pluginRegistry.getDefault();
+    if (!plugin) {
+      request.log.warn(
+        "No plugin loaded — checkpoint phases will be 'unknown'. Check plugins directory and manifest.yaml.",
+      );
+    }
     const patterns = plugin?.checkpointPatterns ?? [];
 
     const checkpoints: CheckpointInfo[] = [];
