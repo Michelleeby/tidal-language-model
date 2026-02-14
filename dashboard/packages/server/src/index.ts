@@ -45,6 +45,7 @@ async function main() {
   }
 
   const fastify = Fastify({
+    bodyLimit: 5 * 1024 * 1024, // 5MB — defense in depth for large worker payloads
     logger: {
       level: "info",
       transport: {

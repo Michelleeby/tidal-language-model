@@ -6,12 +6,12 @@ import re
 import glob
 import queue
 import threading
+import time
 
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 from torch.amp import autocast
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 
 from .DataPipeline import TinyStoriesDataset, get_tokenizer
 from .TransformerLM import TransformerLM, get_model_state_dict, load_model_state_dict
@@ -67,11 +67,21 @@ class Trainer:
             try:
                 self.tb_writer.add_scalar("Losses/Total", data["total_loss"], global_step)
                 self.tb_writer.add_scalar("Learning Rate", data["lr"], global_step)
+                if "Iterations/Second" in data:
+                    self.tb_writer.add_scalar("Iterations/Second", data["Iterations/Second"], global_step)
+                if "Epoch/Progress" in data:
+                    self.tb_writer.add_scalar("Epoch/Progress", data["Epoch/Progress"], global_step)
 
-                self.metrics_logger.log_metrics({
+                metrics_payload = {
                     "Losses/Total": data["total_loss"],
                     "Learning Rate": data["lr"],
-                }, global_step)
+                }
+                if "Iterations/Second" in data:
+                    metrics_payload["Iterations/Second"] = data["Iterations/Second"]
+                if "Epoch/Progress" in data:
+                    metrics_payload["Epoch/Progress"] = data["Epoch/Progress"]
+
+                self.metrics_logger.log_metrics(metrics_payload, global_step)
             except Exception as e:
                 self.logger.warning("Failed to write metrics at step %d: %s", global_step, e)
 
@@ -144,11 +154,14 @@ class Trainer:
         accumulation_steps = desired_batch_size // micro_batch_size
 
         total_loss = 0
-        progress_bar = tqdm(data_loader, desc=f"Epoch {self.current_epoch_num} Training")
+        total_steps = len(data_loader)
+        epoch_start_time = time.time()
+        last_log_time = epoch_start_time
+        log_text_interval = self.config.get("LOG_TEXT_INTERVAL", 1000)
 
         self.optimizer.zero_grad()
 
-        for i, (input_sequence, target_sequence) in enumerate(progress_bar):
+        for i, (input_sequence, target_sequence) in enumerate(data_loader):
             input_sequence_gpu = input_sequence.to(self.device)
             target_sequence_gpu = target_sequence.to(self.device)
 
@@ -171,15 +184,32 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-                global_step = self.current_epoch_num * len(data_loader) + i
+                now = time.time()
+                elapsed = now - last_log_time
+                iterations_per_second = accumulation_steps / elapsed if elapsed > 0 else 0.0
+                last_log_time = now
+
+                progress = (i + 1) / total_steps
+
+                global_step = self.current_epoch_num * total_steps + i
                 self._log_metrics({
                     "total_loss": prediction_loss.item(),
                     "lr": self.optimizer.param_groups[0]["lr"],
+                    "Iterations/Second": iterations_per_second,
+                    "Epoch/Progress": progress,
                 }, global_step)
+
+                if (i + 1) % log_text_interval == 0 or (i + 1) == total_steps:
+                    self.logger.info(
+                        "Epoch %d | Step %d/%d (%.0f%%) | Loss: %.4f | %.1f it/s",
+                        self.current_epoch_num, i + 1, total_steps,
+                        progress * 100, prediction_loss.item(),
+                        iterations_per_second,
+                    )
 
             total_loss += loss.item() * accumulation_steps
 
-        avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0
+        avg_loss = total_loss / total_steps if total_steps > 0 else 0
         self.current_epoch_num += 1
         return avg_loss
 

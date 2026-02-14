@@ -21,6 +21,12 @@ export default function MetricCards({ latest }: MetricCardsProps) {
       color: "text-emerald-400",
     },
     {
+      label: "Iterations/s",
+      value:
+        (latest["Iterations/Second"] as number)?.toFixed(1) ?? "—",
+      color: "text-amber-400",
+    },
+    {
       label: "Perplexity",
       value: Math.exp((latest["Losses/Total"] as number) ?? 0).toFixed(1),
       color: "text-purple-400",

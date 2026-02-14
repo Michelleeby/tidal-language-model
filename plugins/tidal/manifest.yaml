@@ -115,6 +115,8 @@ metrics:
     primaryKeys:
       - "Losses/Total"
       - "Learning Rate"
+      - "Iterations/Second"
+      - "Epoch/Progress"
   rl:
     directory: rl_metrics
     metricsFile: rl_training_metrics.json
