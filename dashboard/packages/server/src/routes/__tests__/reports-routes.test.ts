@@ -6,11 +6,15 @@ import os from "node:os";
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../../config.js";
+import authPlugin from "../../plugins/auth.js";
 import reportsRoutes from "../reports.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const TEST_TOKEN = "test-secret-token";
+const AUTH_HEADER = `Bearer ${TEST_TOKEN}`;
 
 const cleanups: string[] = [];
 
@@ -28,10 +32,101 @@ after(async () => {
 
 async function buildApp(projectRoot: string): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  app.decorate("serverConfig", { projectRoot } as unknown as ServerConfig);
+  app.decorate("serverConfig", {
+    projectRoot,
+    authToken: TEST_TOKEN,
+  } as unknown as ServerConfig);
+  await app.register(authPlugin);
   await app.register(reportsRoutes);
   return app;
 }
+
+/** Helper: create a report with auth, return the report object. */
+async function createReport(app: FastifyInstance, title?: string) {
+  const resp = await app.inject({
+    method: "POST",
+    url: "/api/reports",
+    headers: { authorization: AUTH_HEADER },
+    payload: title ? { title } : {},
+  });
+  assert.equal(resp.statusCode, 201);
+  return resp.json().report;
+}
+
+// ---------------------------------------------------------------------------
+// Auth enforcement
+// ---------------------------------------------------------------------------
+
+describe("Reports auth enforcement", () => {
+  it("returns 401 for POST without token", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports",
+      payload: {},
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("returns 401 for PUT without token", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+
+    const resp = await app.inject({
+      method: "PUT",
+      url: "/api/reports/some-id",
+      payload: { title: "X" },
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("returns 401 for DELETE without token", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+
+    const resp = await app.inject({
+      method: "DELETE",
+      url: "/api/reports/some-id",
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("allows GET /api/reports without token", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/reports",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    await app.close();
+  });
+
+  it("allows GET /api/reports/:id without token", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/reports/${report.id}`,
+    });
+
+    assert.equal(resp.statusCode, 200);
+    await app.close();
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/reports
@@ -45,6 +140,7 @@ describe("POST /api/reports", () => {
     const resp = await app.inject({
       method: "POST",
       url: "/api/reports",
+      headers: { authorization: AUTH_HEADER },
       payload: {},
     });
 
@@ -64,6 +160,7 @@ describe("POST /api/reports", () => {
     const resp = await app.inject({
       method: "POST",
       url: "/api/reports",
+      headers: { authorization: AUTH_HEADER },
       payload: { title: "My Report" },
     });
 
@@ -98,8 +195,8 @@ describe("GET /api/reports", () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
 
-    await app.inject({ method: "POST", url: "/api/reports", payload: { title: "A" } });
-    await app.inject({ method: "POST", url: "/api/reports", payload: { title: "B" } });
+    await createReport(app, "A");
+    await createReport(app, "B");
 
     const resp = await app.inject({ method: "GET", url: "/api/reports" });
 
@@ -120,12 +217,7 @@ describe("GET /api/reports/:id", () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
 
-    const createResp = await app.inject({
-      method: "POST",
-      url: "/api/reports",
-      payload: { title: "Test" },
-    });
-    const { report } = createResp.json();
+    const report = await createReport(app, "Test");
 
     const resp = await app.inject({
       method: "GET",
@@ -163,16 +255,12 @@ describe("PUT /api/reports/:id", () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
 
-    const createResp = await app.inject({
-      method: "POST",
-      url: "/api/reports",
-      payload: {},
-    });
-    const { report } = createResp.json();
+    const report = await createReport(app);
 
     const resp = await app.inject({
       method: "PUT",
       url: `/api/reports/${report.id}`,
+      headers: { authorization: AUTH_HEADER },
       payload: { title: "Updated" },
     });
 
@@ -186,17 +274,13 @@ describe("PUT /api/reports/:id", () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
 
-    const createResp = await app.inject({
-      method: "POST",
-      url: "/api/reports",
-      payload: {},
-    });
-    const { report } = createResp.json();
+    const report = await createReport(app);
 
     const blocks = [{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }];
     const resp = await app.inject({
       method: "PUT",
       url: `/api/reports/${report.id}`,
+      headers: { authorization: AUTH_HEADER },
       payload: { blocks },
     });
 
@@ -213,6 +297,7 @@ describe("PUT /api/reports/:id", () => {
     const resp = await app.inject({
       method: "PUT",
       url: "/api/reports/nonexistent",
+      headers: { authorization: AUTH_HEADER },
       payload: { title: "X" },
     });
 
@@ -231,16 +316,12 @@ describe("DELETE /api/reports/:id", () => {
     const tmpDir = await freshTmpDir();
     const app = await buildApp(tmpDir);
 
-    const createResp = await app.inject({
-      method: "POST",
-      url: "/api/reports",
-      payload: {},
-    });
-    const { report } = createResp.json();
+    const report = await createReport(app);
 
     const delResp = await app.inject({
       method: "DELETE",
       url: `/api/reports/${report.id}`,
+      headers: { authorization: AUTH_HEADER },
     });
 
     assert.equal(delResp.statusCode, 200);
@@ -263,6 +344,7 @@ describe("DELETE /api/reports/:id", () => {
     const resp = await app.inject({
       method: "DELETE",
       url: "/api/reports/nonexistent",
+      headers: { authorization: AUTH_HEADER },
     });
 
     assert.equal(resp.statusCode, 404);

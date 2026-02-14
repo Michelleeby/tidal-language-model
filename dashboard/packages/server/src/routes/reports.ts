@@ -28,6 +28,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
   // Create a new report
   fastify.post<{ Body: CreateReportRequest }>(
     "/api/reports",
+    { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
       const report = await store.create(request.body?.title);
       return reply.status(201).send({ report });
@@ -37,6 +38,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
   // Update an existing report
   fastify.put<{ Params: { id: string }; Body: UpdateReportRequest }>(
     "/api/reports/:id",
+    { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
       const report = await store.update(request.params.id, {
         title: request.body?.title,
@@ -52,6 +54,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
   // Delete a report
   fastify.delete<{ Params: { id: string } }>(
     "/api/reports/:id",
+    { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
       const deleted = await store.delete(request.params.id);
       if (!deleted) {
