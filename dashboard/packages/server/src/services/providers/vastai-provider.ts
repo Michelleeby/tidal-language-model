@@ -74,30 +74,48 @@ export class VastAIProvider implements ComputeProvider {
     }
 
     try {
-      // 1. Search for cheapest GPU offer
-      const offer = await this.findCheapestOffer(gpuTier ?? "standard");
-      if (!offer) {
+      // 1. Search for GPU offers (sorted cheapest-first)
+      const offers = await this.findOffers(gpuTier ?? "standard");
+      if (offers.length === 0) {
         return { success: false, error: "No suitable vast.ai GPU offers found" };
       }
 
-      this.log.info(
-        { offerId: offer.id, gpu: offer.gpu_name, cost: offer.dph_total },
-        "Selected vast.ai offer",
-      );
-
-      // 2. Create instance with on-start script
+      // 2. Build on-start script once (does not depend on the offer)
       const onStartScript = this.buildOnStartScript(job.jobId);
-      const instanceId = await this.createInstance(offer.id, onStartScript);
 
-      return {
-        success: true,
-        meta: {
-          instanceId,
-          offerId: offer.id,
-          gpuName: offer.gpu_name,
-          costPerHour: offer.dph_total,
-        },
-      };
+      // 3. Try each offer — stale offers may vanish between search and create
+      let lastError: Error | undefined;
+      for (const offer of offers) {
+        this.log.info(
+          { offerId: offer.id, gpu: offer.gpu_name, cost: offer.dph_total },
+          "Trying vast.ai offer",
+        );
+
+        try {
+          const instanceId = await this.createInstance(offer.id, onStartScript);
+          return {
+            success: true,
+            meta: {
+              instanceId,
+              offerId: offer.id,
+              gpuName: offer.gpu_name,
+              costPerHour: offer.dph_total,
+            },
+          };
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          if (this.isRetryableOfferError(lastError)) {
+            this.log.warn(
+              { offerId: offer.id, err: lastError.message },
+              "Offer unavailable, trying next",
+            );
+            continue;
+          }
+          throw lastError;
+        }
+      }
+
+      throw lastError ?? new Error("All vast.ai offers exhausted");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, jobId: job.jobId }, "vast.ai provision failed");
@@ -149,7 +167,7 @@ export class VastAIProvider implements ComputeProvider {
     return !TERMINAL_INSTANCE_STATUSES.has(data.actual_status);
   }
 
-  private async findCheapestOffer(tier: GpuTier): Promise<VastOffer | null> {
+  private async findOffers(tier: GpuTier): Promise<VastOffer[]> {
     const tierSpec = this.gpuTiers[tier] ?? DEFAULT_GPU_TIERS["standard"];
     const query = JSON.stringify({
       gpu_ram: { gte: tierSpec.minGpuRamMb },
@@ -173,8 +191,7 @@ export class VastAIProvider implements ComputeProvider {
     }
 
     const data = (await res.json()) as { offers?: VastOffer[] };
-    const offers = data.offers ?? [];
-    return offers[0] ?? null;
+    return data.offers ?? [];
   }
 
   private async createInstance(offerId: number, onStartScript: string): Promise<number> {
@@ -203,6 +220,10 @@ export class VastAIProvider implements ComputeProvider {
     }
 
     return data.new_contract;
+  }
+
+  private isRetryableOfferError(err: Error): boolean {
+    return err.message.includes("no_such_ask");
   }
 
   private buildOnStartScript(jobId: string): string {
