@@ -223,8 +223,12 @@ class WorkerAgent:
 
     def _build_command(self, phase: dict, config: dict, plugin_dir: str) -> list[str]:
         """Build subprocess args from a manifest phase and job config."""
-        entrypoint = os.path.join(plugin_dir, phase["entrypoint"])
-        args = [sys.executable, entrypoint]
+        # Use -m so Python adds CWD (project root) to sys.path, enabling
+        # absolute imports like `from plugins.tidal.Trainer import Trainer`.
+        rel_dir = os.path.relpath(plugin_dir, self._project_root)
+        module_name = phase["entrypoint"].removesuffix(".py")
+        module_path = rel_dir.replace(os.sep, ".") + "." + module_name
+        args = [sys.executable, "-m", module_path]
 
         # Map from manifest arg key to config field name
         ARG_CONFIG_MAP = {

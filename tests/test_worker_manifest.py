@@ -178,6 +178,7 @@ class TestBuildCommand(unittest.TestCase):
     def test_builds_lm_training_command(self):
         transport = _make_redis_transport()
         agent = _make_agent(transport)
+        agent._project_root = "/project"
 
         phase = {
             "id": "lm-training",
@@ -195,7 +196,8 @@ class TestBuildCommand(unittest.TestCase):
 
         args = agent._build_command(phase, config, plugin_dir)
         self.assertEqual(args[0], sys.executable)
-        self.assertEqual(args[1], os.path.join(plugin_dir, "Main.py"))
+        self.assertEqual(args[1], "-m")
+        self.assertEqual(args[2], "plugins.tidal.Main")
         self.assertIn("--config", args)
         idx = args.index("--config")
         self.assertEqual(args[idx + 1], "configs/base_config.yaml")
@@ -203,6 +205,7 @@ class TestBuildCommand(unittest.TestCase):
     def test_builds_rl_training_command(self):
         transport = _make_redis_transport()
         agent = _make_agent(transport)
+        agent._project_root = "/project"
 
         phase = {
             "id": "rl-training",
@@ -225,7 +228,8 @@ class TestBuildCommand(unittest.TestCase):
 
         args = agent._build_command(phase, config, plugin_dir)
         self.assertEqual(args[0], sys.executable)
-        self.assertEqual(args[1], os.path.join(plugin_dir, "train_rl.py"))
+        self.assertEqual(args[1], "-m")
+        self.assertEqual(args[2], "plugins.tidal.train_rl")
         self.assertIn("--config", args)
         self.assertIn("--rl-config", args)
         self.assertIn("--checkpoint", args)
@@ -237,6 +241,7 @@ class TestBuildCommand(unittest.TestCase):
     def test_skips_missing_optional_args(self):
         transport = _make_redis_transport()
         agent = _make_agent(transport)
+        agent._project_root = "/project"
 
         phase = {
             "id": "lm-training",
