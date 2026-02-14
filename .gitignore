@@ -45,6 +45,7 @@ prompt.txt
 wandb/
 Tidal Language Model Refactor Plan.md
 implement-kv-cache.md
+refactor-absolute-embeddings-to-rotary-positional.md
 CLAUDE.md
 
 # Ignore all cached data (datasets, vocabularies)
