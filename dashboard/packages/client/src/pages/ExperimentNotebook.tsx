@@ -99,10 +99,7 @@ export default function ExperimentNotebook() {
 
   const latestPoint = points.length > 0 ? points[points.length - 1] : null;
 
-  // Auto-select first experiment if none selected
-  if (!selectedExpId && expData?.experiments?.[0]) {
-    setSelectedExpId(expData.experiments[0].id);
-  }
+  // No auto-select — user explicitly picks an experiment or starts a new one
 
   const rlHistory = rlData?.metrics?.history ?? null;
   const hasRLData = rlHistory && rlHistory.episode_rewards.length > 0;
@@ -138,14 +135,28 @@ export default function ExperimentNotebook() {
   }
 
   if (!selectedExpId) {
+    const hasExperiments = (expData?.experiments?.length ?? 0) > 0;
     return (
-      <div className="flex flex-col items-center justify-center py-20 space-y-4">
-        <div className="text-gray-500 text-sm">
-          {expLoading
-            ? "Loading experiments..."
-            : "Select an experiment from the sidebar to begin."}
-        </div>
-        <TrainingControlBar />
+      <div className="flex flex-col items-center justify-center py-20 space-y-6 max-w-md mx-auto text-center">
+        {expLoading ? (
+          <div className="text-gray-500 text-sm">Loading experiments...</div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <h2 className="text-xl font-semibold text-gray-200">
+                {hasExperiments ? "No experiment selected" : "Welcome to Tidal"}
+              </h2>
+              <p className="text-sm text-gray-500">
+                {hasExperiments
+                  ? "Select an experiment from the sidebar, or start a new training run below."
+                  : "Start your first training run to begin experimenting."}
+              </p>
+            </div>
+            <div className="w-full bg-gray-900 border border-gray-800 rounded-lg p-6 space-y-4">
+              <TrainingControlBar />
+            </div>
+          </>
+        )}
       </div>
     );
   }

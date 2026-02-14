@@ -21,6 +21,15 @@ const DEFAULT_CONFIG: ExperimentDiscoveryConfig = {
 /**
  * Discovers experiments from Redis (set of IDs) or filesystem.
  */
+/**
+ * Convert a timestamp to milliseconds. Python's time.time() returns seconds
+ * (~10 digits) while JS Date.now() returns milliseconds (~13 digits).
+ * Timestamps below 10 billion are assumed to be in seconds.
+ */
+function toMilliseconds(ts: number): number {
+  return ts < 1e10 ? ts * 1000 : ts;
+}
+
 export class ExperimentDiscovery {
   private dc: ExperimentDiscoveryConfig;
 
@@ -142,10 +151,11 @@ export class ExperimentDiscovery {
       // Only surface this experiment if we have at least status data in Redis
       if (!status) return null;
 
+      const rawTs = status.start_time ?? status.last_update;
       return {
         id,
         path: "",
-        created: status.start_time ?? status.last_update,
+        created: toMilliseconds(rawTs),
         hasRLMetrics: false,
         hasEvaluation: false,
         hasAblation: false,

@@ -301,4 +301,59 @@ describe("ExperimentDiscovery.listExperiments()", () => {
     assert.equal(exp.status!.status, "training");
     assert.deepEqual(exp.checkpoints, ["checkpoint.pth"]);
   });
+
+  it("converts seconds-based timestamps to milliseconds for Redis-only experiments", async () => {
+    tmpDir = await freshTmpDir();
+
+    // Python time.time() returns seconds since epoch (e.g. ~1.7 billion)
+    const pythonTimestamp = 1707900000; // Feb 14, 2024 in seconds
+    const status: TrainingStatus = {
+      status: "training",
+      start_time: pythonTimestamp,
+      last_update: pythonTimestamp,
+      current_step: 10,
+    };
+
+    const store: MockStore = {
+      lists: new Map(),
+      keys: new Map([[`tidal:status:${EXP_ID}`, JSON.stringify(status)]]),
+      sets: new Map([[`tidal:experiments`, new Set([EXP_ID])]]),
+    };
+
+    // No local directory exists — forces Redis-only path
+    const discovery = new ExperimentDiscovery(createRedisMock(store), tmpDir);
+    const experiments = await discovery.listExperiments();
+
+    assert.equal(experiments.length, 1);
+    const exp = experiments[0];
+    // The created timestamp must be in milliseconds for new Date() to work correctly
+    const date = new Date(exp.created);
+    assert.equal(date.getFullYear(), 2024, `Expected 2024 but got ${date.getFullYear()} — timestamp ${exp.created} was likely not converted from seconds to milliseconds`);
+  });
+
+  it("does not double-convert timestamps already in milliseconds", async () => {
+    tmpDir = await freshTmpDir();
+
+    // A timestamp already in milliseconds (e.g. from a local experiment persisted to Redis)
+    const msTimestamp = 1707900000000; // Feb 14, 2024 in milliseconds
+    const status: TrainingStatus = {
+      status: "completed",
+      start_time: msTimestamp,
+      last_update: msTimestamp,
+      current_step: 100,
+    };
+
+    const store: MockStore = {
+      lists: new Map(),
+      keys: new Map([[`tidal:status:${EXP_ID}`, JSON.stringify(status)]]),
+      sets: new Map([[`tidal:experiments`, new Set([EXP_ID])]]),
+    };
+
+    const discovery = new ExperimentDiscovery(createRedisMock(store), tmpDir);
+    const experiments = await discovery.listExperiments();
+
+    assert.equal(experiments.length, 1);
+    const date = new Date(experiments[0].created);
+    assert.equal(date.getFullYear(), 2024, `Expected 2024 but got ${date.getFullYear()} — millisecond timestamp was incorrectly double-converted`);
+  });
 });

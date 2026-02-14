@@ -67,6 +67,26 @@ export default function ExperimentSidebar() {
           </button>
         </div>
 
+        {/* New experiment button */}
+        <div className="px-3 py-2 border-b border-gray-800">
+          <button
+            onClick={() => {
+              setSelectedExpId(null);
+              setSidebarOpen(false);
+            }}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors ${
+              selectedExpId === null
+                ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                : "bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white border border-gray-700"
+            }`}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            New Experiment
+          </button>
+        </div>
+
         {/* Experiment list */}
         <div className="flex-1 overflow-y-auto">
           {isLoading ? (
