@@ -1,10 +1,18 @@
 import ExperimentSidebar from "./components/notebook/ExperimentSidebar.js";
 import ExperimentNotebook from "./pages/ExperimentNotebook.js";
+import ReportsSidebar from "./components/reports/ReportsSidebar.js";
+import ReportEditor from "./pages/ReportEditor.js";
 import AuthPrompt from "./components/AuthPrompt.js";
 import { useExperimentStore } from "./stores/experimentStore.js";
+import type { ViewType } from "./stores/experimentStore.js";
+
+const TABS: { id: ViewType; label: string }[] = [
+  { id: "experiments", label: "Experiments" },
+  { id: "reports", label: "Reports" },
+];
 
 export default function App() {
-  const { setSidebarOpen } = useExperimentStore();
+  const { view, setView, setSidebarOpen } = useExperimentStore();
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
@@ -23,14 +31,42 @@ export default function App() {
         <h1 className="text-lg font-semibold tracking-tight">
           Tidal Dashboard
         </h1>
+
+        {/* Nav tabs */}
+        <nav className="flex items-center gap-1 ml-6">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setView(tab.id)}
+              className={`px-3 py-1 text-sm rounded transition-colors ${
+                view === tab.id
+                  ? "bg-gray-800 text-gray-100"
+                  : "text-gray-400 hover:text-gray-200 hover:bg-gray-900"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
       {/* Sidebar + Main Content */}
       <div className="flex">
-        <ExperimentSidebar />
-        <main className="flex-1 min-w-0 p-3 md:p-6">
-          <ExperimentNotebook />
-        </main>
+        {view === "experiments" ? (
+          <>
+            <ExperimentSidebar />
+            <main className="flex-1 min-w-0 p-3 md:p-6">
+              <ExperimentNotebook />
+            </main>
+          </>
+        ) : (
+          <>
+            <ReportsSidebar />
+            <main className="flex-1 min-w-0 p-3 md:p-6">
+              <ReportEditor />
+            </main>
+          </>
+        )}
       </div>
     </div>
   );

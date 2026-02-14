@@ -19,6 +19,11 @@ import type {
   PluginResponse,
   ConfigFileResponse,
   ConfigListResponse,
+  ReportsListResponse,
+  ReportResponse,
+  CreateReportRequest,
+  UpdateReportRequest,
+  DeleteReportResponse,
 } from "@tidal/shared";
 import { getAuthToken, requestAuth } from "../hooks/useAuth.js";
 
@@ -121,4 +126,30 @@ export const api = {
     fetchJson<ConfigFileResponse>(
       `${BASE}/plugins/${pluginName}/configs/${encodeURIComponent(filename)}`,
     ),
+
+  // Reports
+  getReports: () =>
+    fetchJson<ReportsListResponse>(`${BASE}/reports`),
+
+  getReport: (id: string) =>
+    fetchJson<ReportResponse>(`${BASE}/reports/${id}`),
+
+  createReport: (body?: CreateReportRequest) =>
+    fetchJson<ReportResponse>(`${BASE}/reports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  updateReport: (id: string, body: UpdateReportRequest) =>
+    fetchJson<ReportResponse>(`${BASE}/reports/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  deleteReport: (id: string) =>
+    fetchJson<DeleteReportResponse>(`${BASE}/reports/${id}`, {
+      method: "DELETE",
+    }),
 };

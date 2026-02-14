@@ -7,3 +7,29 @@
     display: none;
   }
 }
+
+/* BlockNote dark theme overrides */
+[data-color-scheme="dark"] .bn-container,
+.bn-container[data-color-scheme="dark"] {
+  --bn-colors-editor-background: #030712;
+  --bn-colors-editor-text: #e5e7eb;
+  --bn-colors-menu-background: #111827;
+  --bn-colors-menu-text: #e5e7eb;
+  --bn-colors-tooltip-background: #1f2937;
+  --bn-colors-tooltip-text: #e5e7eb;
+  --bn-colors-hovered-background: #1f2937;
+  --bn-colors-selected-background: #374151;
+  --bn-colors-disabled-background: #1f2937;
+  --bn-colors-disabled-text: #6b7280;
+  --bn-colors-border: #374151;
+  --bn-colors-side-menu: #6b7280;
+  --bn-font-family: inherit;
+}
+
+/* Ensure slash menu and toolbar match dark theme */
+.bn-container .bn-slash-menu,
+.bn-container .bn-toolbar,
+.bn-container .bn-formatting-toolbar {
+  background: #111827;
+  border-color: #374151;
+}
