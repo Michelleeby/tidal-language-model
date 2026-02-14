@@ -4,6 +4,7 @@ import { ProvisioningChain } from "../services/provisioning-chain.js";
 import { LocalProvider } from "../services/providers/local-provider.js";
 import { AWSProvider } from "../services/providers/aws-provider.js";
 import { VastAIProvider } from "../services/providers/vastai-provider.js";
+import { DigitalOceanProvider } from "../services/providers/digitalocean-provider.js";
 import { WorkerSpawner } from "../services/worker-spawner.js";
 
 declare module "fastify" {
@@ -34,6 +35,15 @@ export default fp(async function provisioningPlugin(fastify: FastifyInstance) {
       repoUrl: config.repoUrl,
       log: fastify.log,
       dockerImage: plugin?.infrastructure.dockerImage,
+      gpuTiers: plugin?.infrastructure.gpuTiers,
+    }),
+    new DigitalOceanProvider({
+      apiKey: config.digitaloceanApiKey,
+      dashboardUrl: config.dashboardUrl,
+      authToken: config.authToken,
+      repoUrl: config.repoUrl,
+      log: fastify.log,
+      region: config.digitaloceanRegion,
       gpuTiers: plugin?.infrastructure.gpuTiers,
     }),
   ]);

@@ -142,5 +142,5 @@ infrastructure:
   requirementsFile: requirements.txt
   gpuTiers:
     standard:
-      minGpuRamMb: 16000
+      minGpuRamMb: 48000
       minCpuCores: 16

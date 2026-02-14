@@ -1,6 +1,6 @@
 // ── Compute & Job enums ──────────────────────────────────────────────
 
-export type ComputeProviderType = "local" | "vastai" | "aws";
+export type ComputeProviderType = "local" | "vastai" | "aws" | "digitalocean";
 
 /** Job type is now a string determined by the plugin manifest (e.g. "lm-training", "rl-training"). */
 export type JobType = string;

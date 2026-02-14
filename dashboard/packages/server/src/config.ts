@@ -42,6 +42,27 @@ export function validateConfig(config: ServerConfig): ConfigWarning[] {
     }
   }
 
+  if (config.defaultComputeProvider === "digitalocean") {
+    if (!config.digitaloceanApiKey) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is digitalocean but DO_API_KEY is not set",
+      });
+    }
+    if (!config.dashboardUrl) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is digitalocean but TIDAL_DASHBOARD_URL is not set",
+      });
+    }
+    if (!config.repoUrl) {
+      issues.push({
+        level: "error",
+        message: "DEFAULT_COMPUTE_PROVIDER is digitalocean but TIDAL_REPO_URL is not set",
+      });
+    }
+  }
+
   return issues;
 }
 
@@ -56,6 +77,8 @@ export interface ServerConfig {
   defaultComputeProvider: ComputeProviderType;
   authToken: string | null;
   vastaiApiKey: string | null;
+  digitaloceanApiKey: string | null;
+  digitaloceanRegion: string;
   repoUrl: string | null;
   dashboardUrl: string | null;
 }
@@ -84,6 +107,8 @@ export function loadConfig(): ServerConfig {
       (process.env.DEFAULT_COMPUTE_PROVIDER as ComputeProviderType) ?? "local",
     authToken: process.env.TIDAL_AUTH_TOKEN ?? null,
     vastaiApiKey: process.env.VASTAI_API_KEY ?? null,
+    digitaloceanApiKey: process.env.DO_API_KEY ?? null,
+    digitaloceanRegion: process.env.DO_REGION ?? "tor1",
     repoUrl: process.env.TIDAL_REPO_URL ?? null,
     dashboardUrl: process.env.TIDAL_DASHBOARD_URL ?? null,
   };
