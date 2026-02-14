@@ -14,6 +14,7 @@ import type {
   JobResponse,
   JobSignalRequest,
   JobSignalResponse,
+  JobLogsResponse,
   PluginsListResponse,
   PluginResponse,
 } from "@tidal/shared";
@@ -100,6 +101,11 @@ export const api = {
     fetchJson<JobSignalResponse>(`${BASE}/jobs/${jobId}/cancel`, {
       method: "POST",
     }),
+
+  getJobLogs: (jobId: string, offset = 0, limit = 5000) =>
+    fetchJson<JobLogsResponse>(
+      `${BASE}/jobs/${jobId}/logs?offset=${offset}&limit=${limit}`,
+    ),
 
   getPlugins: () => fetchJson<PluginsListResponse>(`${BASE}/plugins`),
 

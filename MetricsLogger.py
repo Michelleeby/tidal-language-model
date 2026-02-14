@@ -1,13 +1,14 @@
-import http.client
 import json
+import math
 import os
 import time
 import logging
 import threading
-import urllib.request
-import urllib.error
 from collections import deque
-from urllib.parse import urlparse
+
+import requests as requests_lib
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,23 @@ class MetricsLogger:
         self._http_batch: list[dict] = []
         self._http_last_status: dict | None = None
         self._http_flush_timer: threading.Timer | None = None
+        self._http_session: requests_lib.Session | None = None
         if self._http_enabled:
             self._http_url = self._http_url.rstrip("/")
+            self._http_session = requests_lib.Session()
+            self._http_session.headers.update({
+                "Authorization": f"Bearer {self._http_token}",
+                "User-Agent": "TidalMetrics/1.0",
+            })
+            retry = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[502, 503, 504],
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            self._http_session.mount("http://", adapter)
+            self._http_session.mount("https://", adapter)
+
             logger.info("HTTP metrics forwarding enabled → %s", self._http_url)
             self._schedule_http_flush()
 
@@ -136,32 +152,18 @@ class MetricsLogger:
             daemon=True,
         ).start()
 
-    def _http_forward(self, body: dict, retries: int = 3):
-        """POST metrics to the dashboard API with exponential backoff retry."""
+    def _http_forward(self, body: dict):
+        """POST metrics to the dashboard API."""
         url = f"{self._http_url}/api/workers/{self._http_job_id}/metrics"
-        data = json.dumps(body).encode()
-        last_err = None
-
-        for attempt in range(retries):
-            req = urllib.request.Request(url, data=data, method="POST")
-            req.add_header("Authorization", f"Bearer {self._http_token}")
-            req.add_header("Content-Type", "application/json")
-            req.add_header("User-Agent", "TidalMetrics/1.0")
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    resp.read()
-                    return
-            except urllib.error.HTTPError as e:
-                logger.warning("HTTP %d forwarding metrics: %s", e.code, e.read().decode()[:200])
-                return  # don't retry HTTP errors
-            except Exception as e:
-                last_err = e
-                if attempt < retries - 1:
-                    wait = 2 ** attempt
-                    logger.debug("Metrics POST failed (attempt %d/%d): %s — retrying in %ds", attempt + 1, retries, e, wait)
-                    time.sleep(wait)
-
-        logger.warning("Metrics POST failed after %d attempts: %s", retries, last_err)
+        try:
+            resp = self._http_session.post(url, json=body, timeout=30)
+            resp.raise_for_status()
+        except requests_lib.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            text = e.response.text[:200] if e.response is not None else ""
+            logger.warning("HTTP %s forwarding metrics: %s", status, text)
+        except Exception as e:
+            logger.warning("Metrics POST failed: %s", e)
 
     def _enqueue_rl_http(self, data_point: dict):
         """Forward RL metrics to the dashboard API via the rlLatest field."""
@@ -207,7 +209,6 @@ class MetricsLogger:
         if file_size <= UPLOAD_CHUNK_SIZE:
             self._upload_single(filepath, filename, file_size, retries)
         else:
-            import math
             total_chunks = math.ceil(file_size / UPLOAD_CHUNK_SIZE)
             logger.info(
                 "Uploading %s (%d bytes) in %d chunks",
@@ -223,60 +224,43 @@ class MetricsLogger:
 
     def _upload_single(self, filepath: str, filename: str, file_size: int, retries: int):
         """Upload a complete file in a single request."""
-        parsed = urlparse(self._http_url)
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname
-        port = parsed.port or (443 if use_https else 80)
-
-        url_path = (
-            f"/api/workers/{self._http_job_id}/checkpoints/{filename}"
+        url = (
+            f"{self._http_url}/api/workers/{self._http_job_id}/checkpoints/{filename}"
             f"?expId={self.exp_id}"
         )
 
         last_err = None
         for attempt in range(retries):
             try:
-                if use_https:
-                    conn = http.client.HTTPSConnection(host, port, timeout=300)
-                else:
-                    conn = http.client.HTTPConnection(host, port, timeout=300)
-
-                conn.putrequest("PUT", url_path)
-                conn.putheader("Authorization", f"Bearer {self._http_token}")
-                conn.putheader("Content-Type", "application/octet-stream")
-                conn.putheader("Content-Length", str(file_size))
-                conn.putheader("User-Agent", "TidalMetrics/1.0")
-                conn.endheaders()
-
                 with open(filepath, "rb") as f:
-                    while True:
-                        data = f.read(1024 * 1024)
-                        if not data:
-                            break
-                        conn.send(data)
+                    resp = self._http_session.put(
+                        url,
+                        data=f,
+                        headers={
+                            "Content-Type": "application/octet-stream",
+                            "Content-Length": str(file_size),
+                        },
+                        timeout=300,
+                    )
 
-                resp = conn.getresponse()
-                body = resp.read()
-                conn.close()
-
-                if 200 <= resp.status < 300:
+                if 200 <= resp.status_code < 300:
                     logger.info(
                         "Uploaded checkpoint %s (%d bytes): %s",
-                        filename, file_size, body.decode()[:200],
+                        filename, file_size, resp.text[:200],
                     )
                     return
-                elif resp.status >= 500 and attempt < retries - 1:
+                elif resp.status_code >= 500 and attempt < retries - 1:
                     wait = 2 ** attempt
                     logger.warning(
                         "HTTP %d uploading %s (attempt %d/%d) — retrying in %ds",
-                        resp.status, filename, attempt + 1, retries, wait,
+                        resp.status_code, filename, attempt + 1, retries, wait,
                     )
                     time.sleep(wait)
                     continue
                 else:
                     logger.warning(
                         "HTTP %d uploading checkpoint %s: %s",
-                        resp.status, filename, body.decode()[:200],
+                        resp.status_code, filename, resp.text[:200],
                     )
                     return
             except Exception as e:
@@ -299,57 +283,39 @@ class MetricsLogger:
         offset: int, length: int, retries: int,
     ):
         """Upload one chunk of a file."""
-        parsed = urlparse(self._http_url)
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname
-        port = parsed.port or (443 if use_https else 80)
-
-        url_path = (
-            f"/api/workers/{self._http_job_id}/checkpoints/{filename}"
+        url = (
+            f"{self._http_url}/api/workers/{self._http_job_id}/checkpoints/{filename}"
             f"?expId={self.exp_id}&chunk={chunk_idx}&totalChunks={total_chunks}"
         )
 
         last_err = None
         for attempt in range(retries):
             try:
-                if use_https:
-                    conn = http.client.HTTPSConnection(host, port, timeout=300)
-                else:
-                    conn = http.client.HTTPConnection(host, port, timeout=300)
-
-                conn.putrequest("PUT", url_path)
-                conn.putheader("Authorization", f"Bearer {self._http_token}")
-                conn.putheader("Content-Type", "application/octet-stream")
-                conn.putheader("Content-Length", str(length))
-                conn.putheader("User-Agent", "TidalMetrics/1.0")
-                conn.endheaders()
-
-                sent = 0
                 with open(filepath, "rb") as f:
                     f.seek(offset)
-                    while sent < length:
-                        read_size = min(1024 * 1024, length - sent)
-                        data = f.read(read_size)
-                        if not data:
-                            break
-                        conn.send(data)
-                        sent += len(data)
+                    data = f.read(length)
 
-                resp = conn.getresponse()
-                body = resp.read()
-                conn.close()
+                resp = self._http_session.put(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(length),
+                    },
+                    timeout=300,
+                )
 
-                if 200 <= resp.status < 300:
+                if 200 <= resp.status_code < 300:
                     logger.info(
                         "Uploaded chunk %d/%d of %s (%d bytes)",
                         chunk_idx + 1, total_chunks, filename, length,
                     )
                     return
-                elif resp.status >= 500 and attempt < retries - 1:
+                elif resp.status_code >= 500 and attempt < retries - 1:
                     wait = 2 ** attempt
                     logger.warning(
                         "HTTP %d uploading chunk %d/%d of %s (attempt %d/%d) — retrying in %ds",
-                        resp.status, chunk_idx + 1, total_chunks, filename,
+                        resp.status_code, chunk_idx + 1, total_chunks, filename,
                         attempt + 1, retries, wait,
                     )
                     time.sleep(wait)
@@ -357,8 +323,8 @@ class MetricsLogger:
                 else:
                     logger.warning(
                         "HTTP %d uploading chunk %d/%d of %s: %s",
-                        resp.status, chunk_idx + 1, total_chunks, filename,
-                        body.decode()[:200],
+                        resp.status_code, chunk_idx + 1, total_chunks, filename,
+                        resp.text[:200],
                     )
                     return
             except Exception as e:
@@ -379,15 +345,14 @@ class MetricsLogger:
     def _report_experiment_id(self):
         """Tell the dashboard API which experiment this job belongs to."""
         url = f"{self._http_url}/api/workers/{self._http_job_id}/experiment-id"
-        data = json.dumps({"experimentId": self.exp_id}).encode()
-        req = urllib.request.Request(url, data=data, method="PATCH")
-        req.add_header("Authorization", f"Bearer {self._http_token}")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("User-Agent", "TidalMetrics/1.0")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp.read()
-                logger.info("Reported experiment ID %s for job %s", self.exp_id, self._http_job_id)
+            resp = self._http_session.patch(
+                url,
+                json={"experimentId": self.exp_id},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            logger.info("Reported experiment ID %s for job %s", self.exp_id, self._http_job_id)
         except Exception as e:
             logger.warning("Failed to report experiment ID: %s", e)
 

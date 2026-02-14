@@ -6,6 +6,7 @@ import type {
   JobResponse,
   JobSignalRequest,
   JobSignalResponse,
+  JobLogsResponse,
 } from "@tidal/shared";
 import { JobStore, jobStoreKeysFromManifest } from "../services/job-store.js";
 import { JobOrchestrator } from "../services/job-orchestrator.js";
@@ -101,6 +102,39 @@ export default async function jobRoutes(fastify: FastifyInstance) {
         }
         throw err;
       }
+    },
+  );
+
+  // GET /api/jobs/:jobId/logs — retrieve stored log lines
+  fastify.get<{
+    Params: { jobId: string };
+    Querystring: { offset?: string; limit?: string };
+  }>(
+    "/api/jobs/:jobId/logs",
+    async (request, reply) => {
+      const { jobId } = request.params;
+      const redis = fastify.redis;
+      if (!redis) {
+        return reply.status(503).send({ error: "Redis unavailable" });
+      }
+
+      const offset = parseInt(request.query.offset ?? "0", 10);
+      const limit = parseInt(request.query.limit ?? "5000", 10);
+      const totalLines = await redis.llen(`tidal:logs:${jobId}`);
+
+      const end = offset + limit - 1;
+      const rawLines: string[] = await redis.lrange(
+        `tidal:logs:${jobId}`,
+        offset,
+        end,
+      );
+      const lines = rawLines.map((raw) => JSON.parse(raw));
+
+      return reply.send({
+        jobId,
+        lines,
+        totalLines,
+      } satisfies JobLogsResponse);
     },
   );
 

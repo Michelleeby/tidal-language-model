@@ -17,13 +17,15 @@ import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
 import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
 import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
+import LogViewer from "../components/logs/LogViewer.js";
 import { lttbDownsample } from "../utils/downsample.js";
 import type { MetricPoint } from "@tidal/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client.js";
+import { useActiveJob } from "../hooks/useJobs.js";
 import type { TrainingStatus } from "@tidal/shared";
 
-type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples";
+type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples" | "logs";
 
 const CHART_SYNC_KEY = "training-charts";
 
@@ -33,6 +35,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "comparison", label: "Comparison" },
   { key: "checkpoints", label: "Checkpoints" },
   { key: "samples", label: "Samples" },
+  { key: "logs", label: "Logs" },
 ];
 
 const CLIENT_MAX_POINTS = 8000;
@@ -47,6 +50,10 @@ export default function DashboardPage() {
   const { data: checkpointsData } = useCheckpoints(selectedExpId);
   const { data: evalData } = useEvaluation(selectedExpId);
   const { data: ablationData } = useAblation(selectedExpId);
+
+  // Active job (for Logs tab)
+  const { data: activeJobData } = useActiveJob();
+  const activeJobId = activeJobData?.job?.jobId;
 
   // SSE for live updates (pushes into ["status", expId] among others)
   useSSE(selectedExpId);
@@ -208,6 +215,10 @@ export default function DashboardPage() {
             Select an experiment to view sample previews.
           </div>
         )
+      )}
+
+      {activeTab === "logs" && (
+        <LogViewer jobId={activeJobId} />
       )}
     </div>
   );

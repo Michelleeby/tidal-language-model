@@ -117,5 +117,84 @@ class TestMetricsLoggerRedisPrefix(unittest.TestCase):
                 self.assertTrue(ml._http_enabled)
 
 
+class TestMetricsLoggerUsesRequests(unittest.TestCase):
+    """Verify MetricsLogger uses requests.Session instead of urllib."""
+
+    def _make_http_logger(self, tmpdir):
+        """Create a MetricsLogger with HTTP enabled and a mock session."""
+        env = {
+            "TRAINING_API_URL": "http://example.com",
+            "TRAINING_AUTH_TOKEN": "tok123",
+            "TRAINING_JOB_ID": "job-42",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(MetricsLogger, "_init_redis"):
+                ml = MetricsLogger(tmpdir)
+                ml._redis = None
+                ml._redis_available = False
+                return ml
+
+    def test_has_session(self):
+        """MetricsLogger creates a requests.Session when HTTP is enabled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+            self.assertIsNotNone(ml._http_session)
+            self.assertEqual(
+                ml._http_session.headers["Authorization"], "Bearer tok123",
+            )
+
+    def test_http_forward_uses_session_post(self):
+        """_http_forward delegates to session.post instead of urllib."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+
+            with patch.object(ml._http_session, "post", return_value=mock_resp) as mock_post:
+                ml._http_forward({"expId": "test-exp", "points": []})
+
+            mock_post.assert_called_once()
+            args, kwargs = mock_post.call_args
+            self.assertIn("/api/workers/job-42/metrics", args[0])
+            self.assertEqual(kwargs["json"], {"expId": "test-exp", "points": []})
+
+    def test_upload_single_uses_session_put(self):
+        """_upload_single uses session.put with file streaming."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+
+            filepath = os.path.join(tmpdir, "model.pth")
+            with open(filepath, "wb") as f:
+                f.write(b"fake model data")
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = '{"ok":true}'
+
+            with patch.object(ml._http_session, "put", return_value=mock_resp) as mock_put:
+                ml._upload_single(filepath, "model.pth", 15, retries=1)
+
+            mock_put.assert_called_once()
+            args, kwargs = mock_put.call_args
+            self.assertIn("model.pth", args[0])
+            self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
+
+    def test_report_experiment_id_uses_session_patch(self):
+        """_report_experiment_id uses session.patch."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+
+            with patch.object(ml._http_session, "patch", return_value=mock_resp) as mock_patch:
+                ml._report_experiment_id()
+
+            mock_patch.assert_called_once()
+            args, kwargs = mock_patch.call_args
+            self.assertIn("/experiment-id", args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

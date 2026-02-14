@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples";
+type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples" | "logs";
 
 interface ExperimentStore {
   selectedExpId: string | null;

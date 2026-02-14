@@ -78,3 +78,17 @@ export interface JobSignalResponse {
   ok: boolean;
   status: JobStatus;
 }
+
+// ── Log streaming ─────────────────────────────────────────────────────
+
+export interface LogLine {
+  timestamp: number;
+  stream: "stdout" | "stderr";
+  line: string;
+}
+
+export interface JobLogsResponse {
+  jobId: string;
+  lines: LogLine[];
+  totalLines: number;
+}

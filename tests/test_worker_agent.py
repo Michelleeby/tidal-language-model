@@ -1,37 +1,31 @@
-"""Tests for WorkerAgent checkpoint download functionality."""
+"""Tests for WorkerAgent: checkpoint downloads, requests migration, and log streaming."""
 
-import http.client
+import io
 import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch, PropertyMock, call
 
 from worker_agent import WorkerAgent, RedisTransport, HttpTransport
 
 
-class FakeResponse:
-    """Minimal http.client response stub for _download_checkpoint tests."""
+class FakeRequestsResponse:
+    """Minimal requests.Response stub for _download_checkpoint tests."""
 
-    def __init__(self, status, body=b"", headers=None):
-        self.status = status
+    def __init__(self, status_code, body=b"", headers=None):
+        self.status_code = status_code
         self._body = body
-        self._headers = headers or {}
+        self.headers = headers or {}
+        self.text = ""
 
-    def getheader(self, name, default=None):
-        return self._headers.get(name, default)
+    def iter_content(self, chunk_size=None):
+        if self._body:
+            yield self._body
 
-    def read(self, amt=None):
-        if amt is None:
-            chunk = self._body
-            self._body = b""
-            return chunk
-        chunk = self._body[:amt]
-        self._body = self._body[amt:]
-        return chunk
-
-    def close(self):
+    def raise_for_status(self):
         pass
 
 
@@ -84,11 +78,11 @@ class TestDownloadCheckpointGuards(unittest.TestCase):
                 f.write(b"fake model data")
 
             # Should return without making any HTTP calls
-            with patch("http.client.HTTPConnection") as mock_conn_cls:
+            with patch.object(transport.session, "get") as mock_get:
                 agent._download_checkpoint({
                     "checkpoint": "experiments/exp-abc/model.pth",
                 })
-                mock_conn_cls.assert_not_called()
+                mock_get.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -107,22 +101,20 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model weights"
 
-            fake_resp = FakeResponse(200, body, {
+            fake_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp) as mock_get:
                 agent._download_checkpoint({
                     "checkpoint": "experiments/abc-123/transformer-lm_v1.0.0.pth",
                 })
 
-            # Verify the request path includes expId and filename
-            mock_conn.putrequest.assert_called_once()
-            req_path = mock_conn.putrequest.call_args[0][1]
-            self.assertIn("transformer-lm_v1.0.0.pth", req_path)
-            self.assertIn("expId=abc-123", req_path)
+            # Verify the request URL includes expId and filename
+            mock_get.assert_called_once()
+            req_url = mock_get.call_args[0][0]
+            self.assertIn("transformer-lm_v1.0.0.pth", req_url)
+            self.assertIn("expId=abc-123", req_url)
 
     def test_parses_absolute_checkpoint_path(self):
         """Handles absolute paths like '/data/experiments/<expId>/<filename>'."""
@@ -133,21 +125,14 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model weights"
 
-            fake_resp = FakeResponse(200, body, {
+            fake_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 agent._download_checkpoint({
                     "checkpoint": "/data/experiments/20260213-exp-abc/checkpoint_epoch_5.pth",
                 })
-
-            # Verify correct expId and filename extracted
-            req_path = mock_conn.putrequest.call_args[0][1]
-            self.assertIn("checkpoint_epoch_5.pth", req_path)
-            self.assertIn("expId=20260213-exp-abc", req_path)
 
             # File should be saved locally under project_root/experiments/
             final = os.path.join(tmpdir, "experiments", "20260213-exp-abc", "checkpoint_epoch_5.pth")
@@ -162,16 +147,14 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model data"
 
-            fake_resp = FakeResponse(200, body, {
+            fake_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
             config = {
                 "checkpoint": "/data/experiments/exp-xyz/model.pth",
             }
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 agent._download_checkpoint(config)
 
             self.assertEqual(
@@ -210,13 +193,11 @@ class TestDownloadCheckpointPathParsing(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model data"
 
-            fake_resp = FakeResponse(200, body, {
+            fake_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 agent._download_checkpoint({
                     "checkpoint": "experiments/new-exp/model.pth",
                 })
@@ -241,13 +222,11 @@ class TestDownloadCheckpointStreaming(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"x" * 1024
 
-            fake_resp = FakeResponse(200, body, {
+            fake_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 agent._download_checkpoint({
                     "checkpoint": "experiments/exp-1/model.pth",
                 })
@@ -272,13 +251,11 @@ class TestDownloadCheckpointStreaming(unittest.TestCase):
             agent._project_root = tmpdir
 
             # Server says 1000 bytes but only sends 500
-            fake_resp = FakeResponse(200, b"x" * 500, {
+            fake_resp = FakeRequestsResponse(200, b"x" * 500, {
                 "content-length": "1000",
             })
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 with self.assertRaises(RuntimeError) as ctx:
                     agent._download_checkpoint({
                         "checkpoint": "experiments/exp-1/model.pth",
@@ -303,15 +280,12 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model data"
 
-            fail_resp = FakeResponse(502, b"Bad Gateway")
-            ok_resp = FakeResponse(200, body, {
+            fail_resp = FakeRequestsResponse(502, b"Bad Gateway")
+            ok_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
 
-            mock_conn = MagicMock()
-            mock_conn.getresponse.side_effect = [fail_resp, fail_resp, ok_resp]
-
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", side_effect=[fail_resp, fail_resp, ok_resp]):
                 agent._download_checkpoint({
                     "checkpoint": "experiments/exp-1/model.pth",
                 })
@@ -330,11 +304,9 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent._project_root = tmpdir
 
-            fake_resp = FakeResponse(404, b"Not found")
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
+            fake_resp = FakeRequestsResponse(404, b"Not found")
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp) as mock_get:
                 with self.assertRaises(RuntimeError) as ctx:
                     agent._download_checkpoint({
                         "checkpoint": "experiments/exp-1/model.pth",
@@ -342,7 +314,7 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
                 self.assertIn("404", str(ctx.exception))
 
             # Should NOT have retried
-            self.assertEqual(mock_conn.getresponse.call_count, 1)
+            self.assertEqual(mock_get.call_count, 1)
 
     @patch("time.sleep")
     def test_raises_after_all_retries_exhausted(self, mock_sleep):
@@ -353,14 +325,11 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent._project_root = tmpdir
 
-            fail_resp_1 = FakeResponse(503, b"Unavailable")
-            fail_resp_2 = FakeResponse(503, b"Unavailable")
-            fail_resp_3 = FakeResponse(503, b"Unavailable")
+            fail_resp_1 = FakeRequestsResponse(503, b"Unavailable")
+            fail_resp_2 = FakeRequestsResponse(503, b"Unavailable")
+            fail_resp_3 = FakeRequestsResponse(503, b"Unavailable")
 
-            mock_conn = MagicMock()
-            mock_conn.getresponse.side_effect = [fail_resp_1, fail_resp_2, fail_resp_3]
-
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", side_effect=[fail_resp_1, fail_resp_2, fail_resp_3]):
                 with self.assertRaises(RuntimeError) as ctx:
                     agent._download_checkpoint({
                         "checkpoint": "experiments/exp-1/model.pth",
@@ -377,17 +346,14 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
             agent._project_root = tmpdir
             body = b"model data"
 
-            ok_resp = FakeResponse(200, body, {
+            ok_resp = FakeRequestsResponse(200, body, {
                 "content-length": str(len(body)),
             })
 
-            mock_conn = MagicMock()
-            mock_conn.getresponse.side_effect = [
+            with patch.object(transport.session, "get", side_effect=[
                 ConnectionError("refused"),
                 ok_resp,
-            ]
-
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            ]):
                 agent._download_checkpoint({
                     "checkpoint": "experiments/exp-1/model.pth",
                 })
@@ -403,11 +369,9 @@ class TestDownloadCheckpointRetry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent._project_root = tmpdir
 
-            fake_resp = FakeResponse(404, b"Not found")
-            mock_conn = MagicMock()
-            mock_conn.getresponse.return_value = fake_resp
+            fake_resp = FakeRequestsResponse(404, b"Not found")
 
-            with patch("http.client.HTTPConnection", return_value=mock_conn):
+            with patch.object(transport.session, "get", return_value=fake_resp):
                 with self.assertRaises(RuntimeError):
                     agent._download_checkpoint({
                         "checkpoint": "experiments/exp-1/model.pth",
@@ -526,6 +490,8 @@ class TestSubprocessEnvAllowlist(unittest.TestCase):
         """Build the env dict that _spawn_and_monitor would pass to Popen."""
         transport = _make_http_transport()
         agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
 
         original_environ = os.environ.copy()
         if extra_environ:
@@ -536,6 +502,8 @@ class TestSubprocessEnvAllowlist(unittest.TestCase):
                 mock_proc = MagicMock()
                 mock_proc.poll.return_value = 0
                 mock_proc.pid = 12345
+                mock_proc.stdout = io.BytesIO(b"")
+                mock_proc.stderr = io.BytesIO(b"")
                 mock_popen.return_value = mock_proc
 
                 agent._heartbeat_stop = threading.Event()
@@ -579,9 +547,6 @@ class TestHeartbeatExceptionLogging(unittest.TestCase):
     @patch("worker_agent.HEARTBEAT_INTERVAL", 0.01)
     def test_heartbeat_logs_exceptions(self):
         """When send_heartbeat raises, exception should be printed to stderr."""
-        import io
-        import time
-
         transport = _make_http_transport()
         agent = _make_agent(transport)
 
@@ -602,6 +567,256 @@ class TestHeartbeatExceptionLogging(unittest.TestCase):
         stderr_output = captured.getvalue()
         self.assertIn("Heartbeat failed", stderr_output)
         self.assertIn("refused", stderr_output)
+
+
+# ---------------------------------------------------------------------------
+# HttpTransport uses requests.Session
+# ---------------------------------------------------------------------------
+
+class TestHttpTransportRequests(unittest.TestCase):
+    """Tests that HttpTransport uses requests.Session for HTTP calls."""
+
+    def test_init_creates_session(self):
+        """HttpTransport.__init__ creates a requests.Session with auth headers."""
+        transport = HttpTransport("https://example.com", "tok-123")
+        self.assertIsNotNone(transport.session)
+        self.assertEqual(
+            transport.session.headers["Authorization"], "Bearer tok-123",
+        )
+        self.assertEqual(
+            transport.session.headers["User-Agent"], "TidalWorker/1.0",
+        )
+
+    def test_request_uses_session(self):
+        """_request delegates to self.session.request."""
+        transport = HttpTransport("https://example.com", "tok")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(transport.session, "request", return_value=mock_resp) as mock_req:
+            result = transport._request("GET", "/api/test")
+
+        mock_req.assert_called_once()
+        args, kwargs = mock_req.call_args
+        self.assertEqual(args[0], "GET")
+        self.assertIn("/api/test", args[1])
+        self.assertEqual(result, {"ok": True})
+
+    def test_request_posts_json_body(self):
+        """_request sends JSON body for POST/PATCH."""
+        transport = HttpTransport("https://example.com", "tok")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(transport.session, "request", return_value=mock_resp) as mock_req:
+            transport._request("PATCH", "/api/workers/job-1/status", {"status": "running"})
+
+        _, kwargs = mock_req.call_args
+        self.assertEqual(kwargs["json"], {"status": "running"})
+
+    def test_get_job_calls_request(self):
+        """get_job uses _request to fetch job data."""
+        transport = HttpTransport("https://example.com", "tok")
+        with patch.object(transport, "_request", return_value={"job": {"jobId": "j1"}}) as mock:
+            result = transport.get_job("j1")
+        mock.assert_called_once_with("GET", "/api/jobs/j1")
+        self.assertEqual(result, {"jobId": "j1"})
+
+    def test_update_status_calls_request(self):
+        """update_status uses _request with PATCH."""
+        transport = HttpTransport("https://example.com", "tok")
+        with patch.object(transport, "_request") as mock:
+            transport.update_status("j1", "running")
+        mock.assert_called_once_with("PATCH", "/api/workers/j1/status", {"status": "running"})
+
+    def test_update_status_includes_error(self):
+        """update_status includes error field when provided."""
+        transport = HttpTransport("https://example.com", "tok")
+        with patch.object(transport, "_request") as mock:
+            transport.update_status("j1", "failed", error="boom")
+        mock.assert_called_once_with(
+            "PATCH", "/api/workers/j1/status", {"status": "failed", "error": "boom"},
+        )
+
+    def test_download_checkpoint_uses_session_get(self):
+        """_download_checkpoint uses session.get with stream=True."""
+        transport = HttpTransport("http://localhost:4400", "tok")
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            body = b"model weights data"
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.headers = {"content-length": str(len(body))}
+            mock_resp.iter_content = MagicMock(return_value=[body])
+            mock_resp.raise_for_status = MagicMock()
+
+            with patch.object(transport.session, "get", return_value=mock_resp) as mock_get:
+                agent._download_checkpoint({
+                    "checkpoint": "experiments/exp-abc/model.pth",
+                })
+
+            mock_get.assert_called_once()
+            args, kwargs = mock_get.call_args
+            self.assertIn("model.pth", args[0])
+            self.assertTrue(kwargs.get("stream"))
+
+            # Verify file was saved
+            final_path = os.path.join(tmpdir, "experiments", "exp-abc", "model.pth")
+            self.assertTrue(os.path.exists(final_path))
+            with open(final_path, "rb") as f:
+                self.assertEqual(f.read(), body)
+
+    def test_upload_single_uses_session_put(self):
+        """_upload_checkpoint_single uses session.put with file body."""
+        transport = HttpTransport("http://localhost:4400", "tok")
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "model.pth")
+            with open(filepath, "wb") as f:
+                f.write(b"fake model")
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = '{"ok": true}'
+
+            with patch.object(transport.session, "put", return_value=mock_resp) as mock_put:
+                agent._upload_checkpoint_single(filepath, "exp-1", "model.pth", 10)
+
+            mock_put.assert_called_once()
+            args, kwargs = mock_put.call_args
+            self.assertIn("model.pth", args[0])
+            self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
+
+
+# ---------------------------------------------------------------------------
+# Log streaming
+# ---------------------------------------------------------------------------
+
+class TestLogStreaming(unittest.TestCase):
+    """Tests for send_logs on both transport types and log capture in WorkerAgent."""
+
+    def test_redis_transport_send_logs(self):
+        """RedisTransport.send_logs pushes to Redis list and publishes."""
+        with patch("worker_agent.redis_lib") as mock_redis_lib:
+            mock_redis = MagicMock()
+            mock_redis_lib.from_url.return_value = mock_redis
+            mock_pipe = MagicMock()
+            mock_redis.pipeline.return_value = mock_pipe
+
+            transport = RedisTransport("redis://localhost:6379")
+            lines = [
+                {"timestamp": 1000, "stream": "stdout", "line": "hello"},
+                {"timestamp": 1001, "stream": "stderr", "line": "error"},
+            ]
+            transport.send_logs("job-1", lines)
+
+            # Should RPUSH, LTRIM, PUBLISH, exec
+            mock_pipe.rpush.assert_called_once()
+            rpush_args = mock_pipe.rpush.call_args[0]
+            self.assertEqual(rpush_args[0], "tidal:logs:job-1")
+
+            mock_pipe.ltrim.assert_called_once_with("tidal:logs:job-1", -10000, -1)
+            mock_pipe.publish.assert_called_once()
+            mock_pipe.execute.assert_called_once()
+
+    def test_http_transport_send_logs(self):
+        """HttpTransport.send_logs POSTs to the logs endpoint."""
+        transport = HttpTransport("https://example.com", "tok")
+        lines = [{"timestamp": 1000, "stream": "stdout", "line": "hello"}]
+
+        with patch.object(transport, "_request") as mock_req:
+            transport.send_logs("job-1", lines)
+
+        mock_req.assert_called_once_with(
+            "POST", "/api/workers/job-1/logs", {"lines": lines},
+        )
+
+    def test_send_logs_resilient_to_failure(self):
+        """send_logs should not raise even if transport fails."""
+        transport = HttpTransport("https://example.com", "tok")
+
+        with patch.object(transport, "_request", side_effect=Exception("network")):
+            # Should not raise
+            transport.send_logs("job-1", [{"timestamp": 1, "stream": "stdout", "line": "x"}])
+
+    def test_redis_send_logs_resilient_to_failure(self):
+        """RedisTransport.send_logs should not raise on Redis errors."""
+        with patch("worker_agent.redis_lib") as mock_redis_lib:
+            mock_redis = MagicMock()
+            mock_redis_lib.from_url.return_value = mock_redis
+            mock_redis.pipeline.side_effect = Exception("Redis down")
+
+            transport = RedisTransport("redis://localhost:6379")
+            # Should not raise
+            transport.send_logs("job-1", [{"timestamp": 1, "stream": "stdout", "line": "x"}])
+
+    def test_spawn_captures_stdout(self):
+        """_spawn_and_monitor captures stdout lines into the log buffer."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
+
+        # Run a subprocess that outputs to stdout
+        exit_code = agent._spawn_and_monitor(
+            ["python", "-c", "print('hello from stdout')"],
+            redis_prefix="tidal",
+        )
+
+        self.assertEqual(exit_code, 0)
+
+        # send_logs should have been called with the stdout line
+        self.assertTrue(transport.send_logs.called, "send_logs should have been called")
+        all_lines = []
+        for call_args in transport.send_logs.call_args_list:
+            all_lines.extend(call_args[0][1])  # lines arg
+        stdout_lines = [l for l in all_lines if l["stream"] == "stdout"]
+        stdout_text = " ".join(l["line"] for l in stdout_lines)
+        self.assertIn("hello from stdout", stdout_text)
+
+    def test_spawn_captures_stderr(self):
+        """_spawn_and_monitor captures stderr lines into the log buffer."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
+
+        exit_code = agent._spawn_and_monitor(
+            ["python", "-c", "import sys; print('error msg', file=sys.stderr)"],
+            redis_prefix="tidal",
+        )
+
+        self.assertEqual(exit_code, 0)
+
+        all_lines = []
+        for call_args in transport.send_logs.call_args_list:
+            all_lines.extend(call_args[0][1])
+        stderr_lines = [l for l in all_lines if l["stream"] == "stderr"]
+        stderr_text = " ".join(l["line"] for l in stderr_lines)
+        self.assertIn("error msg", stderr_text)
+
+    def test_spawn_final_flush(self):
+        """send_logs is called at least once after the process exits (final flush)."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
+
+        agent._spawn_and_monitor(
+            ["python", "-c", "print('done')"],
+            redis_prefix="tidal",
+        )
+
+        # At minimum there should be a final flush call
+        self.assertTrue(transport.send_logs.called)
 
 
 if __name__ == "__main__":

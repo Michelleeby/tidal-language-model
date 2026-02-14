@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import shutil
+import traceback
 import torch
 import time
 
@@ -74,6 +75,8 @@ def main():
         logger.warning("Experiment interrupted by user.")
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
     finally:
         logger.info(f"Experiment {experiment_id} finished.")
 

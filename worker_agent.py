@@ -3,23 +3,23 @@ Worker agent that runs training jobs on behalf of the dashboard orchestrator.
 
 Reads job config from Redis (local) or HTTPS API (remote), spawns the
 appropriate training subprocess, monitors for signals (complete/stop),
-and reports status back.
+and reports status back.  Streams stdout/stderr logs to the dashboard.
 """
 
 import argparse
-import http.client
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import threading
 import time
-import urllib.request
-import urllib.error
 from abc import ABC, abstractmethod
-from urllib.parse import urlparse
 
+import requests as requests_lib
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from ruamel.yaml import YAML
 
 import redis as redis_lib
@@ -68,6 +68,9 @@ class Transport(ABC):
     @abstractmethod
     def read_signal(self, job_id: str) -> str | None: ...
 
+    @abstractmethod
+    def send_logs(self, job_id: str, lines: list[dict]) -> None: ...
+
 
 class RedisTransport(Transport):
     """Existing behavior — communicates directly with Redis for local jobs."""
@@ -110,6 +113,18 @@ class RedisTransport(Transport):
         except Exception:
             return None
 
+    def send_logs(self, job_id: str, lines: list[dict]) -> None:
+        try:
+            key = f"tidal:logs:{job_id}"
+            pipe = self.redis.pipeline()
+            serialized = [json.dumps(l) for l in lines]
+            pipe.rpush(key, *serialized)
+            pipe.ltrim(key, -10000, -1)
+            pipe.publish("tidal:logs:stream", json.dumps({"jobId": job_id, "lines": lines}))
+            pipe.execute()
+        except Exception as e:
+            print(f"Failed to send logs: {e}", file=sys.stderr)
+
 
 class HttpTransport(Transport):
     """Communicates with the dashboard Fastify API over HTTPS for remote jobs."""
@@ -118,36 +133,35 @@ class HttpTransport(Transport):
         self.api_url = api_url.rstrip("/")
         self.auth_token = auth_token
 
-    def _request(self, method: str, path: str, body: dict | None = None, retries: int = 3) -> dict | None:
+        # Build a session with default auth headers and retry strategy
+        self.session = requests_lib.Session()
+        self.session.headers.update({
+            "Authorization": f"Bearer {auth_token}",
+            "User-Agent": "TidalWorker/1.0",
+        })
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+    def _request(self, method: str, path: str, body: dict | None = None) -> dict | None:
         url = f"{self.api_url}{path}"
-        last_err = None
-        for attempt in range(retries):
-            data = json.dumps(body).encode() if body else None
-            req = urllib.request.Request(url, data=data, method=method)
-            req.add_header("Authorization", f"Bearer {self.auth_token}")
-            req.add_header("User-Agent", "TidalWorker/1.0")
-            if data:
-                req.add_header("Content-Type", "application/json")
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    return json.loads(resp.read().decode())
-            except urllib.error.HTTPError as e:
-                body_text = e.read().decode()[:200]
-                if e.code in (502, 503, 504) and attempt < retries - 1:
-                    wait = 2 ** attempt
-                    print(f"HTTP {e.code} on {method} {path} (attempt {attempt + 1}/{retries}) — retrying in {wait}s", file=sys.stderr)
-                    time.sleep(wait)
-                    continue
-                print(f"HTTP {e.code} on {method} {path}: {body_text}", file=sys.stderr)
-                return None
-            except Exception as e:
-                last_err = e
-                if attempt < retries - 1:
-                    wait = 2 ** attempt  # 1s, 2s
-                    print(f"Request failed {method} {path} (attempt {attempt + 1}/{retries}): {e} — retrying in {wait}s", file=sys.stderr)
-                    time.sleep(wait)
-        print(f"Request failed {method} {path} after {retries} attempts: {last_err}", file=sys.stderr)
-        return None
+        try:
+            resp = self.session.request(method, url, json=body, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except requests_lib.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            text = e.response.text[:200] if e.response is not None else ""
+            print(f"HTTP {status} on {method} {path}: {text}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Request failed {method} {path}: {e}", file=sys.stderr)
+            return None
 
     def get_job(self, job_id: str) -> dict | None:
         result = self._request("GET", f"/api/jobs/{job_id}")
@@ -165,6 +179,12 @@ class HttpTransport(Transport):
     def read_signal(self, job_id: str) -> str | None:
         result = self._request("GET", f"/api/workers/{job_id}/signal")
         return result.get("signal") if result else None
+
+    def send_logs(self, job_id: str, lines: list[dict]) -> None:
+        try:
+            self._request("POST", f"/api/workers/{job_id}/logs", {"lines": lines})
+        except Exception as e:
+            print(f"Failed to send logs: {e}", file=sys.stderr)
 
 
 # ── Worker agent ─────────────────────────────────────────────────────
@@ -328,15 +348,33 @@ class WorkerAgent:
         self._stderr_lines: list[str] = []
         self._stderr_lock = threading.Lock()
 
+        # Log buffer for streaming to dashboard
+        self._log_buffer: list[dict] = []
+        self._log_lock = threading.Lock()
+
         self.process = subprocess.Popen(
             args,
             cwd=self._project_root,
             env=env,
-            stdout=sys.stdout,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
 
-        # Tee stderr: print to our stderr + keep last 50 lines
+        # Tee stdout: print to our stdout + buffer log entries
+        def _read_stdout():
+            assert self.process.stdout is not None
+            for raw_line in self.process.stdout:
+                line = raw_line.decode("utf-8", errors="replace")
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                with self._log_lock:
+                    self._log_buffer.append({
+                        "timestamp": time.time(),
+                        "stream": "stdout",
+                        "line": line.rstrip(),
+                    })
+
+        # Tee stderr: print to our stderr + keep last 50 lines + buffer log entries
         def _read_stderr():
             assert self.process.stderr is not None
             for raw_line in self.process.stderr:
@@ -346,8 +384,16 @@ class WorkerAgent:
                     self._stderr_lines.append(line.rstrip())
                     if len(self._stderr_lines) > 50:
                         self._stderr_lines.pop(0)
+                with self._log_lock:
+                    self._log_buffer.append({
+                        "timestamp": time.time(),
+                        "stream": "stderr",
+                        "line": line.rstrip(),
+                    })
 
+        stdout_thread = threading.Thread(target=_read_stdout, daemon=True)
         stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stdout_thread.start()
         stderr_thread.start()
 
         while self.process.poll() is None:
@@ -368,9 +414,31 @@ class WorkerAgent:
                     self.process.wait()
                 break
 
+            # Flush log buffer every poll cycle
+            self._flush_logs()
+
             time.sleep(SIGNAL_POLL_INTERVAL)
 
+        # Wait for reader threads to drain
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+
+        # Final flush of any remaining log lines
+        self._flush_logs()
+
         return self.process.returncode or 0
+
+    def _flush_logs(self):
+        """Send buffered log lines to the transport."""
+        with self._log_lock:
+            if not self._log_buffer:
+                return
+            batch = self._log_buffer[:]
+            self._log_buffer.clear()
+        try:
+            self.transport.send_logs(self.job_id, batch)
+        except Exception as e:
+            print(f"Failed to flush logs: {e}", file=sys.stderr)
 
     def _get_stderr_tail(self, lines: int = 10) -> str:
         """Return the last N lines of captured stderr."""
@@ -422,11 +490,8 @@ class WorkerAgent:
 
         os.makedirs(os.path.join(self._project_root, "experiments", exp_id), exist_ok=True)
 
-        parsed = urlparse(self.transport.api_url)
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname
-        port = parsed.port or (443 if use_https else 80)
-        url_path = (
+        url = (
+            f"{self.transport.api_url}"
             f"/api/workers/{self.job_id}/checkpoints/{filename}"
             f"?expId={exp_id}"
         )
@@ -436,32 +501,22 @@ class WorkerAgent:
 
         for attempt in range(DOWNLOAD_MAX_RETRIES):
             try:
-                if use_https:
-                    conn = http.client.HTTPSConnection(host, port, timeout=300)
-                else:
-                    conn = http.client.HTTPConnection(host, port, timeout=300)
+                resp = self.transport.session.get(url, stream=True, timeout=300)
 
-                conn.putrequest("GET", url_path)
-                conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
-                conn.putheader("User-Agent", "TidalWorker/1.0")
-                conn.endheaders()
-
-                resp = conn.getresponse()
-
-                if resp.status == 404:
+                if resp.status_code == 404:
                     self._cleanup_tmp(tmp_dest)
                     raise RuntimeError(
                         f"Checkpoint not found on server (404): {filename}"
                     )
 
-                if resp.status >= 500:
+                if resp.status_code >= 500:
                     last_err = RuntimeError(
-                        f"Server error {resp.status} downloading {filename}"
+                        f"Server error {resp.status_code} downloading {filename}"
                     )
                     if attempt < DOWNLOAD_MAX_RETRIES - 1:
                         wait = 2 ** attempt
                         print(
-                            f"HTTP {resp.status} downloading checkpoint "
+                            f"HTTP {resp.status_code} downloading checkpoint "
                             f"(attempt {attempt + 1}/{DOWNLOAD_MAX_RETRIES}) "
                             f"— retrying in {wait}s",
                             file=sys.stderr,
@@ -471,27 +526,23 @@ class WorkerAgent:
                     self._cleanup_tmp(tmp_dest)
                     raise RuntimeError(
                         f"Failed to download checkpoint after {DOWNLOAD_MAX_RETRIES} attempts: "
-                        f"HTTP {resp.status}"
+                        f"HTTP {resp.status_code}"
                     )
 
-                if resp.status != 200:
+                if resp.status_code != 200:
                     self._cleanup_tmp(tmp_dest)
                     raise RuntimeError(
-                        f"Unexpected HTTP {resp.status} downloading {filename}"
+                        f"Unexpected HTTP {resp.status_code} downloading {filename}"
                     )
 
                 # Stream response body to temp file
-                expected_size = resp.getheader("content-length")
+                expected_size = resp.headers.get("content-length")
                 bytes_written = 0
                 with open(tmp_dest, "wb") as f:
-                    while True:
-                        chunk = resp.read(DOWNLOAD_READ_SIZE)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        bytes_written += len(chunk)
-
-                conn.close()
+                    for chunk in resp.iter_content(chunk_size=DOWNLOAD_READ_SIZE):
+                        if chunk:
+                            f.write(chunk)
+                            bytes_written += len(chunk)
 
                 # Verify Content-Length if provided
                 if expected_size is not None:
@@ -566,7 +617,6 @@ class WorkerAgent:
         if file_size <= UPLOAD_CHUNK_SIZE:
             self._upload_checkpoint_single(filepath, exp_id, filename, file_size)
         else:
-            import math
             total_chunks = math.ceil(file_size / UPLOAD_CHUNK_SIZE)
             print(f"Uploading {filename} ({file_size} bytes) in {total_chunks} chunks", file=sys.stderr)
             for chunk_idx in range(total_chunks):
@@ -582,44 +632,28 @@ class WorkerAgent:
     ):
         """Upload a complete checkpoint in a single request."""
         assert isinstance(self.transport, HttpTransport)
-        parsed = urlparse(self.transport.api_url)
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname
-        port = parsed.port or (443 if use_https else 80)
-
-        url_path = (
+        url = (
+            f"{self.transport.api_url}"
             f"/api/workers/{self.job_id}/checkpoints/{filename}"
             f"?expId={exp_id}"
         )
 
         try:
-            if use_https:
-                conn = http.client.HTTPSConnection(host, port, timeout=300)
-            else:
-                conn = http.client.HTTPConnection(host, port, timeout=300)
-
-            conn.putrequest("PUT", url_path)
-            conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
-            conn.putheader("Content-Type", "application/octet-stream")
-            conn.putheader("Content-Length", str(file_size))
-            conn.putheader("User-Agent", "TidalWorker/1.0")
-            conn.endheaders()
-
             with open(filepath, "rb") as f:
-                while True:
-                    data = f.read(1024 * 1024)
-                    if not data:
-                        break
-                    conn.send(data)
+                resp = self.transport.session.put(
+                    url,
+                    data=f,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(file_size),
+                    },
+                    timeout=300,
+                )
 
-            resp = conn.getresponse()
-            body = resp.read().decode()[:200]
-            conn.close()
-
-            if 200 <= resp.status < 300:
+            if 200 <= resp.status_code < 300:
                 print(f"Uploaded {filename} ({file_size} bytes)", file=sys.stderr)
             else:
-                print(f"Upload failed for {filename}: HTTP {resp.status} {body}", file=sys.stderr)
+                print(f"Upload failed for {filename}: HTTP {resp.status_code} {resp.text[:200]}", file=sys.stderr)
         except Exception as e:
             print(f"Upload error for {filename}: {e}", file=sys.stderr)
 
@@ -629,52 +663,35 @@ class WorkerAgent:
     ):
         """Upload one chunk of a checkpoint file."""
         assert isinstance(self.transport, HttpTransport)
-        parsed = urlparse(self.transport.api_url)
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname
-        port = parsed.port or (443 if use_https else 80)
-
-        url_path = (
+        url = (
+            f"{self.transport.api_url}"
             f"/api/workers/{self.job_id}/checkpoints/{filename}"
             f"?expId={exp_id}&chunk={chunk_idx}&totalChunks={total_chunks}"
         )
 
         try:
-            if use_https:
-                conn = http.client.HTTPSConnection(host, port, timeout=300)
-            else:
-                conn = http.client.HTTPConnection(host, port, timeout=300)
-
-            conn.putrequest("PUT", url_path)
-            conn.putheader("Authorization", f"Bearer {self.transport.auth_token}")
-            conn.putheader("Content-Type", "application/octet-stream")
-            conn.putheader("Content-Length", str(length))
-            conn.putheader("User-Agent", "TidalWorker/1.0")
-            conn.endheaders()
-
-            sent = 0
             with open(filepath, "rb") as f:
                 f.seek(offset)
-                while sent < length:
-                    read_size = min(1024 * 1024, length - sent)
-                    data = f.read(read_size)
-                    if not data:
-                        break
-                    conn.send(data)
-                    sent += len(data)
+                data = f.read(length)
 
-            resp = conn.getresponse()
-            body = resp.read().decode()[:200]
-            conn.close()
+            resp = self.transport.session.put(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(length),
+                },
+                timeout=300,
+            )
 
-            if 200 <= resp.status < 300:
+            if 200 <= resp.status_code < 300:
                 print(
                     f"Uploaded chunk {chunk_idx + 1}/{total_chunks} of {filename} ({length} bytes)",
                     file=sys.stderr,
                 )
             else:
                 print(
-                    f"Upload failed for chunk {chunk_idx + 1}/{total_chunks} of {filename}: HTTP {resp.status} {body}",
+                    f"Upload failed for chunk {chunk_idx + 1}/{total_chunks} of {filename}: HTTP {resp.status_code} {resp.text[:200]}",
                     file=sys.stderr,
                 )
         except Exception as e:

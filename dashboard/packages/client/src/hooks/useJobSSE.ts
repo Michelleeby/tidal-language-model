@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { TrainingJob } from "@tidal/shared";
+import type { TrainingJob, LogLine } from "@tidal/shared";
 
 /**
  * SSE hook that connects to the global job event stream and
@@ -25,6 +25,23 @@ export function useJobSSE() {
 
       // Update individual job cache
       queryClient.setQueryData(["jobs", job.jobId], { job });
+    });
+
+    source.addEventListener("log-lines", (e) => {
+      const { jobId, lines } = JSON.parse(e.data) as {
+        jobId: string;
+        lines: LogLine[];
+      };
+
+      queryClient.setQueryData(
+        ["job-logs", jobId, "live"],
+        (old: LogLine[] | undefined) => {
+          const prev = old ?? [];
+          const next = [...prev, ...lines];
+          // Keep last 10000 lines in live cache
+          return next.length > 10000 ? next.slice(-10000) : next;
+        },
+      );
     });
 
     return () => {

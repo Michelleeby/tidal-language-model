@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 import type Redis from "ioredis";
-import type { SSEEvent, TrainingJob, RedisConfig } from "@tidal/shared";
+import type { SSEEvent, TrainingJob, LogLine, RedisConfig } from "@tidal/shared";
 
 interface Client {
   reply: FastifyReply;
@@ -129,14 +129,28 @@ export class SSEManager {
     }
   }
 
+  broadcastLogLines(jobId: string, lines: LogLine[]) {
+    const event: SSEEvent = { type: "log-lines", data: { jobId, lines } };
+    for (const client of this.globalClients) {
+      this.sendRawEvent(client.reply, event);
+    }
+  }
+
   private async subscribeToJobUpdates() {
     if (!this.redis) return;
     try {
       // Create a dedicated subscriber connection (ioredis requirement)
       this.subscriber = this.redis.duplicate();
-      await this.subscriber.subscribe(this.sc.updatesChannel);
-      this.subscriber.on("message", async (_channel, message) => {
+      await this.subscriber.subscribe(this.sc.updatesChannel, "tidal:logs:stream");
+      this.subscriber.on("message", async (channel, message) => {
         try {
+          if (channel === "tidal:logs:stream") {
+            const { jobId, lines } = JSON.parse(message);
+            if (jobId && lines) {
+              this.broadcastLogLines(jobId, lines);
+            }
+            return;
+          }
           const { jobId } = JSON.parse(message);
           if (!jobId || !this.redis) return;
           const raw = await this.redis.hget(this.sc.jobsHash, jobId);

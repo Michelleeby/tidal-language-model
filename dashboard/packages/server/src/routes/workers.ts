@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { JobSignal, JobStatus } from "@tidal/shared";
+import type { JobSignal, JobStatus, LogLine } from "@tidal/shared";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -77,8 +77,11 @@ export default async function workerRoutes(fastify: FastifyInstance) {
 
       sseManager.broadcastJobUpdate(updated);
 
-      // On terminal status: archive data and deprovision remote instances
+      // On terminal status: expire logs, archive data, and deprovision remote instances
       if (status === "completed" || status === "failed") {
+        // Set 24h TTL on log lines
+        await fastify.redis?.expire(`tidal:logs:${jobId}`, 86400);
+
         const expId = updated.experimentId;
         if (expId) {
           try {
@@ -167,6 +170,40 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       await pipe.exec();
 
       return reply.send({ ok: true, ingested: points?.length ?? 0 });
+    },
+  );
+
+  // POST /api/workers/:jobId/logs — worker forwards log lines
+  fastify.post<{
+    Params: { jobId: string };
+    Body: { lines: LogLine[] };
+  }>(
+    "/api/workers/:jobId/logs",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { jobId } = request.params;
+      const { lines } = request.body;
+
+      if (!lines) {
+        return reply.status(400).send({ error: "lines is required" });
+      }
+
+      if (lines.length === 0) {
+        return reply.send({ ok: true, ingested: 0 });
+      }
+
+      const redis = fastify.redis;
+      if (!redis) {
+        return reply.status(503).send({ error: "Redis unavailable" });
+      }
+      const key = `tidal:logs:${jobId}`;
+      const serialized = lines.map((l) => JSON.stringify(l));
+      await redis.rpush(key, ...serialized);
+      await redis.ltrim(key, -10000, -1);
+
+      sseManager.broadcastLogLines(jobId, lines);
+
+      return reply.send({ ok: true, ingested: lines.length });
     },
   );
 
