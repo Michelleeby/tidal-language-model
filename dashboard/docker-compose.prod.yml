@@ -32,8 +32,8 @@ services:
 
   app:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: dashboard/Dockerfile
     restart: unless-stopped
     depends_on:
       redis:
