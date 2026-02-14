@@ -11,7 +11,7 @@ const TERMINAL_INSTANCE_STATUSES = new Set(["exited", "offline", "error"]);
 const MIN_INET_DOWN_MBPS = 800;
 const MIN_INET_UP_MBPS = 800;
 const MIN_RELIABILITY = 0.99;
-const MIN_GPU_RAM_MB = 32_000;
+const MIN_GPU_RAM_MB = 48_000;
 const MIN_CPU_CORES = 16;
 
 const DEFAULT_DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
