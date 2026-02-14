@@ -79,6 +79,7 @@ export interface ServerConfig {
   vastaiApiKey: string | null;
   digitaloceanApiKey: string | null;
   digitaloceanRegion: string;
+  digitaloceanSshKey: string | null;
   repoUrl: string | null;
   dashboardUrl: string | null;
 }
@@ -109,6 +110,7 @@ export function loadConfig(): ServerConfig {
     vastaiApiKey: process.env.VASTAI_API_KEY ?? null,
     digitaloceanApiKey: process.env.DO_API_KEY ?? null,
     digitaloceanRegion: process.env.DO_REGION ?? "tor1",
+    digitaloceanSshKey: process.env.DO_SSH_KEY ?? null,
     repoUrl: process.env.TIDAL_REPO_URL ?? null,
     dashboardUrl: process.env.TIDAL_DASHBOARD_URL ?? null,
   };

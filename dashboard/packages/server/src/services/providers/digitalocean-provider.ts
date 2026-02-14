@@ -20,6 +20,7 @@ export interface DigitalOceanProviderConfig {
   repoUrl: string | null;
   log: FastifyBaseLogger;
   region: string;
+  sshKey?: string | null;
   gpuTiers?: Record<string, GpuTierSpec>;
 }
 
@@ -50,6 +51,7 @@ export class DigitalOceanProvider implements ComputeProvider {
   private repoUrl: string | null;
   private log: FastifyBaseLogger;
   private region: string;
+  private sshKey: string | null;
   private gpuTiers: Record<string, GpuTierSpec>;
 
   constructor(config: DigitalOceanProviderConfig) {
@@ -59,6 +61,7 @@ export class DigitalOceanProvider implements ComputeProvider {
     this.repoUrl = config.repoUrl;
     this.log = config.log;
     this.region = config.region;
+    this.sshKey = config.sshKey ?? null;
     this.gpuTiers = config.gpuTiers ?? DEFAULT_GPU_TIERS;
   }
 
@@ -191,6 +194,7 @@ export class DigitalOceanProvider implements ComputeProvider {
         image: "gpu-h100x1-base",
         user_data: userData,
         tags: ["tidal", "worker"],
+        ...(this.sshKey ? { ssh_keys: [this.sshKey] } : {}),
       }),
     });
 

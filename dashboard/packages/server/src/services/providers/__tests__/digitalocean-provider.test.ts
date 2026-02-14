@@ -335,6 +335,48 @@ describe("DigitalOceanProvider.provision()", () => {
     assert.equal(result.success, false);
     assert.ok(result.error?.includes("Missing"));
   });
+
+  it("includes ssh_keys in droplet creation request", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+
+      if (url.includes("/v2/sizes")) {
+        return new Response(
+          JSON.stringify({ sizes: [makeDOSize()] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url.includes("/v2/droplets") && init?.method === "POST") {
+        capturedBody = JSON.parse(init.body as string);
+        return new Response(
+          JSON.stringify({ droplet: { id: 99009 } }),
+          { status: 202, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return originalFetch(input, init as RequestInit);
+    }) as typeof globalThis.fetch;
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+
+    const provider = makeProvider({ sshKey: "ab:cd:ef:12:34" });
+    await provider.provision(makeJob());
+
+    assert.ok(capturedBody, "POST body should have been captured");
+    assert.deepEqual(capturedBody!.ssh_keys, ["ab:cd:ef:12:34"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

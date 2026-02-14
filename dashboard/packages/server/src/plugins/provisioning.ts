@@ -44,6 +44,7 @@ export default fp(async function provisioningPlugin(fastify: FastifyInstance) {
       repoUrl: config.repoUrl,
       log: fastify.log,
       region: config.digitaloceanRegion,
+      sshKey: config.digitaloceanSshKey,
       gpuTiers: plugin?.infrastructure.gpuTiers,
     }),
   ]);
