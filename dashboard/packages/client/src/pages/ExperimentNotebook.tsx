@@ -26,7 +26,7 @@ import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
 import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
 import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
-import LogViewer from "../components/logs/LogViewer.js";
+import LogTailCard from "../components/logs/LogTailCard.js";
 import ConfigViewer from "../components/config/ConfigViewer.js";
 import GenerationSection from "../components/generation/GenerationSection.js";
 import ChartExportButton from "../components/charts/ChartExportButton.js";
@@ -205,6 +205,9 @@ export default function ExperimentNotebook() {
           <MetricCards latest={latestPoint} />
           <TrainingStatusCard status={status} />
         </MetricCarousel>
+        <div className="mt-3">
+          <LogTailCard jobId={activeJobId} />
+        </div>
       </CollapsibleSection>
 
       {/* 2. Monitor */}
@@ -362,12 +365,7 @@ export default function ExperimentNotebook() {
         <GenerationSection expId={selectedExpId} />
       </CollapsibleSection>
 
-      {/* 6. Logs */}
-      <CollapsibleSection title="Logs">
-        <LogViewer jobId={activeJobId} />
-      </CollapsibleSection>
-
-      {/* 7. Samples */}
+      {/* 6. Samples */}
       <CollapsibleSection title="Samples">
         <SamplePreviews results={evalData?.results ?? null} />
       </CollapsibleSection>
