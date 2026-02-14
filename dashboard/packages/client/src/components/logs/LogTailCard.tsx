@@ -1,7 +1,6 @@
-import { useEffect, useRef } from "react";
 import { useJobLogs } from "../../hooks/useLogs.js";
 
-const TAIL_LINES = 50;
+const TAIL_LINES = 5;
 
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000);
@@ -14,16 +13,8 @@ interface LogTailCardProps {
 
 export default function LogTailCard({ jobId }: LogTailCardProps) {
   const { lines } = useJobLogs(jobId);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const tail = lines.slice(-TAIL_LINES);
-
-  // Auto-scroll to bottom when new lines arrive
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [tail.length]);
 
   if (!jobId) {
     return (
@@ -50,11 +41,7 @@ export default function LogTailCard({ jobId }: LogTailCardProps) {
       </div>
 
       {/* Log content */}
-      <div
-        ref={containerRef}
-        className="font-mono text-[11px] leading-[18px] overflow-auto p-2"
-        style={{ maxHeight: "280px" }}
-      >
+      <div className="font-mono text-[11px] leading-[18px] p-2">
         {tail.length === 0 ? (
           <div className="text-gray-600 text-center py-4">
             Waiting for output...
