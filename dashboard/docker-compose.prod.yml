@@ -51,6 +51,7 @@ services:
       - VASTAI_API_KEY=${VASTAI_API_KEY:-}
       - TIDAL_REPO_URL=${TIDAL_REPO_URL:-}
       - TIDAL_DASHBOARD_URL=${TIDAL_DASHBOARD_URL:-}
+      - DO_API_KEY=${DO_API_KEY:-}
     volumes:
       - experiments:/data/experiments
 
