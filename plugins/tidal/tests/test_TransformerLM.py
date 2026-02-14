@@ -488,6 +488,54 @@ class TestTransformerLMKVCache(unittest.TestCase):
             self.assertTrue(0 <= tid < self.vocab_size)
 
 
+class TestTorchCompileForward(unittest.TestCase):
+    """Tests for torch.compile compatibility with forward pass."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.vocab_size = 100
+
+    def test_compiled_forward_without_gate_signals(self):
+        """torch.compile'd model should handle gate_signals=None without KeyError."""
+        model = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+        try:
+            compiled = torch.compile(model)
+        except Exception:
+            self.skipTest("torch.compile not available")
+
+        input_ids = torch.randint(0, self.vocab_size, (2, 10))
+        target_ids = torch.randint(0, self.vocab_size, (2, 10))
+
+        logits, (loss, _), _ = compiled(input_ids, target_ids)
+        self.assertEqual(logits.shape, (2, 10, self.vocab_size))
+        self.assertGreater(loss.item(), 0)
+
+    def test_compiled_forward_with_gate_signals(self):
+        """torch.compile'd model should handle explicit gate signals."""
+        model = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+        try:
+            compiled = torch.compile(model)
+        except Exception:
+            self.skipTest("torch.compile not available")
+
+        input_ids = torch.randint(0, self.vocab_size, (2, 10))
+        target_ids = torch.randint(0, self.vocab_size, (2, 10))
+        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
+
+        logits, (loss, _), _ = compiled(input_ids, target_ids, gate_signals=gate_signals)
+        self.assertEqual(logits.shape, (2, 10, self.vocab_size))
+        self.assertGreater(loss.item(), 0)
+
+
 class TestModelStateDictHelpers(unittest.TestCase):
     """Tests for get_model_state_dict / load_model_state_dict helpers."""
 

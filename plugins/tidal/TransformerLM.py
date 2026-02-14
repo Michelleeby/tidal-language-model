@@ -254,12 +254,14 @@ class GatedTransformerBlock(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)
         attn_output = self.out_proj(attn_output)
 
-        attn_output = attn_output * self.attn_gate(gate_signals)
+        if gate_signals is not None:
+            attn_output = attn_output * self.attn_gate(gate_signals)
         x = x + self.dropout1(attn_output)
 
         normalized = self.ln2(x)
         ffn_output = self.ffn(normalized)
-        ffn_output = ffn_output * self.ffn_gate(gate_signals)
+        if gate_signals is not None:
+            ffn_output = ffn_output * self.ffn_gate(gate_signals)
         x = x + self.dropout2(ffn_output)
 
         if use_cache:

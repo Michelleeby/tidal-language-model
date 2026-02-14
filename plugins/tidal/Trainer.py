@@ -123,7 +123,7 @@ class Trainer:
 
         self.model = TransformerLM(vocab_size=vocab_size, config=self.config)
         self.model.to(self.device)
-        if self.config.get("TORCH_COMPILE", True):
+        if self.config.get("TORCH_COMPILE", False):
             try:
                 self.model = torch.compile(self.model)
             except Exception as e:
