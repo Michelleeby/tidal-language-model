@@ -29,7 +29,7 @@ dashboard/node_modules
 dashboard/dist
 
 # Virtual Environments
-tidal/
+/tidal/
 tidal-env/
 .env
 .venv

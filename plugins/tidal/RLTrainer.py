@@ -26,32 +26,31 @@ import json
 from datetime import datetime
 from collections import deque
 
-from GatingPolicyAgent import GatingPolicyAgent, create_agent
-from GatingEnvironment import GatingEnvironment, VectorizedGatingEnvironment
-from GatingModulator import GatingModulator
-from RewardComputer import RewardComputer
+from .GatingPolicyAgent import GatingPolicyAgent, create_agent
+from .GatingEnvironment import GatingEnvironment, VectorizedGatingEnvironment
+from .GatingModulator import GatingModulator
+from .RewardComputer import RewardComputer
 
 
-@dataclass
 class RolloutBuffer:
-    """Buffer for storing rollout data."""
-    observations: List[torch.Tensor]
-    actions: List[torch.Tensor]
-    rewards: List[float]
-    values: List[float]
-    log_probs: List[float]
-    dones: List[bool]
+    """Pre-allocated buffer for storing rollout data.
 
-    def __init__(self):
-        self.clear()
+    All tensors are allocated once at init and reused across rollouts.
+    ``clear()`` resets the write position without reallocating.
+    """
+
+    def __init__(self, capacity: int, obs_dim: int = 64, action_dim: int = 3):
+        self.capacity = capacity
+        self.observations = torch.zeros(capacity, obs_dim)
+        self.actions = torch.zeros(capacity, action_dim)
+        self.rewards = torch.zeros(capacity)
+        self.values = torch.zeros(capacity)
+        self.log_probs = torch.zeros(capacity)
+        self.dones = torch.zeros(capacity)
+        self._pos = 0
 
     def clear(self):
-        self.observations = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.log_probs = []
-        self.dones = []
+        self._pos = 0
 
     def add(
         self,
@@ -62,15 +61,20 @@ class RolloutBuffer:
         log_prob: float,
         done: bool,
     ):
-        self.observations.append(observation)
-        self.actions.append(action)
-        self.rewards.append(reward)
-        self.values.append(value)
-        self.log_probs.append(log_prob)
-        self.dones.append(done)
+        if self._pos >= self.capacity:
+            raise RuntimeError(
+                f"RolloutBuffer overflow: capacity={self.capacity}, pos={self._pos}"
+            )
+        self.observations[self._pos] = observation
+        self.actions[self._pos] = action
+        self.rewards[self._pos] = reward
+        self.values[self._pos] = value
+        self.log_probs[self._pos] = log_prob
+        self.dones[self._pos] = float(done)
+        self._pos += 1
 
     def __len__(self):
-        return len(self.observations)
+        return self._pos
 
 
 class PPOTrainer:
@@ -127,7 +131,9 @@ class PPOTrainer:
         self.global_step = 0
         self.episode_rewards = deque(maxlen=100)
         self.episode_lengths = deque(maxlen=100)
-        self.buffer = RolloutBuffer()
+        obs_dim = config.get("RL_OBSERVATION_DIM", 64)
+        action_dim = config.get("RL_ACTION_DIM", 3)
+        self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim)
 
     def collect_rollouts(self, num_steps: int) -> Dict[str, float]:
         self.buffer.clear()
@@ -191,12 +197,13 @@ class PPOTrainer:
         }
 
     def compute_advantages(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        rewards = torch.tensor(self.buffer.rewards, dtype=torch.float32)
-        values = torch.tensor(self.buffer.values, dtype=torch.float32)
-        dones = torch.tensor(self.buffer.dones, dtype=torch.float32)
+        n = len(self.buffer)
+        rewards = self.buffer.rewards[:n]
+        values = self.buffer.values[:n]
+        dones = self.buffer.dones[:n]
 
         with torch.no_grad():
-            last_obs = self.buffer.observations[-1].to(self.device)
+            last_obs = self.buffer.observations[n - 1].to(self.device)
             _, last_value = self.agent.forward(last_obs)
             last_value = last_value.squeeze().cpu()
 
@@ -221,9 +228,10 @@ class PPOTrainer:
     def update_policy(
         self, advantages: torch.Tensor, returns: torch.Tensor,
     ) -> Dict[str, float]:
-        observations = torch.stack(self.buffer.observations).to(self.device)
-        actions = torch.stack(self.buffer.actions).to(self.device)
-        old_log_probs = torch.tensor(self.buffer.log_probs, device=self.device)
+        n = len(self.buffer)
+        observations = self.buffer.observations[:n].to(self.device)
+        actions = self.buffer.actions[:n].to(self.device)
+        old_log_probs = self.buffer.log_probs[:n].to(self.device)
         advantages = advantages.to(self.device)
         returns = returns.to(self.device)
 
@@ -392,7 +400,8 @@ def run_ablation_study(
     """
     Run ablation study comparing learned vs baseline gating policies.
     """
-    from GatingModulator import RandomGatingPolicy, FixedGatingPolicy, NeutralGatingPolicy
+    # Lazy import: only needed for optional ablation study path
+    from .GatingModulator import RandomGatingPolicy, FixedGatingPolicy, NeutralGatingPolicy
 
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

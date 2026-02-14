@@ -17,8 +17,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 import random
 
-from GatingModulator import GatingModulator, GatingEffects
-from RewardComputer import RewardComputer
+from .GatingModulator import GatingModulator, GatingEffects
+from .RewardComputer import RewardComputer
 
 
 @dataclass
@@ -183,7 +183,10 @@ class GatingEnvironment:
 
         self.done = self.step_count >= self.env_config.max_episode_length
 
-        observation = self._get_observation()
+        observation = self._get_observation(
+            precomputed_hidden_states=hidden_states,
+            precomputed_logits=logits,
+        )
 
         info = {
             "reward_components": reward_components,
@@ -203,14 +206,21 @@ class GatingEnvironment:
 
         return observation, reward, self.done, info
 
-    def _get_observation(self) -> torch.Tensor:
-        context = torch.tensor(
-            self.generated_tokens[-self.model.max_context_length:],
-            dtype=torch.long, device=self.device,
-        )
-
-        with torch.no_grad():
-            logits, hidden_states = self.model.forward_with_hidden(context.unsqueeze(0))
+    def _get_observation(
+        self,
+        precomputed_hidden_states=None,
+        precomputed_logits=None,
+    ) -> torch.Tensor:
+        if precomputed_hidden_states is not None and precomputed_logits is not None:
+            hidden_states = precomputed_hidden_states
+            logits = precomputed_logits
+        else:
+            context = torch.tensor(
+                self.generated_tokens[-self.model.max_context_length:],
+                dtype=torch.long, device=self.device,
+            )
+            with torch.no_grad():
+                logits, hidden_states = self.model.forward_with_hidden(context.unsqueeze(0))
 
         observation = self.model._build_rl_observation(
             torch.tensor(self.generated_tokens, dtype=torch.long, device=self.device),

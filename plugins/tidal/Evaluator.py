@@ -14,8 +14,8 @@ from typing import List
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from TransformerLM import TransformerLM
-from DataPipeline import TinyStoriesDataset, get_tokenizer
+from .TransformerLM import TransformerLM
+from .DataPipeline import TinyStoriesDataset, get_tokenizer
 
 
 class Evaluator:

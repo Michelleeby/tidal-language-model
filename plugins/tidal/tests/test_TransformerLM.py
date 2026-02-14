@@ -1,12 +1,14 @@
+import os
 import unittest
 import torch
-import os
-import sys
 
-# Ensure project root is in path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import tempfile
 
-from TransformerLM import TransformerLM, GatedTransformerBlock, DynamicGate
+from plugins.tidal.TransformerLM import (
+    TransformerLM, GatedTransformerBlock, DynamicGate,
+    get_model_state_dict, load_model_state_dict,
+)
+from plugins.tidal.Trainer import Trainer
 
 
 class TestTransformerLM(unittest.TestCase):
@@ -187,6 +189,89 @@ class TestGatedTransformerBlock(unittest.TestCase):
         gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
         out = block(x, gate_signals)
         self.assertEqual(out.shape, (2, 10, 64))
+
+
+class TestTrainerLogThread(unittest.TestCase):
+    """Tests for Trainer log thread behavior."""
+
+    def test_log_thread_is_not_daemon(self):
+        """Log thread should not be daemon so pending metrics flush on exit."""
+        config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.1,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+            "BATCH_SIZE": 4,
+            "NUM_EPOCHS": 1,
+            "LOG_DIRECTORY": "logs",
+            "ENABLE_CONSOLE_LOGGING": False,
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = Trainer(config, tmpdir)
+            self.assertFalse(trainer._log_thread.daemon)
+            trainer._flush_logs()
+
+
+class TestModelStateDictHelpers(unittest.TestCase):
+    """Tests for get_model_state_dict / load_model_state_dict helpers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.1,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+
+    def test_get_state_dict_uncompiled(self):
+        """Returns clean state_dict from uncompiled model."""
+        model = TransformerLM(vocab_size=100, config=self.config)
+        sd = get_model_state_dict(model)
+        self.assertIsInstance(sd, dict)
+        self.assertFalse(any(k.startswith("_orig_mod.") for k in sd))
+
+    def test_get_state_dict_compiled(self):
+        """Returns state_dict without _orig_mod prefix from compiled model."""
+        model = TransformerLM(vocab_size=100, config=self.config)
+        try:
+            compiled = torch.compile(model)
+        except Exception:
+            self.skipTest("torch.compile not available")
+        sd = get_model_state_dict(compiled)
+        self.assertIsInstance(sd, dict)
+        self.assertFalse(any(k.startswith("_orig_mod.") for k in sd))
+
+    def test_load_state_dict_into_compiled(self):
+        """Loads clean state_dict into compiled model."""
+        model = TransformerLM(vocab_size=100, config=self.config)
+        sd = model.state_dict()
+        try:
+            compiled = torch.compile(model)
+        except Exception:
+            self.skipTest("torch.compile not available")
+        load_model_state_dict(compiled, sd)
+
+    def test_roundtrip_save_load(self):
+        """Save from compiled, load into uncompiled, keys match."""
+        model1 = TransformerLM(vocab_size=100, config=self.config)
+        try:
+            compiled = torch.compile(model1)
+        except Exception:
+            self.skipTest("torch.compile not available")
+        saved_sd = get_model_state_dict(compiled)
+
+        model2 = TransformerLM(vocab_size=100, config=self.config)
+        load_model_state_dict(model2, saved_sd)
+
+        sd2 = get_model_state_dict(model2)
+        self.assertEqual(set(saved_sd.keys()), set(sd2.keys()))
 
 
 if __name__ == "__main__":

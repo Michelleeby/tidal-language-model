@@ -13,9 +13,10 @@ from torch.amp import autocast
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from DataPipeline import TinyStoriesDataset, get_tokenizer
-from Utils import setup_logger
-from DynamicLRScheduler import DynamicLRScheduler
+from .DataPipeline import TinyStoriesDataset, get_tokenizer
+from .TransformerLM import TransformerLM, get_model_state_dict, load_model_state_dict
+from .Utils import setup_logger
+from .DynamicLRScheduler import DynamicLRScheduler
 from MetricsLogger import MetricsLogger
 
 
@@ -53,7 +54,7 @@ class Trainer:
         )
 
         self._log_queue = queue.Queue()
-        self._log_thread = threading.Thread(target=self._log_worker, daemon=True)
+        self._log_thread = threading.Thread(target=self._log_worker, daemon=False)
         self._log_thread.start()
 
     def _log_worker(self):
@@ -71,8 +72,8 @@ class Trainer:
                     "Losses/Total": data["total_loss"],
                     "Learning Rate": data["lr"],
                 }, global_step)
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning("Failed to write metrics at step %d: %s", global_step, e)
 
     def _log_metrics(self, data, global_step):
         """Enqueue metrics for background logging (non-blocking)."""
@@ -108,8 +109,6 @@ class Trainer:
 
     def _setup_model(self, vocab_size, total_foundational_steps=1):
         """Instantiates the model, loss function, optimizer, and scheduler."""
-        from TransformerLM import TransformerLM
-
         self.logger.info("Setting up TransformerLM, optimizer, criterion, and scheduler...")
 
         self.model = TransformerLM(vocab_size=vocab_size, config=self.config)
@@ -189,7 +188,7 @@ class Trainer:
         checkpoint_name = f"checkpoint_{phase_name_slug}_epoch_{epoch}.pth"
         checkpoint_path = os.path.join(self.exp_dir, checkpoint_name)
         self.logger.info(f"Saving checkpoint to {checkpoint_path}")
-        model_state = self.model._orig_mod.state_dict() if hasattr(self.model, "_orig_mod") else self.model.state_dict()
+        model_state = get_model_state_dict(self.model)
         torch.save({
             "model_state_dict": model_state,
             "optimizer_state_dict": self.optimizer.state_dict(),
@@ -203,10 +202,9 @@ class Trainer:
         self.logger.info(f"Loading model from checkpoint: {checkpoint_path}")
         try:
             data = torch.load(checkpoint_path, map_location=self.device)
-            model_to_load = self.model._orig_mod if hasattr(self.model, "_orig_mod") else self.model
 
             if isinstance(data, dict) and "model_state_dict" in data:
-                model_to_load.load_state_dict(data["model_state_dict"])
+                load_model_state_dict(self.model, data["model_state_dict"])
                 if self.optimizer and "optimizer_state_dict" in data:
                     self.optimizer.load_state_dict(data["optimizer_state_dict"])
                 if self.scheduler and "scheduler_current_step" in data:
@@ -215,7 +213,7 @@ class Trainer:
                     self.scaler.load_state_dict(data["scaler_state_dict"])
                 self.logger.info("Successfully loaded full training checkpoint.")
             else:
-                model_to_load.load_state_dict(data)
+                load_model_state_dict(self.model, data)
                 self.logger.info("Loaded legacy checkpoint (model weights only).")
         except FileNotFoundError:
             self.logger.warning(f"Checkpoint file not found: {checkpoint_path}")
@@ -331,7 +329,7 @@ class Trainer:
             final_model_path = os.path.join(self.exp_dir, f"{model_name}_v{model_version}.pth")
 
             self.logger.info(f"\n--- Training complete. Saving final model to {final_model_path} ---")
-            state_dict = self.model._orig_mod.state_dict() if hasattr(self.model, "_orig_mod") else self.model.state_dict()
+            state_dict = get_model_state_dict(self.model)
             torch.save(state_dict, final_model_path)
             self.metrics_logger.upload_checkpoint(final_model_path)
 

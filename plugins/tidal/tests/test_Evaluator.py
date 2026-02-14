@@ -4,17 +4,14 @@ test_Evaluator.py
 Unit tests for the Evaluator class (perplexity computation).
 """
 
+import os
 import unittest
 import torch
 import math
-import os
-import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from TransformerLM import TransformerLM
-from Evaluator import Evaluator
+from plugins.tidal.TransformerLM import TransformerLM
+from plugins.tidal.Evaluator import Evaluator
 
 
 class TestEvaluator(unittest.TestCase):

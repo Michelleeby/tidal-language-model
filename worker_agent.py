@@ -30,6 +30,21 @@ SIGNAL_PREFIX = "tidal:job:"
 HEARTBEAT_PREFIX = "tidal:worker:"
 UPDATES_CHANNEL = "tidal:job:updates"
 
+_ENV_ALLOWLIST_EXACT = frozenset({
+    "PATH", "HOME", "USER", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+    "PYTHONPATH", "VIRTUAL_ENV", "PYTHONHASHSEED",
+    "LD_LIBRARY_PATH", "LIBRARY_PATH",
+    "HF_HOME", "HF_DATASETS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME",
+    "REDIS_URL", "METRICS_REDIS_PREFIX",
+    "TMPDIR", "TEMP", "TMP",
+})
+_ENV_ALLOWLIST_PREFIXES = (
+    "CUDA_", "NVIDIA_", "NCCL_",
+    "TRAINING_", "TIDAL_",
+    "TORCH_",
+)
+
 HEARTBEAT_INTERVAL = 10
 HEARTBEAT_TTL = 30
 SIGNAL_POLL_INTERVAL = 2
@@ -282,14 +297,20 @@ class WorkerAgent:
 
     def _spawn_and_monitor(self, args: list[str], redis_prefix: str = "tidal") -> int:
         """Spawn subprocess and poll for signals every 2 seconds."""
-        env = {
-            **os.environ,
-            "PYTHONUNBUFFERED": "1",
-            "TRAINING_JOB_ID": self.job_id,
-            # Keep legacy name for backward compatibility during transition
-            "TIDAL_JOB_ID": self.job_id,
-            "METRICS_REDIS_PREFIX": redis_prefix,
-        }
+        # Build filtered env from allowlist instead of copying everything
+        env = {}
+        for key, value in os.environ.items():
+            if key in _ENV_ALLOWLIST_EXACT or any(
+                key.startswith(p) for p in _ENV_ALLOWLIST_PREFIXES
+            ):
+                env[key] = value
+
+        # Job-specific variables
+        env["PYTHONUNBUFFERED"] = "1"
+        env["TRAINING_JOB_ID"] = self.job_id
+        # Keep legacy name for backward compatibility during transition
+        env["TIDAL_JOB_ID"] = self.job_id
+        env["METRICS_REDIS_PREFIX"] = redis_prefix
 
         # Pass API credentials so MetricsLogger can forward metrics remotely
         if hasattr(self.transport, "api_url"):
@@ -664,8 +685,8 @@ class WorkerAgent:
             while not self._heartbeat_stop.wait(HEARTBEAT_INTERVAL):
                 try:
                     self.transport.send_heartbeat(self.job_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Heartbeat failed for job {self.job_id}: {e}", file=sys.stderr)
 
         t = threading.Thread(target=_beat, daemon=True)
         t.start()

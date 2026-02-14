@@ -10,20 +10,15 @@ import os
 import sys
 import argparse
 
-# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 from ruamel.yaml import YAML
 
-from TransformerLM import TransformerLM
-from DataPipeline import get_tokenizer
+from plugins.tidal.TransformerLM import TransformerLM
+from plugins.tidal.DataPipeline import get_tokenizer
 
 # RL components (optional, for gating-controlled generation)
 try:
-    from GatingPolicyAgent import create_agent
-    from GatingModulator import GatingModulator, RandomGatingPolicy, FixedGatingPolicy
+    from plugins.tidal.GatingPolicyAgent import create_agent
+    from plugins.tidal.GatingModulator import GatingModulator, RandomGatingPolicy, FixedGatingPolicy
     RL_AVAILABLE = True
 except ImportError:
     RL_AVAILABLE = False

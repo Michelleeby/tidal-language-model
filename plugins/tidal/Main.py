@@ -5,17 +5,12 @@ import shutil
 import torch
 import time
 
-# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 from ruamel.yaml import YAML
 yaml = YAML(typ="safe")
 
-from Trainer import Trainer
-from Evaluator import Evaluator
-from Utils import setup_logger
+from plugins.tidal.Trainer import Trainer
+from plugins.tidal.Evaluator import Evaluator
+from plugins.tidal.Utils import setup_logger
 from experiment_utils import get_git_commit_hash, get_file_hash, report_experiment_id_to_job
 
 

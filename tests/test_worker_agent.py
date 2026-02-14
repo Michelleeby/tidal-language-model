@@ -511,5 +511,98 @@ class TestRunDownloadIntegration(unittest.TestCase):
                 mock_train.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Heartbeat exception logging
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Subprocess environment variable allowlist
+# ---------------------------------------------------------------------------
+
+class TestSubprocessEnvAllowlist(unittest.TestCase):
+    """Tests that _spawn_and_monitor filters env vars instead of leaking all."""
+
+    def _get_constructed_env(self, extra_environ=None):
+        """Build the env dict that _spawn_and_monitor would pass to Popen."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        original_environ = os.environ.copy()
+        if extra_environ:
+            os.environ.update(extra_environ)
+
+        try:
+            with patch("subprocess.Popen") as mock_popen:
+                mock_proc = MagicMock()
+                mock_proc.poll.return_value = 0
+                mock_proc.pid = 12345
+                mock_popen.return_value = mock_proc
+
+                agent._heartbeat_stop = threading.Event()
+                agent._heartbeat_stop.set()
+
+                agent._spawn_and_monitor(["echo", "test"], redis_prefix="tidal")
+
+                # Extract the env kwarg passed to Popen
+                call_kwargs = mock_popen.call_args
+                return call_kwargs[1].get("env") or call_kwargs.kwargs.get("env")
+        finally:
+            os.environ.clear()
+            os.environ.update(original_environ)
+
+    def test_subprocess_env_excludes_sensitive_vars(self):
+        """Sensitive vars like AWS_SECRET_KEY should NOT be in subprocess env."""
+        env = self._get_constructed_env({"AWS_SECRET_KEY": "supersecret123"})
+        self.assertNotIn("AWS_SECRET_KEY", env)
+
+    def test_subprocess_env_includes_required_vars(self):
+        """PATH and TRAINING_JOB_ID must be present."""
+        env = self._get_constructed_env()
+        self.assertIn("PATH", env)
+        self.assertIn("TRAINING_JOB_ID", env)
+
+    def test_subprocess_env_passes_job_vars(self):
+        """TRAINING_JOB_ID and METRICS_REDIS_PREFIX are set correctly."""
+        env = self._get_constructed_env()
+        self.assertEqual(env["TRAINING_JOB_ID"], "job-123")
+        self.assertEqual(env["METRICS_REDIS_PREFIX"], "tidal")
+
+    def test_subprocess_env_passes_cuda_vars(self):
+        """CUDA_ prefixed vars should pass through."""
+        env = self._get_constructed_env({"CUDA_VISIBLE_DEVICES": "0,1"})
+        self.assertEqual(env.get("CUDA_VISIBLE_DEVICES"), "0,1")
+
+
+class TestHeartbeatExceptionLogging(unittest.TestCase):
+    """Tests that heartbeat thread logs exceptions instead of silently swallowing."""
+
+    @patch("worker_agent.HEARTBEAT_INTERVAL", 0.01)
+    def test_heartbeat_logs_exceptions(self):
+        """When send_heartbeat raises, exception should be printed to stderr."""
+        import io
+        import time
+
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        # Make send_heartbeat raise
+        transport.send_heartbeat = MagicMock(side_effect=ConnectionError("refused"))
+
+        agent._heartbeat_stop = threading.Event()
+
+        captured = io.StringIO()
+
+        with patch("sys.stderr", captured):
+            agent._start_heartbeat()
+            # Let the heartbeat thread run a few cycles
+            time.sleep(0.1)
+            agent._heartbeat_stop.set()
+            time.sleep(0.05)
+
+        stderr_output = captured.getvalue()
+        self.assertIn("Heartbeat failed", stderr_output)
+        self.assertIn("refused", stderr_output)
+
+
 if __name__ == "__main__":
     unittest.main()

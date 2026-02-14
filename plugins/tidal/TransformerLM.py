@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from collections import Counter
 from typing import Tuple, Dict, Optional, List, Any
 
 
@@ -461,7 +462,6 @@ class TransformerLM(nn.Module):
         recent_tokens = tokens[-10:] if len(tokens) >= 10 else tokens
         if len(recent_tokens) > 0:
             recent_unique_ratio = len(set(recent_tokens)) / len(recent_tokens)
-            from collections import Counter
             counter = Counter(recent_tokens)
             most_common_freq = counter.most_common(1)[0][1] / len(recent_tokens)
         else:
@@ -510,3 +510,16 @@ class TransformerLM(nn.Module):
             observation = observation[:64]
 
         return observation
+
+
+def get_model_state_dict(model):
+    """Get state_dict, handling torch.compile wrapper transparently."""
+    if hasattr(model, "_orig_mod"):
+        return model._orig_mod.state_dict()
+    return model.state_dict()
+
+
+def load_model_state_dict(model, state_dict):
+    """Load state_dict, handling torch.compile wrapper transparently."""
+    target = model._orig_mod if hasattr(model, "_orig_mod") else model
+    target.load_state_dict(state_dict)

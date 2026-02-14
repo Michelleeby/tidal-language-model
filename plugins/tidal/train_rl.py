@@ -34,21 +34,16 @@ import argparse
 import shutil
 import time
 
-# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 import torch
 from ruamel.yaml import YAML
 
-from TransformerLM import TransformerLM
-from DataPipeline import TinyStoriesDataset, get_tokenizer
-from GatingPolicyAgent import create_agent
-from GatingEnvironment import GatingEnvironment
-from GatingModulator import GatingModulator
-from RewardComputer import RewardComputer
-from RLTrainer import PPOTrainer, run_ablation_study
+from plugins.tidal.TransformerLM import TransformerLM
+from plugins.tidal.DataPipeline import TinyStoriesDataset, get_tokenizer
+from plugins.tidal.GatingPolicyAgent import create_agent
+from plugins.tidal.GatingEnvironment import GatingEnvironment
+from plugins.tidal.GatingModulator import GatingModulator
+from plugins.tidal.RewardComputer import RewardComputer
+from plugins.tidal.RLTrainer import PPOTrainer, run_ablation_study
 from MetricsLogger import MetricsLogger
 from experiment_utils import get_git_commit_hash, get_file_hash, resolve_device
 

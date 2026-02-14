@@ -47,6 +47,7 @@ def get_tokenizer():
 
 def _load_dataset_prefer_cache(dataset_name, split):
     """Load HF dataset preferring local cache. Falls back to network on cache miss."""
+    # Lazy import: avoids loading heavy HuggingFace datasets library at module init
     from datasets import load_dataset
 
     try:

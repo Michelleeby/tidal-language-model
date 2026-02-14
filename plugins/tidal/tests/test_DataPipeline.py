@@ -6,12 +6,8 @@ Unit tests for the TinyStories data pipeline.
 
 import unittest
 import torch
-import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from DataPipeline import get_tokenizer, TinyStoriesDataset
+from plugins.tidal.DataPipeline import get_tokenizer, TinyStoriesDataset
 
 
 class TestGetTokenizer(unittest.TestCase):

@@ -6,14 +6,15 @@ Unit tests for the RL Gating Controller components.
 
 import torch
 import unittest
-import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unittest.mock import patch, MagicMock
 
-from GatingModulator import GatingModulator, GatingEffects, RandomGatingPolicy, FixedGatingPolicy
-from RewardComputer import RewardComputer
-from GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPolicyAgent, create_agent
+from plugins.tidal.GatingModulator import GatingModulator, GatingEffects, RandomGatingPolicy, FixedGatingPolicy
+from plugins.tidal.RewardComputer import RewardComputer
+from plugins.tidal.GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPolicyAgent, create_agent
+from plugins.tidal.RLTrainer import RolloutBuffer
+from plugins.tidal.GatingEnvironment import GatingEnvironment
+from plugins.tidal.TransformerLM import TransformerLM
 
 
 class TestGatingModulator(unittest.TestCase):
@@ -239,6 +240,182 @@ class TestIntegration(unittest.TestCase):
 
         self.assertEqual(rewards.shape[0], 10)
         self.assertEqual(len(components["diversity"]), 10)
+
+
+class TestRolloutBuffer(unittest.TestCase):
+    """Tests for pre-allocated RolloutBuffer."""
+
+    def setUp(self):
+        self.capacity = 16
+        self.obs_dim = 64
+        self.action_dim = 3
+        self.buffer = RolloutBuffer(self.capacity, self.obs_dim, self.action_dim)
+
+    def test_buffer_preallocated_capacity(self):
+        """Capacity matches init arg."""
+        self.assertEqual(self.buffer.capacity, self.capacity)
+        self.assertEqual(self.buffer.observations.shape, (self.capacity, self.obs_dim))
+        self.assertEqual(self.buffer.actions.shape, (self.capacity, self.action_dim))
+
+    def test_buffer_add_fills_sequential_slots(self):
+        """observations[0] matches first added tensor."""
+        obs = torch.randn(self.obs_dim)
+        action = torch.rand(self.action_dim)
+        self.buffer.add(obs, action, reward=1.0, value=0.5, log_prob=-0.3, done=False)
+        self.assertTrue(torch.allclose(self.buffer.observations[0], obs))
+        self.assertTrue(torch.allclose(self.buffer.actions[0], action))
+        self.assertAlmostEqual(self.buffer.rewards[0].item(), 1.0)
+
+    def test_buffer_clear_resets_position(self):
+        """len returns 0 after clear, no reallocation."""
+        obs_id_before = id(self.buffer.observations)
+        self.buffer.add(
+            torch.randn(self.obs_dim), torch.rand(self.action_dim),
+            reward=1.0, value=0.5, log_prob=-0.3, done=False,
+        )
+        self.buffer.clear()
+        self.assertEqual(len(self.buffer), 0)
+        # Same tensor storage (no reallocation)
+        self.assertEqual(id(self.buffer.observations), obs_id_before)
+
+    def test_buffer_len_returns_filled_count(self):
+        """len returns number of adds, not capacity."""
+        self.assertEqual(len(self.buffer), 0)
+        for i in range(5):
+            self.buffer.add(
+                torch.randn(self.obs_dim), torch.rand(self.action_dim),
+                reward=float(i), value=0.5, log_prob=-0.3, done=False,
+            )
+        self.assertEqual(len(self.buffer), 5)
+
+    def test_buffer_observations_are_contiguous(self):
+        """observations[:n] is a contiguous tensor."""
+        for i in range(8):
+            self.buffer.add(
+                torch.randn(self.obs_dim), torch.rand(self.action_dim),
+                reward=float(i), value=0.5, log_prob=-0.3, done=False,
+            )
+        sliced = self.buffer.observations[:8]
+        self.assertTrue(sliced.is_contiguous())
+        self.assertEqual(sliced.shape, (8, self.obs_dim))
+
+    def test_buffer_overflow_raises(self):
+        """Adding beyond capacity raises RuntimeError."""
+        for i in range(self.capacity):
+            self.buffer.add(
+                torch.randn(self.obs_dim), torch.rand(self.action_dim),
+                reward=float(i), value=0.5, log_prob=-0.3, done=False,
+            )
+        with self.assertRaises(RuntimeError):
+            self.buffer.add(
+                torch.randn(self.obs_dim), torch.rand(self.action_dim),
+                reward=0.0, value=0.0, log_prob=0.0, done=False,
+            )
+
+
+class TestGatingEnvironmentPrecomputed(unittest.TestCase):
+    """Tests for _get_observation with precomputed hidden_states/logits."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.5,
+            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 2.5,
+            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_MAX_EPISODE_LENGTH": 10,
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+        }
+        cls.config = {**cls.model_config, **cls.rl_config}
+        cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
+        cls.model.eval()
+
+    def _make_env(self):
+        modulator = GatingModulator(self.config)
+        reward_computer = RewardComputer(self.config, 100)
+        prompts = [[1, 2, 3, 4, 5]]
+        return GatingEnvironment(
+            model=self.model,
+            modulator=modulator,
+            reward_computer=reward_computer,
+            prompt_tokens=prompts,
+            config=self.config,
+            device=torch.device("cpu"),
+        )
+
+    def test_get_observation_accepts_precomputed(self):
+        """Call with hidden_states/logits: no forward pass invoked."""
+        env = self._make_env()
+        env.reset()
+
+        # Produce real hidden_states/logits from a forward call
+        context = torch.tensor(
+            env.generated_tokens[-self.model.max_context_length:],
+            dtype=torch.long,
+        )
+        with torch.no_grad():
+            logits, hidden_states = self.model.forward_with_hidden(context.unsqueeze(0))
+
+        # Patch forward_with_hidden to detect if it's called
+        with patch.object(self.model, "forward_with_hidden", wraps=self.model.forward_with_hidden) as mock_fwd:
+            obs = env._get_observation(
+                precomputed_hidden_states=hidden_states,
+                precomputed_logits=logits,
+            )
+            mock_fwd.assert_not_called()
+
+        self.assertEqual(obs.shape, (64,))
+
+    def test_get_observation_fallback_without_precomputed(self):
+        """Call without precomputed args: performs forward pass (for reset())."""
+        env = self._make_env()
+        env.reset()
+
+        with patch.object(self.model, "forward_with_hidden", wraps=self.model.forward_with_hidden) as mock_fwd:
+            obs = env._get_observation()
+            mock_fwd.assert_called_once()
+
+        self.assertEqual(obs.shape, (64,))
+
+    def test_observation_shape_unchanged(self):
+        """Shape is (64,) regardless of precomputed path."""
+        env = self._make_env()
+        env.reset()
+
+        obs_fallback = env._get_observation()
+
+        context = torch.tensor(
+            env.generated_tokens[-self.model.max_context_length:],
+            dtype=torch.long,
+        )
+        with torch.no_grad():
+            logits, hidden_states = self.model.forward_with_hidden(context.unsqueeze(0))
+
+        obs_precomputed = env._get_observation(
+            precomputed_hidden_states=hidden_states,
+            precomputed_logits=logits,
+        )
+
+        self.assertEqual(obs_fallback.shape, (64,))
+        self.assertEqual(obs_precomputed.shape, (64,))
 
 
 if __name__ == "__main__":

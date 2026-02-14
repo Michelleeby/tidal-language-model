@@ -20,22 +20,17 @@ import time
 import logging
 from collections import OrderedDict
 
-# Add project root to sys.path for shared modules (MetricsLogger, experiment_utils)
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 import torch
 from flask import Flask, request, jsonify
 from ruamel.yaml import YAML
 
-from TransformerLM import TransformerLM
-from DataPipeline import get_tokenizer
+from plugins.tidal.TransformerLM import TransformerLM
+from plugins.tidal.DataPipeline import get_tokenizer
 
 # RL components (optional)
 try:
-    from GatingPolicyAgent import create_agent
-    from GatingModulator import GatingModulator, FixedGatingPolicy
+    from plugins.tidal.GatingPolicyAgent import create_agent
+    from plugins.tidal.GatingModulator import GatingModulator, FixedGatingPolicy
     RL_AVAILABLE = True
 except ImportError:
     RL_AVAILABLE = False

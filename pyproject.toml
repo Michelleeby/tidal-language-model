@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tidal-language-model"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+py-modules = ["MetricsLogger", "experiment_utils", "worker_agent"]
+packages = ["plugins", "plugins.tidal", "plugins.tidal.tests"]
