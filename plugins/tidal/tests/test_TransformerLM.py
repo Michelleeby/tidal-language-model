@@ -7,6 +7,7 @@ import tempfile
 from plugins.tidal.TransformerLM import (
     TransformerLM, GatedTransformerBlock, DynamicGate,
     get_model_state_dict, load_model_state_dict,
+    precompute_rope_frequencies, apply_rope,
 )
 from plugins.tidal.Trainer import Trainer
 
@@ -40,7 +41,8 @@ class TestTransformerLM(unittest.TestCase):
         self.assertEqual(self.model.num_transformer_blocks, 2)
 
         self.assertEqual(self.model.token_embeddings.weight.shape, (self.vocab_size, 64))
-        self.assertEqual(self.model.position_embeddings.weight.shape, (32, 64))
+        self.assertEqual(self.model.rope_cos.shape, (32, 16))  # (max_ctx, head_dim=64/4)
+        self.assertEqual(self.model.rope_sin.shape, (32, 16))
         self.assertEqual(self.model.output_projection.weight.shape, (self.vocab_size, 64))
 
     def test_forward_pass_output_shapes(self):
@@ -213,6 +215,277 @@ class TestTrainerLogThread(unittest.TestCase):
             trainer = Trainer(config, tmpdir)
             self.assertFalse(trainer._log_thread.daemon)
             trainer._flush_logs()
+
+
+class TestGatedTransformerBlockKVCache(unittest.TestCase):
+    """Tests for GatedTransformerBlock with manual Q/K/V projections and KV cache."""
+
+    def setUp(self):
+        self.embed_dim = 64
+        self.num_heads = 4
+        self.head_dim = self.embed_dim // self.num_heads
+        self.block = GatedTransformerBlock(
+            embed_dim=self.embed_dim, num_heads=self.num_heads,
+            ffn_hidden_dim=128, dropout=0.0, max_seq_len=32,
+        )
+        self.block.eval()
+
+    def test_block_has_separate_projections(self):
+        """Block should have q_proj, k_proj, v_proj, out_proj; no 'attention' attribute."""
+        self.assertTrue(hasattr(self.block, 'q_proj'))
+        self.assertTrue(hasattr(self.block, 'k_proj'))
+        self.assertTrue(hasattr(self.block, 'v_proj'))
+        self.assertTrue(hasattr(self.block, 'out_proj'))
+        self.assertFalse(hasattr(self.block, 'attention'))
+
+    def test_forward_without_cache_returns_tensor(self):
+        """Default forward returns a single tensor (backward-compatible)."""
+        x = torch.randn(2, 10, self.embed_dim)
+        cos, sin = precompute_rope_frequencies(self.head_dim, 32)
+        out = self.block(x, rope_cos=cos[:10], rope_sin=sin[:10])
+        self.assertIsInstance(out, torch.Tensor)
+        self.assertEqual(out.shape, (2, 10, self.embed_dim))
+
+    def test_forward_with_cache_returns_tuple(self):
+        """use_cache=True returns (tensor, (k, v))."""
+        x = torch.randn(2, 10, self.embed_dim)
+        cos, sin = precompute_rope_frequencies(self.head_dim, 32)
+        result = self.block(x, rope_cos=cos[:10], rope_sin=sin[:10], use_cache=True)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        tensor_out, (cached_k, cached_v) = result
+        self.assertEqual(tensor_out.shape, (2, 10, self.embed_dim))
+        self.assertEqual(cached_k.shape[0], 2)  # batch
+        self.assertEqual(cached_k.shape[2], 10)  # seq_len
+        self.assertEqual(cached_k.shape[3], self.head_dim)
+
+    def test_cached_generation_matches_full_forward(self):
+        """Last-token output from cached pass matches full pass."""
+        seq_len = 10
+        x = torch.randn(1, seq_len, self.embed_dim)
+        cos, sin = precompute_rope_frequencies(self.head_dim, 32)
+
+        with torch.no_grad():
+            # Full forward
+            full_out = self.block(x, rope_cos=cos[:seq_len], rope_sin=sin[:seq_len])
+
+            # Prefill: first seq_len-1 tokens with cache
+            prefill_out, (cached_k, cached_v) = self.block(
+                x[:, :-1, :], rope_cos=cos[:seq_len-1], rope_sin=sin[:seq_len-1], use_cache=True
+            )
+
+            # Decode: last token only, using cached KV
+            decode_out, _ = self.block(
+                x[:, -1:, :], rope_cos=cos[seq_len-1:seq_len], rope_sin=sin[seq_len-1:seq_len],
+                layer_past=(cached_k, cached_v), use_cache=True
+            )
+
+        self.assertTrue(
+            torch.allclose(full_out[:, -1:, :], decode_out, atol=1e-4),
+            f"Max diff: {(full_out[:, -1:, :] - decode_out).abs().max().item()}"
+        )
+
+    def test_forward_with_gating_and_cache(self):
+        """Cache works alongside gate_signals."""
+        x = torch.randn(2, 10, self.embed_dim)
+        cos, sin = precompute_rope_frequencies(self.head_dim, 32)
+        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
+
+        result = self.block(
+            x, gate_signals=gate_signals,
+            rope_cos=cos[:10], rope_sin=sin[:10], use_cache=True,
+        )
+        tensor_out, (cached_k, cached_v) = result
+        self.assertEqual(tensor_out.shape, (2, 10, self.embed_dim))
+
+    def test_layer_past_extends_kv(self):
+        """present KV seq_len = past_len + current_len."""
+        cos, sin = precompute_rope_frequencies(self.head_dim, 32)
+
+        x1 = torch.randn(1, 5, self.embed_dim)
+        _, (k1, v1) = self.block(x1, rope_cos=cos[:5], rope_sin=sin[:5], use_cache=True)
+        self.assertEqual(k1.shape[2], 5)
+
+        x2 = torch.randn(1, 3, self.embed_dim)
+        _, (k2, v2) = self.block(
+            x2, rope_cos=cos[5:8], rope_sin=sin[5:8],
+            layer_past=(k1, v1), use_cache=True,
+        )
+        self.assertEqual(k2.shape[2], 8)  # 5 + 3
+
+
+class TestRoPE(unittest.TestCase):
+    """Tests for Rotary Positional Embedding helper functions."""
+
+    def test_precompute_rope_frequencies_shape(self):
+        """Returns (cos, sin) each of shape (max_seq_len, head_dim)."""
+        head_dim = 16
+        max_seq_len = 64
+        cos, sin = precompute_rope_frequencies(head_dim, max_seq_len)
+        self.assertEqual(cos.shape, (max_seq_len, head_dim))
+        self.assertEqual(sin.shape, (max_seq_len, head_dim))
+
+    def test_precompute_rope_frequencies_unit_norm(self):
+        """cos^2 + sin^2 = 1 for all positions and dimensions."""
+        cos, sin = precompute_rope_frequencies(head_dim=32, max_seq_len=128)
+        norm_sq = cos ** 2 + sin ** 2
+        self.assertTrue(torch.allclose(norm_sq, torch.ones_like(norm_sq), atol=1e-5))
+
+    def test_apply_rope_shape_preserved(self):
+        """Output shape matches input (batch, heads, seq, head_dim)."""
+        batch, heads, seq_len, head_dim = 2, 4, 10, 16
+        x = torch.randn(batch, heads, seq_len, head_dim)
+        cos, sin = precompute_rope_frequencies(head_dim, max_seq_len=32)
+        cos_slice = cos[:seq_len]  # (seq_len, head_dim)
+        sin_slice = sin[:seq_len]
+        out = apply_rope(x, cos_slice, sin_slice)
+        self.assertEqual(out.shape, x.shape)
+
+    def test_apply_rope_equivariance(self):
+        """Dot product between RoPE-encoded vectors depends on relative position."""
+        head_dim = 16
+        cos, sin = precompute_rope_frequencies(head_dim, max_seq_len=64)
+
+        q = torch.randn(1, 1, 1, head_dim).expand(1, 1, 3, head_dim).clone()
+        k = q.clone()
+
+        # Apply RoPE at positions [0,1,2]
+        q_rot = apply_rope(q, cos[:3], sin[:3])
+        k_rot = apply_rope(k, cos[:3], sin[:3])
+
+        # dot(q_pos0, k_pos1) should equal dot(q_pos1, k_pos2) (same relative dist)
+        dot_01 = (q_rot[0, 0, 0] * k_rot[0, 0, 1]).sum()
+        dot_12 = (q_rot[0, 0, 1] * k_rot[0, 0, 2]).sum()
+        self.assertTrue(torch.allclose(dot_01, dot_12, atol=1e-5))
+
+    def test_apply_rope_different_relative_positions_differ(self):
+        """Different relative distances produce different dot products."""
+        head_dim = 16
+        cos, sin = precompute_rope_frequencies(head_dim, max_seq_len=64)
+
+        q = torch.randn(1, 1, 1, head_dim).expand(1, 1, 4, head_dim).clone()
+        k = q.clone()
+
+        q_rot = apply_rope(q, cos[:4], sin[:4])
+        k_rot = apply_rope(k, cos[:4], sin[:4])
+
+        # dot(pos0, pos1) — distance 1
+        dot_dist1 = (q_rot[0, 0, 0] * k_rot[0, 0, 1]).sum()
+        # dot(pos0, pos3) — distance 3
+        dot_dist3 = (q_rot[0, 0, 0] * k_rot[0, 0, 3]).sum()
+        self.assertFalse(torch.allclose(dot_dist1, dot_dist3, atol=1e-3))
+
+
+class TestTransformerLMRoPE(unittest.TestCase):
+    """Tests for RoPE integration in TransformerLM."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.1,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.vocab_size = 100
+
+    def setUp(self):
+        self.model = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+
+    def test_no_position_embeddings(self):
+        """Model should not have position_embeddings attribute."""
+        self.assertFalse(hasattr(self.model, 'position_embeddings'))
+
+    def test_has_rope_buffers(self):
+        """Model should have rope_cos and rope_sin of shape (max_context_length, head_dim)."""
+        head_dim = self.config["EMBED_DIM"] // self.config["NUM_ATTENTION_HEADS"]
+        max_len = self.config["MAX_CONTEXT_LENGTH"]
+        self.assertTrue(hasattr(self.model, 'rope_cos'))
+        self.assertTrue(hasattr(self.model, 'rope_sin'))
+        self.assertEqual(self.model.rope_cos.shape, (max_len, head_dim))
+        self.assertEqual(self.model.rope_sin.shape, (max_len, head_dim))
+
+    def test_forward_still_returns_3_tuple(self):
+        """Return signature unchanged: (logits, (loss, None), viz_data)."""
+        input_ids = torch.randint(0, self.vocab_size, (2, 10))
+        target_ids = torch.randint(0, self.vocab_size, (2, 10))
+        result = self.model(input_ids, target_ids)
+        self.assertEqual(len(result), 3)
+        logits, (loss, components), viz_data = result
+        self.assertEqual(logits.shape, (2, 10, self.vocab_size))
+        self.assertIsNone(components)
+        self.assertIsInstance(viz_data, dict)
+
+
+class TestTransformerLMKVCache(unittest.TestCase):
+    """Tests for KV cache in TransformerLM."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.vocab_size = 100
+
+    def setUp(self):
+        self.model = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+        self.model.eval()
+
+    def test_forward_with_cache_returns_past_in_viz_data(self):
+        """viz_data['past_key_values'] present when use_cache=True."""
+        input_ids = torch.randint(0, self.vocab_size, (1, 10))
+        with torch.no_grad():
+            _, _, viz_data = self.model(input_ids, use_cache=True)
+        self.assertIn("past_key_values", viz_data)
+        past = viz_data["past_key_values"]
+        self.assertEqual(len(past), self.config["NUM_TRANSFORMER_BLOCKS"])
+
+    def test_forward_without_cache_no_past_in_viz_data(self):
+        """No cache key when use_cache=False."""
+        input_ids = torch.randint(0, self.vocab_size, (1, 10))
+        with torch.no_grad():
+            _, _, viz_data = self.model(input_ids)
+        self.assertNotIn("past_key_values", viz_data)
+
+    def test_cached_generation_matches_full_forward(self):
+        """Cached single-token logits match full-context logits."""
+        seq_len = 10
+        input_ids = torch.randint(0, self.vocab_size, (1, seq_len))
+
+        with torch.no_grad():
+            # Full forward
+            full_logits, _, _ = self.model(input_ids)
+
+            # Prefill + single token decode
+            _, _, viz_data = self.model(input_ids[:, :-1], use_cache=True)
+            past = viz_data["past_key_values"]
+
+            cached_logits, _, _ = self.model(
+                input_ids[:, -1:], use_cache=True, past_key_values=past,
+            )
+
+        self.assertTrue(
+            torch.allclose(full_logits[:, -1:, :], cached_logits, atol=1e-4),
+            f"Max diff: {(full_logits[:, -1:, :] - cached_logits).abs().max().item()}"
+        )
+
+    def test_generate_produces_valid_output(self):
+        """generate() still works correctly with KV cache."""
+        prompt_ids = torch.tensor([1, 5, 10])
+        generated = self.model.generate(prompt_ids, max_new_tokens=5, top_k=10)
+        self.assertIsInstance(generated, list)
+        self.assertEqual(len(generated), 8)  # 3 prompt + 5 generated
+        for tid in generated:
+            self.assertTrue(0 <= tid < self.vocab_size)
 
 
 class TestModelStateDictHelpers(unittest.TestCase):
