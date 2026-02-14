@@ -20,6 +20,7 @@ import sseRoutes from "./routes/sse.js";
 import jobRoutes from "./routes/jobs.js";
 import workerRoutes from "./routes/workers.js";
 import pluginsRoutes from "./routes/plugins.js";
+import configsRoutes from "./routes/configs.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -91,6 +92,7 @@ async function main() {
   await fastify.register(jobRoutes);
   await fastify.register(workerRoutes);
   await fastify.register(pluginsRoutes);
+  await fastify.register(configsRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

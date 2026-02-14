@@ -75,3 +75,15 @@ export interface GenerateResponse {
   tokensGenerated: number;
   elapsedMs: number;
 }
+
+/** GET /api/plugins/:name/configs/:filename */
+export interface ConfigFileResponse {
+  filename: string;
+  content: string;
+}
+
+/** GET /api/plugins/:name/configs */
+export interface ConfigListResponse {
+  plugin: string;
+  files: string[];
+}

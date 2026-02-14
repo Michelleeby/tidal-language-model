@@ -17,6 +17,8 @@ import type {
   JobLogsResponse,
   PluginsListResponse,
   PluginResponse,
+  ConfigFileResponse,
+  ConfigListResponse,
 } from "@tidal/shared";
 import { getAuthToken, requestAuth } from "../hooks/useAuth.js";
 
@@ -111,4 +113,12 @@ export const api = {
 
   getPlugin: (name: string) =>
     fetchJson<PluginResponse>(`${BASE}/plugins/${name}`),
+
+  getConfigFiles: (pluginName: string) =>
+    fetchJson<ConfigListResponse>(`${BASE}/plugins/${pluginName}/configs`),
+
+  getConfigFile: (pluginName: string, filename: string) =>
+    fetchJson<ConfigFileResponse>(
+      `${BASE}/plugins/${pluginName}/configs/${encodeURIComponent(filename)}`,
+    ),
 };

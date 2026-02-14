@@ -1,20 +1,18 @@
 import { create } from "zustand";
 
-type Tab = "training" | "rl-gating" | "comparison" | "checkpoints" | "samples" | "logs";
-
 interface ExperimentStore {
   selectedExpId: string | null;
   comparisonExpIds: string[];
-  activeTab: Tab;
+  sidebarOpen: boolean;
   setSelectedExpId: (id: string | null) => void;
   toggleComparisonExp: (id: string) => void;
-  setActiveTab: (tab: Tab) => void;
+  setSidebarOpen: (open: boolean) => void;
 }
 
 export const useExperimentStore = create<ExperimentStore>((set) => ({
   selectedExpId: null,
   comparisonExpIds: [],
-  activeTab: "training",
+  sidebarOpen: true,
   setSelectedExpId: (id) => set({ selectedExpId: id }),
   toggleComparisonExp: (id) =>
     set((state) => {
@@ -23,5 +21,5 @@ export const useExperimentStore = create<ExperimentStore>((set) => ({
         : [...state.comparisonExpIds, id];
       return { comparisonExpIds: ids };
     }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
 }));

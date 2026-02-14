@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import UPlotChart from "./UPlotChart.js";
 import ZoomResetButton from "./ZoomResetButton.js";
 import type { UPlotChartHandle } from "./UPlotChart.js";
@@ -6,9 +6,10 @@ import type { RLTrainingHistory } from "@tidal/shared";
 
 interface RLLossChartProps {
   history: RLTrainingHistory | null;
+  actions?: ReactNode;
 }
 
-export default function RLLossChart({ history }: RLLossChartProps) {
+export default function RLLossChart({ history, actions }: RLLossChartProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -35,7 +36,10 @@ export default function RLLossChart({ history }: RLLossChartProps) {
 
   return (
     <div className="bg-gray-900 rounded-lg p-4 relative">
-      <h3 className="text-sm font-medium text-gray-300 mb-2">RL Losses</h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-gray-300">RL Losses</h3>
+        {actions}
+      </div>
       <ZoomResetButton visible={zoomed} onReset={() => chartRef.current?.resetZoom()} />
       <UPlotChart
         ref={chartRef}

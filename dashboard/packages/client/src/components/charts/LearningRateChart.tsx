@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import UPlotChart from "./UPlotChart.js";
 import ZoomResetButton from "./ZoomResetButton.js";
 import type { UPlotChartHandle } from "./UPlotChart.js";
@@ -7,9 +7,10 @@ import type { MetricPoint } from "@tidal/shared";
 interface LearningRateChartProps {
   points: MetricPoint[];
   syncKey?: string;
+  actions?: ReactNode;
 }
 
-export default function LearningRateChart({ points, syncKey }: LearningRateChartProps) {
+export default function LearningRateChart({ points, syncKey, actions }: LearningRateChartProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -28,7 +29,10 @@ export default function LearningRateChart({ points, syncKey }: LearningRateChart
 
   return (
     <div className="bg-gray-900 rounded-lg p-4 relative">
-      <h3 className="text-sm font-medium text-gray-300 mb-2">Learning Rate</h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-gray-300">Learning Rate</h3>
+        {actions}
+      </div>
       <ZoomResetButton visible={zoomed} onReset={() => chartRef.current?.resetZoom()} />
       <UPlotChart
         ref={chartRef}

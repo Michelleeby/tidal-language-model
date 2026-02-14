@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import UPlotChart from "./UPlotChart.js";
 import ZoomResetButton from "./ZoomResetButton.js";
 import type { UPlotChartHandle } from "./UPlotChart.js";
@@ -7,9 +7,10 @@ import type { MetricPoint } from "@tidal/shared";
 interface PerplexityChartProps {
   points: MetricPoint[];
   syncKey?: string;
+  actions?: ReactNode;
 }
 
-export default function PerplexityChart({ points, syncKey }: PerplexityChartProps) {
+export default function PerplexityChart({ points, syncKey, actions }: PerplexityChartProps) {
   const chartRef = useRef<UPlotChartHandle>(null);
   const [zoomed, setZoomed] = useState(false);
 
@@ -31,9 +32,12 @@ export default function PerplexityChart({ points, syncKey }: PerplexityChartProp
 
   return (
     <div className="bg-gray-900 rounded-lg p-4 relative">
-      <h3 className="text-sm font-medium text-gray-300 mb-2">
-        Perplexity (exp(loss))
-      </h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-gray-300">
+          Perplexity (exp(loss))
+        </h3>
+        {actions}
+      </div>
       <ZoomResetButton visible={zoomed} onReset={() => chartRef.current?.resetZoom()} />
       <UPlotChart
         ref={chartRef}
