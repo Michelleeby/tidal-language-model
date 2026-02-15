@@ -8,6 +8,7 @@ export interface User {
   githubId: number;
   githubLogin: string;
   githubAvatarUrl: string | null;
+  githubAccessToken?: string | null;
   createdAt: number; // epoch ms
   lastLoginAt: number; // epoch ms
 }

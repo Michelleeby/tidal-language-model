@@ -28,6 +28,9 @@ export interface JobConfig {
   checkpoint?: string;
   rlConfigPath?: string;
   timesteps?: number;
+  pluginDir?: string;
+  pluginRepoUrl?: string;
+  pluginName?: string;
 }
 
 export interface TrainingJob {
@@ -56,6 +59,11 @@ export interface CreateJobRequest {
   checkpoint?: string;
   rlConfigPath?: string;
   timesteps?: number;
+  userPluginId?: string;
+  /** Server-resolved fields (set from userPluginId, not sent by client) */
+  pluginDir?: string;
+  pluginRepoUrl?: string;
+  pluginName?: string;
 }
 
 export interface CreateJobResponse {

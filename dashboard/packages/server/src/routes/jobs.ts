@@ -45,6 +45,21 @@ export default async function jobRoutes(fastify: FastifyInstance) {
 
   // POST /api/jobs — create a new training job
   fastify.post<{ Body: CreateJobRequest }>("/api/jobs", { preHandler: [fastify.verifyAuth] }, async (request, reply) => {
+    // Resolve userPluginId → pluginDir + pluginRepoUrl + pluginName
+    if (request.body.userPluginId) {
+      if (request.user?.type !== "jwt") {
+        return reply.status(403).send({ error: "JWT authentication required for user plugins" });
+      }
+      const userId = request.user.userId;
+      const plugin = fastify.db.getUserPlugin(request.body.userPluginId);
+      if (!plugin || plugin.userId !== userId) {
+        return reply.status(404).send({ error: "User plugin not found" });
+      }
+      request.body.pluginDir = `user-plugins/${userId}/${plugin.name}`;
+      request.body.pluginRepoUrl = plugin.githubRepoUrl || undefined;
+      request.body.pluginName = plugin.name;
+    }
+
     try {
       const job = await orchestrator.createJob(request.body);
       return reply.status(201).send({ job } satisfies CreateJobResponse);

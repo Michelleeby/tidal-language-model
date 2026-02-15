@@ -25,6 +25,7 @@ import MetricCards from "../components/status/MetricCards.js";
 import MetricCarousel from "../components/status/MetricCarousel.js";
 import SamplePreviews from "../components/samples/SamplePreviews.js";
 import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
+import PluginTrainingPanel from "../components/jobs/PluginTrainingPanel.js";
 import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
 import LogTailCard from "../components/logs/LogTailCard.js";
 import ConfigViewer from "../components/config/ConfigViewer.js";
@@ -155,6 +156,7 @@ export default function ExperimentNotebook() {
             <div className="w-full bg-gray-900 border border-gray-800 rounded-lg p-6 space-y-4">
               <TrainingControlBar />
             </div>
+            <PluginTrainingPanel />
           </>
         )}
       </div>
@@ -198,6 +200,9 @@ export default function ExperimentNotebook() {
           </div>
         </div>
       </div>
+
+      {/* User plugin training */}
+      <PluginTrainingPanel />
 
       {/* 1. Overview */}
       <CollapsibleSection title="Overview" defaultOpen>

@@ -83,7 +83,7 @@ export class VastAIProvider implements ComputeProvider {
       }
 
       // 2. Build on-start script once (does not depend on the offer)
-      const onStartScript = this.buildOnStartScript(job.jobId);
+      const onStartScript = this.buildOnStartScript(job.jobId, job);
 
       // 3. Try each offer — stale offers may vanish between search and create
       let lastError: Error | undefined;
@@ -228,15 +228,26 @@ export class VastAIProvider implements ComputeProvider {
     return err.message.includes("no_such_ask");
   }
 
-  private buildOnStartScript(jobId: string): string {
-    return [
+  private buildOnStartScript(jobId: string, job: TrainingJob): string {
+    const lines = [
       "#!/bin/bash",
       "set -e",
       "apt-get update && apt-get install -y git",
       `git clone ${this.repoUrl} /workspace/tidal`,
       "cd /workspace/tidal",
+    ];
+
+    // Clone user plugin repo if specified
+    const { pluginRepoUrl, pluginName } = job.config;
+    if (pluginRepoUrl && pluginName) {
+      lines.push(`git clone ${pluginRepoUrl} plugins/${pluginName}`);
+    }
+
+    lines.push(
       "pip install -r requirements.txt",
       `python worker_agent.py --job-id ${jobId} --api-url ${this.dashboardUrl} --auth-token ${this.authToken}`,
-    ].join("\n");
+    );
+
+    return lines.join("\n");
   }
 }

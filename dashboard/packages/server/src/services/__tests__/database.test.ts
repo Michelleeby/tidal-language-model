@@ -114,6 +114,69 @@ describe("Database.upsertUser()", () => {
   });
 });
 
+describe("Database.upsertUser() with githubAccessToken", () => {
+  it("stores and retrieves githubAccessToken", async () => {
+    const dir = await freshTmpDir();
+    const db = createDb(dir);
+
+    const user = db.upsertUser({
+      githubId: 99999,
+      githubLogin: "tokenuser",
+      githubAvatarUrl: null,
+      githubAccessToken: "gho_abc123",
+    });
+
+    assert.ok(user.id);
+    const retrieved = db.getUserById(user.id);
+    assert.ok(retrieved);
+    assert.equal(retrieved!.githubAccessToken, "gho_abc123");
+
+    db.close();
+  });
+
+  it("updates githubAccessToken on conflict", async () => {
+    const dir = await freshTmpDir();
+    const db = createDb(dir);
+
+    db.upsertUser({
+      githubId: 88888,
+      githubLogin: "tokenuser2",
+      githubAvatarUrl: null,
+      githubAccessToken: "old_token",
+    });
+
+    db.upsertUser({
+      githubId: 88888,
+      githubLogin: "tokenuser2",
+      githubAvatarUrl: null,
+      githubAccessToken: "new_token",
+    });
+
+    const found = db.getUserByGithubId(88888);
+    assert.ok(found);
+    assert.equal(found!.githubAccessToken, "new_token");
+
+    db.close();
+  });
+
+  it("stores null when no token provided", async () => {
+    const dir = await freshTmpDir();
+    const db = createDb(dir);
+
+    const user = db.upsertUser({
+      githubId: 77777,
+      githubLogin: "notoken",
+      githubAvatarUrl: null,
+    });
+
+    const retrieved = db.getUserById(user.id);
+    assert.ok(retrieved);
+    assert.equal(retrieved!.githubAccessToken, null);
+
+    db.close();
+  });
+});
+
 describe("Database.getUserById()", () => {
   it("returns a user by id", async () => {
     const dir = await freshTmpDir();

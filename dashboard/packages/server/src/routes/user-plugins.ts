@@ -1,12 +1,16 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type {
   CreateUserPluginRequest,
   UpdateUserPluginRequest,
   PluginFileWriteRequest,
+  PluginGitPushRequest,
   UserPlugin,
 } from "@tidal/shared";
 
-const PLUGIN_NAME_RE = /^[a-z][a-z0-9_-]{1,48}[a-z0-9]$/;
+const PLUGIN_NAME_RE = /^[a-z][a-z0-9_]{1,48}[a-z0-9]$/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,7 +80,7 @@ export default async function userPluginsRoutes(fastify: FastifyInstance) {
       if (!PLUGIN_NAME_RE.test(name)) {
         return reply.status(400).send({
           error:
-            "Invalid plugin name. Must match /^[a-z][a-z0-9_-]{1,48}[a-z0-9]$/",
+            "Invalid plugin name. Use lowercase letters, digits, and underscores only. Must match /^[a-z][a-z0-9_]{1,48}[a-z0-9]$/",
         });
       }
 
@@ -94,14 +98,46 @@ export default async function userPluginsRoutes(fastify: FastifyInstance) {
         });
       }
 
-      // Create DB record + copy template files
+      // Check if user has a GitHub token for repo creation
+      const user = fastify.db.getUserById(userId);
+      const ghToken = user?.githubAccessToken;
+      let githubRepoUrl = "";
+
+      if (ghToken) {
+        // Create GitHub repo
+        const repo = await fastify.githubRepo.createRepo(
+          ghToken,
+          name,
+          `Tidal plugin: ${displayName}`,
+        );
+        githubRepoUrl = repo.htmlUrl;
+
+        // Clone empty repo, copy template into it, commit+push
+        const pluginDir = `${fastify.serverConfig.userPluginsDir}/${userId}/${name}`;
+        await fastify.githubRepo.cloneRepo(repo.cloneUrl, pluginDir);
+        await fastify.githubRepo.configureGitUser(
+          pluginDir,
+          user!.githubLogin,
+        );
+        await fastify.userPluginStore.copyTemplateInto(userId, name);
+        await fastify.githubRepo.commitAndPush(
+          pluginDir,
+          ghToken,
+          user!.githubLogin,
+          repo.cloneUrl,
+          "Initial plugin from tidal template",
+        );
+      } else {
+        // No GitHub token — create plugin files locally only
+        await fastify.userPluginStore.createFromTemplate(userId, name);
+      }
+
       const plugin = fastify.db.createUserPlugin({
         userId,
         name,
         displayName,
+        githubRepoUrl,
       });
-
-      await fastify.userPluginStore.createFromTemplate(userId, name);
 
       return reply.status(201).send({ plugin });
     },
@@ -334,6 +370,147 @@ export default async function userPluginsRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({ error: msg });
         }
         return reply.status(404).send({ error: "File not found" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Git sync endpoints
+  // -------------------------------------------------------------------------
+
+  /** GET /api/user-plugins/:id/git/status — git status. */
+  fastify.get<{ Params: { id: string } }>(
+    "/api/user-plugins/:id/git/status",
+    { preHandler },
+    async (request, reply) => {
+      const userId = requireJwtUser(request, reply);
+      if (!userId) return;
+
+      const plugin = await loadOwnedPlugin(
+        fastify,
+        request.params.id,
+        userId,
+        reply,
+      );
+      if (!plugin) return;
+
+      const pluginDir = path.join(
+        fastify.serverConfig.userPluginsDir,
+        userId,
+        plugin.name,
+      );
+      const status = await fastify.githubRepo.getStatus(pluginDir);
+      return status;
+    },
+  );
+
+  /** POST /api/user-plugins/:id/git/pull — pull latest from origin. */
+  fastify.post<{ Params: { id: string } }>(
+    "/api/user-plugins/:id/git/pull",
+    { preHandler },
+    async (request, reply) => {
+      const userId = requireJwtUser(request, reply);
+      if (!userId) return;
+
+      const plugin = await loadOwnedPlugin(
+        fastify,
+        request.params.id,
+        userId,
+        reply,
+      );
+      if (!plugin) return;
+
+      const pluginDir = path.join(
+        fastify.serverConfig.userPluginsDir,
+        userId,
+        plugin.name,
+      );
+      await fastify.githubRepo.pull(pluginDir);
+      return { ok: true };
+    },
+  );
+
+  /** POST /api/user-plugins/:id/git/push — commit + push changes. */
+  fastify.post<{ Params: { id: string }; Body: PluginGitPushRequest }>(
+    "/api/user-plugins/:id/git/push",
+    { preHandler },
+    async (request, reply) => {
+      const userId = requireJwtUser(request, reply);
+      if (!userId) return;
+
+      const plugin = await loadOwnedPlugin(
+        fastify,
+        request.params.id,
+        userId,
+        reply,
+      );
+      if (!plugin) return;
+
+      const user = fastify.db.getUserById(userId);
+      if (!user?.githubAccessToken) {
+        return reply
+          .status(400)
+          .send({ error: "No GitHub token — cannot push" });
+      }
+
+      if (!plugin.githubRepoUrl) {
+        return reply
+          .status(400)
+          .send({ error: "Plugin has no GitHub repo" });
+      }
+
+      const pluginDir = path.join(
+        fastify.serverConfig.userPluginsDir,
+        userId,
+        plugin.name,
+      );
+      const repoCloneUrl = plugin.githubRepoUrl.endsWith(".git")
+        ? plugin.githubRepoUrl
+        : `${plugin.githubRepoUrl}.git`;
+
+      await fastify.githubRepo.commitAndPush(
+        pluginDir,
+        user.githubAccessToken,
+        user.githubLogin,
+        repoCloneUrl,
+        request.body.message,
+      );
+      return { ok: true };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Manifest endpoint
+  // -------------------------------------------------------------------------
+
+  /** GET /api/user-plugins/:id/manifest — read and parse manifest.yaml. */
+  fastify.get<{ Params: { id: string } }>(
+    "/api/user-plugins/:id/manifest",
+    { preHandler },
+    async (request, reply) => {
+      const userId = requireJwtUser(request, reply);
+      if (!userId) return;
+
+      const plugin = await loadOwnedPlugin(
+        fastify,
+        request.params.id,
+        userId,
+        reply,
+      );
+      if (!plugin) return;
+
+      try {
+        const content = await fastify.userPluginStore.readFile(
+          userId,
+          plugin.name,
+          "manifest.yaml",
+        );
+        const manifest = parseYaml(content);
+        return { manifest };
+      } catch {
+        return reply
+          .status(404)
+          .send({ error: "manifest.yaml not found" });
       }
     },
   );

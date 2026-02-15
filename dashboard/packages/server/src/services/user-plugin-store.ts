@@ -37,6 +37,20 @@ export class UserPluginStore {
     const destDir = path.join(this.userPluginsDir, userId, pluginName);
     await fsp.mkdir(destDir, { recursive: true });
     await this.copyDir(this.templateDir, destDir);
+    await this.rewriteImports(destDir);
+  }
+
+  /**
+   * Copy template files into an existing directory (e.g. a git clone)
+   * and rewrite imports. Does not create the directory.
+   */
+  async copyTemplateInto(
+    userId: string,
+    pluginName: string,
+  ): Promise<void> {
+    const destDir = path.join(this.userPluginsDir, userId, pluginName);
+    await this.copyDir(this.templateDir, destDir);
+    await this.rewriteImports(destDir);
   }
 
   private async copyDir(src: string, dest: string): Promise<void> {
@@ -54,6 +68,34 @@ export class UserPluginStore {
         await this.copyDir(srcPath, destPath);
       } else {
         await fsp.copyFile(srcPath, destPath);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Import rewriting — make tidal template imports relative
+  // ---------------------------------------------------------------------------
+
+  async rewriteImports(destDir: string): Promise<void> {
+    await this.rewriteImportsInDir(destDir);
+  }
+
+  private async rewriteImportsInDir(dir: string): Promise<void> {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await this.rewriteImportsInDir(fullPath);
+      } else if (entry.name.endsWith(".py")) {
+        const content = await fsp.readFile(fullPath, "utf-8");
+        // Replace `from plugins.tidal.X` with `from .X`
+        const rewritten = content.replace(
+          /from\s+plugins\.tidal\./g,
+          "from .",
+        );
+        if (rewritten !== content) {
+          await fsp.writeFile(fullPath, rewritten, "utf-8");
+        }
       }
     }
   }

@@ -34,7 +34,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const params = new URLSearchParams({
       client_id: githubClientId!,
       redirect_uri: `${publicUrl}/api/auth/github/callback`,
-      scope: "read:user",
+      scope: "read:user,public_repo",
       state,
     });
 
@@ -116,11 +116,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       avatar_url: string;
     };
 
-    // Upsert user in database
+    // Upsert user in database (store token server-side for GitHub API calls)
     const user = fastify.db.upsertUser({
       githubId: ghUser.id,
       githubLogin: ghUser.login,
       githubAvatarUrl: ghUser.avatar_url ?? null,
+      githubAccessToken: tokenData.access_token,
     });
 
     // Create JWT
@@ -163,7 +164,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
       const { payload } = await jwtVerify(cookieToken, jwtKey);
       const userId = payload.sub as string;
       const user = fastify.db.getUserById(userId);
-      return { user: user ?? null };
+      if (!user) return { user: null };
+      // Strip server-side-only fields before sending to client
+      const { githubAccessToken: _, ...publicUser } = user;
+      return { user: publicUser };
     } catch {
       return { user: null };
     }

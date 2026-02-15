@@ -219,9 +219,12 @@ class WorkerAgent:
 
     def _load_manifest(self, plugin_name: str) -> dict:
         """Load a plugin manifest from plugins/<name>/manifest.yaml."""
-        manifest_path = os.path.join(
-            self._project_root, "plugins", plugin_name, "manifest.yaml"
-        )
+        plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)
+        return self._load_manifest_from_dir(plugin_dir)
+
+    def _load_manifest_from_dir(self, plugin_dir: str) -> dict:
+        """Load a plugin manifest from an arbitrary directory."""
+        manifest_path = os.path.join(plugin_dir, "manifest.yaml")
         if not os.path.exists(manifest_path):
             raise FileNotFoundError(
                 f"Plugin manifest not found: {manifest_path}"
@@ -229,6 +232,18 @@ class WorkerAgent:
         yaml = YAML()
         with open(manifest_path) as f:
             return dict(yaml.load(f))
+
+    def _clone_plugin_repo(self, repo_url: str, dest: str) -> None:
+        """Clone a user plugin repo via git."""
+        result = subprocess.run(
+            ["git", "clone", repo_url, dest],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to clone plugin repo: {result.stderr}"
+            )
 
     def _find_phase(self, manifest: dict, job_type: str) -> dict:
         """Look up a training phase by ID in a manifest."""
@@ -242,12 +257,26 @@ class WorkerAgent:
         )
 
     def _build_command(self, phase: dict, config: dict, plugin_dir: str) -> list[str]:
-        """Build subprocess args from a manifest phase and job config."""
-        # Use -m so Python adds CWD (project root) to sys.path, enabling
-        # absolute imports like `from plugins.tidal.Trainer import Trainer`.
+        """Build subprocess args from a manifest phase and job config.
+
+        For system plugins (under plugins/), uses the full dotted path so
+        ``python -m plugins.tidal.Main`` works with CWD on sys.path.
+
+        For user plugins (under user-plugins/ or other non-plugins/ dirs),
+        uses just ``<basename>.Main`` — the caller must set PYTHONPATH to
+        include the parent directory.
+        """
         rel_dir = os.path.relpath(plugin_dir, self._project_root)
         module_name = phase["entrypoint"].removesuffix(".py")
-        module_path = rel_dir.replace(os.sep, ".") + "." + module_name
+
+        if rel_dir.startswith("plugins" + os.sep) or rel_dir == "plugins":
+            # System plugin: plugins.tidal.Main
+            module_path = rel_dir.replace(os.sep, ".") + "." + module_name
+        else:
+            # User plugin: my_model.Main (PYTHONPATH-based resolution)
+            basename = os.path.basename(plugin_dir)
+            module_path = basename + "." + module_name
+
         args = [sys.executable, "-m", module_path]
 
         # Map from manifest arg key to config field name
@@ -310,16 +339,45 @@ class WorkerAgent:
             self._heartbeat_stop.set()
 
     def _run_training(self, config: dict) -> int:
-        """Build and run a training command from the plugin manifest."""
+        """Build and run a training command from the plugin manifest.
+
+        Supports three modes:
+        1. pluginRepoUrl: clone the user's repo into plugins/<name>/, then
+           run from there (remote GPU path).
+        2. pluginDir: use the directory directly, set PYTHONPATH so the
+           module can be found (local user plugin path).
+        3. Neither: standard system plugin in plugins/<name>/.
+        """
         plugin_name = config.get("plugin", "tidal")
-        manifest = self._load_manifest(plugin_name)
+        extra_env = None
+
+        if config.get("pluginRepoUrl") and config.get("pluginName"):
+            # Remote GPU: clone user plugin repo into plugins/<name>/
+            dest = os.path.join(self._project_root, "plugins", config["pluginName"])
+            self._clone_plugin_repo(config["pluginRepoUrl"], dest)
+            plugin_dir = dest
+        elif config.get("pluginDir"):
+            # Local user plugin: resolve relative to project root
+            plugin_dir = os.path.join(self._project_root, config["pluginDir"])
+            # PYTHONPATH includes parent so `python -m <name>.Main` works
+            parent = os.path.dirname(plugin_dir)
+            extra_env = {"PYTHONPATH": parent}
+        else:
+            # System plugin
+            plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)
+
+        manifest = self._load_manifest_from_dir(plugin_dir)
         phase = self._find_phase(manifest, config["type"])
-        plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)
         args = self._build_command(phase, config, plugin_dir)
         redis_prefix = manifest.get("metrics", {}).get("redisPrefix", "tidal")
-        return self._spawn_and_monitor(args, redis_prefix=redis_prefix)
+        return self._spawn_and_monitor(args, redis_prefix=redis_prefix, extra_env=extra_env)
 
-    def _spawn_and_monitor(self, args: list[str], redis_prefix: str = "tidal") -> int:
+    def _spawn_and_monitor(
+        self,
+        args: list[str],
+        redis_prefix: str = "tidal",
+        extra_env: dict[str, str] | None = None,
+    ) -> int:
         """Spawn subprocess and poll for signals every 2 seconds."""
         # Build filtered env from allowlist instead of copying everything
         env = {}
@@ -328,6 +386,10 @@ class WorkerAgent:
                 key.startswith(p) for p in _ENV_ALLOWLIST_PREFIXES
             ):
                 env[key] = value
+
+        # Merge extra_env (e.g. PYTHONPATH for user plugins)
+        if extra_env:
+            env.update(extra_env)
 
         # Job-specific variables
         env["PYTHONUNBUFFERED"] = "1"

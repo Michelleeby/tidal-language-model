@@ -92,7 +92,7 @@ export class DigitalOceanProvider implements ComputeProvider {
         "Selected DigitalOcean GPU size",
       );
 
-      const dropletId = await this.createDroplet(bestSize.slug, job.jobId);
+      const dropletId = await this.createDroplet(bestSize.slug, job.jobId, job);
       return {
         success: true,
         meta: {
@@ -178,8 +178,8 @@ export class DigitalOceanProvider implements ComputeProvider {
       .sort((a, b) => a.price_hourly - b.price_hourly);
   }
 
-  private async createDroplet(sizeSlug: string, jobId: string): Promise<number> {
-    const userData = this.buildUserData(jobId);
+  private async createDroplet(sizeSlug: string, jobId: string, job: TrainingJob): Promise<number> {
+    const userData = this.buildUserData(jobId, job);
 
     const res = await fetch(`${DO_API}/v2/droplets`, {
       method: "POST",
@@ -211,15 +211,26 @@ export class DigitalOceanProvider implements ComputeProvider {
     return data.droplet.id;
   }
 
-  private buildUserData(jobId: string): string {
-    return [
+  private buildUserData(jobId: string, job: TrainingJob): string {
+    const lines = [
       "#!/bin/bash",
       "set -e",
       "apt-get update && apt-get install -y git",
       `git clone ${this.repoUrl} /workspace/tidal`,
       "cd /workspace/tidal",
+    ];
+
+    // Clone user plugin repo if specified
+    const { pluginRepoUrl, pluginName } = job.config;
+    if (pluginRepoUrl && pluginName) {
+      lines.push(`git clone ${pluginRepoUrl} plugins/${pluginName}`);
+    }
+
+    lines.push(
       "pip install -r requirements.txt",
       `python worker_agent.py --job-id ${jobId} --api-url ${this.dashboardUrl} --auth-token ${this.authToken}`,
-    ].join("\n");
+    );
+
+    return lines.join("\n");
   }
 }

@@ -8,6 +8,7 @@ export interface UserPlugin {
   userId: string;
   name: string;
   displayName: string;
+  githubRepoUrl: string;
   createdAt: number; // epoch ms
   updatedAt: number; // epoch ms
 }
@@ -17,6 +18,7 @@ export interface UserPluginSummary {
   id: string;
   name: string;
   displayName: string;
+  githubRepoUrl: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -65,4 +67,33 @@ export interface PluginFileReadResponse {
 
 export interface PluginFileWriteRequest {
   content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Git sync types
+// ---------------------------------------------------------------------------
+
+export interface PluginGitStatusResponse {
+  dirty: boolean;
+  files: string[];
+}
+
+export interface PluginGitPullResponse {
+  ok: boolean;
+}
+
+export interface PluginGitPushRequest {
+  message: string;
+}
+
+export interface PluginGitPushResponse {
+  ok: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Manifest types
+// ---------------------------------------------------------------------------
+
+export interface PluginManifestResponse {
+  manifest: Record<string, unknown>;
 }

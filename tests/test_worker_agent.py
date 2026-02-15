@@ -9,6 +9,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch, PropertyMock, call
 
+from ruamel.yaml import YAML
+
 from worker_agent import WorkerAgent, RedisTransport, HttpTransport
 
 
@@ -817,6 +819,302 @@ class TestLogStreaming(unittest.TestCase):
 
         # At minimum there should be a final flush call
         self.assertTrue(transport.send_logs.called)
+
+
+# ---------------------------------------------------------------------------
+# _run_training — user plugin support
+# ---------------------------------------------------------------------------
+
+class TestRunTrainingUserPlugins(unittest.TestCase):
+    """Tests for _run_training with pluginRepoUrl and pluginDir."""
+
+    def test_clones_plugin_repo_when_pluginRepoUrl_present(self):
+        """When pluginRepoUrl is in config, git clone to plugins/<name>/."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+
+            # Create the plugins dir and a manifest that will exist after "clone"
+            plugin_dir = os.path.join(tmpdir, "plugins", "my_model")
+            os.makedirs(plugin_dir, exist_ok=True)
+            manifest = {
+                "name": "my_model",
+                "trainingPhases": [{
+                    "id": "lm-training",
+                    "entrypoint": "Main.py",
+                    "args": {"config": "--config"},
+                }],
+                "metrics": {"redisPrefix": "my_model"},
+            }
+            yaml = YAML()
+            with open(os.path.join(plugin_dir, "manifest.yaml"), "w") as f:
+                yaml.dump(manifest, f)
+
+            config = {
+                "type": "lm-training",
+                "plugin": "my_model",
+                "configPath": "plugins/my_model/configs/base_config.yaml",
+                "pluginRepoUrl": "https://github.com/user/tidal-plugin-my_model.git",
+                "pluginName": "my_model",
+            }
+
+            clone_called = []
+            def fake_clone(url, dest):
+                clone_called.append((url, dest))
+                # Simulate clone creating the dir (already exists from setup)
+
+            with patch.object(agent, "_clone_plugin_repo", side_effect=fake_clone):
+                with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
+                    result = agent._run_training(config)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(len(clone_called), 1)
+            self.assertEqual(
+                clone_called[0][0],
+                "https://github.com/user/tidal-plugin-my_model.git",
+            )
+            self.assertIn("plugins", clone_called[0][1])
+            self.assertIn("my_model", clone_called[0][1])
+
+    def test_uses_pluginDir_for_local_user_plugin(self):
+        """When pluginDir is in config, uses that dir and sets PYTHONPATH."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+
+            # Create user plugin dir with manifest
+            user_plugin_dir = os.path.join(
+                tmpdir, "user-plugins", "user123", "my_model",
+            )
+            os.makedirs(user_plugin_dir, exist_ok=True)
+            manifest = {
+                "name": "my_model",
+                "trainingPhases": [{
+                    "id": "lm-training",
+                    "entrypoint": "Main.py",
+                    "args": {"config": "--config"},
+                }],
+                "metrics": {"redisPrefix": "my_model"},
+            }
+            yaml = YAML()
+            with open(os.path.join(user_plugin_dir, "manifest.yaml"), "w") as f:
+                yaml.dump(manifest, f)
+
+            config = {
+                "type": "lm-training",
+                "plugin": "my_model",
+                "configPath": "user-plugins/user123/my_model/configs/base_config.yaml",
+                "pluginDir": "user-plugins/user123/my_model",
+            }
+
+            with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
+                result = agent._run_training(config)
+
+            self.assertEqual(result, 0)
+            # Should have been called with extra_env containing PYTHONPATH
+            call_kwargs = mock_spawn.call_args
+            extra_env = call_kwargs[1].get("extra_env") or call_kwargs.kwargs.get("extra_env")
+            self.assertIsNotNone(extra_env, "extra_env should be passed")
+            self.assertIn("PYTHONPATH", extra_env)
+            # PYTHONPATH should include the parent of the plugin dir
+            parent = os.path.join(tmpdir, "user-plugins", "user123")
+            self.assertIn(parent, extra_env["PYTHONPATH"])
+
+    def test_existing_system_plugin_behavior_unchanged(self):
+        """Without pluginRepoUrl or pluginDir, uses standard plugins/ path."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+
+            # Create standard plugin dir with manifest
+            plugin_dir = os.path.join(tmpdir, "plugins", "tidal")
+            os.makedirs(plugin_dir, exist_ok=True)
+            manifest = {
+                "name": "tidal",
+                "trainingPhases": [{
+                    "id": "lm-training",
+                    "entrypoint": "Main.py",
+                    "args": {"config": "--config"},
+                }],
+                "metrics": {"redisPrefix": "tidal"},
+            }
+            yaml = YAML()
+            with open(os.path.join(plugin_dir, "manifest.yaml"), "w") as f:
+                yaml.dump(manifest, f)
+
+            config = {
+                "type": "lm-training",
+                "plugin": "tidal",
+                "configPath": "plugins/tidal/configs/base_config.yaml",
+            }
+
+            with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
+                result = agent._run_training(config)
+
+            self.assertEqual(result, 0)
+            # No extra_env should be passed (or it should be None)
+            call_kwargs = mock_spawn.call_args
+            extra_env = call_kwargs[1].get("extra_env") or call_kwargs.kwargs.get("extra_env")
+            self.assertIsNone(extra_env)
+
+
+# ---------------------------------------------------------------------------
+# _build_command — non-plugins/ directory
+# ---------------------------------------------------------------------------
+
+class TestBuildCommandUserPlugin(unittest.TestCase):
+    """Tests for _build_command with user plugin directories."""
+
+    def test_standard_plugins_dir_uses_dotted_path(self):
+        """plugins/tidal/ → module path 'plugins.tidal.Main'."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        phase = {"entrypoint": "Main.py", "args": {"config": "--config"}}
+        config = {"configPath": "plugins/tidal/configs/base_config.yaml"}
+        plugin_dir = os.path.join(agent._project_root, "plugins", "tidal")
+
+        args = agent._build_command(phase, config, plugin_dir)
+        # Module path should be plugins.tidal.Main
+        self.assertIn("-m", args)
+        idx = args.index("-m")
+        self.assertEqual(args[idx + 1], "plugins.tidal.Main")
+
+    def test_user_plugin_dir_uses_basename_path(self):
+        """user-plugins/user123/my_model/ → module path 'my_model.Main'."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        phase = {"entrypoint": "Main.py", "args": {"config": "--config"}}
+        config = {"configPath": "user-plugins/user123/my_model/configs/base_config.yaml"}
+        plugin_dir = os.path.join(
+            agent._project_root, "user-plugins", "user123", "my_model",
+        )
+
+        args = agent._build_command(phase, config, plugin_dir)
+        idx = args.index("-m")
+        self.assertEqual(args[idx + 1], "my_model.Main")
+
+
+# ---------------------------------------------------------------------------
+# _spawn_and_monitor — extra_env support
+# ---------------------------------------------------------------------------
+
+class TestSpawnAndMonitorExtraEnv(unittest.TestCase):
+    """Tests for extra_env parameter in _spawn_and_monitor."""
+
+    def test_extra_env_merged_into_subprocess_env(self):
+        """extra_env dict is merged into the subprocess environment."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = 0
+            mock_proc.pid = 12345
+            mock_proc.stdout = io.BytesIO(b"")
+            mock_proc.stderr = io.BytesIO(b"")
+            mock_popen.return_value = mock_proc
+
+            agent._heartbeat_stop = threading.Event()
+            agent._heartbeat_stop.set()
+
+            agent._spawn_and_monitor(
+                ["echo", "test"],
+                redis_prefix="tidal",
+                extra_env={"PYTHONPATH": "/some/path", "MY_VAR": "hello"},
+            )
+
+            call_kwargs = mock_popen.call_args
+            env = call_kwargs[1].get("env") or call_kwargs.kwargs.get("env")
+            self.assertEqual(env.get("PYTHONPATH"), "/some/path")
+            self.assertEqual(env.get("MY_VAR"), "hello")
+
+    def test_no_extra_env_works(self):
+        """Without extra_env, behavior is unchanged."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        transport.send_logs = MagicMock()
+        transport.read_signal = MagicMock(return_value=None)
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = 0
+            mock_proc.pid = 12345
+            mock_proc.stdout = io.BytesIO(b"")
+            mock_proc.stderr = io.BytesIO(b"")
+            mock_popen.return_value = mock_proc
+
+            agent._heartbeat_stop = threading.Event()
+            agent._heartbeat_stop.set()
+
+            agent._spawn_and_monitor(["echo", "test"], redis_prefix="tidal")
+
+            call_kwargs = mock_popen.call_args
+            env = call_kwargs[1].get("env") or call_kwargs.kwargs.get("env")
+            # Standard vars should still be there
+            self.assertIn("TRAINING_JOB_ID", env)
+            self.assertIn("METRICS_REDIS_PREFIX", env)
+
+
+# ---------------------------------------------------------------------------
+# _clone_plugin_repo
+# ---------------------------------------------------------------------------
+
+class TestClonePluginRepo(unittest.TestCase):
+    """Tests for _clone_plugin_repo helper."""
+
+    def test_runs_git_clone(self):
+        """Calls subprocess.run with git clone."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            dest = os.path.join(tmpdir, "plugins", "my_model")
+
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                agent._clone_plugin_repo(
+                    "https://github.com/user/repo.git",
+                    dest,
+                )
+
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            self.assertEqual(cmd[0], "git")
+            self.assertEqual(cmd[1], "clone")
+            self.assertIn("https://github.com/user/repo.git", cmd)
+            self.assertIn(dest, cmd)
+
+    def test_raises_on_clone_failure(self):
+        """Raises RuntimeError if git clone exits non-zero."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+            dest = os.path.join(tmpdir, "plugins", "my_model")
+
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=128,
+                    stderr="fatal: repo not found",
+                )
+                with self.assertRaises(RuntimeError) as ctx:
+                    agent._clone_plugin_repo(
+                        "https://github.com/user/repo.git",
+                        dest,
+                    )
+                self.assertIn("clone", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

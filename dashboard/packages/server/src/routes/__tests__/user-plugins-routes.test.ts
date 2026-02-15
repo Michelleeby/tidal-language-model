@@ -12,6 +12,7 @@ import type { PluginRegistry } from "../../services/plugin-registry.js";
 import { Database } from "../../services/database.js";
 import { UserPluginStore } from "../../services/user-plugin-store.js";
 import authPlugin from "../../plugins/auth.js";
+import { GitHubRepoService } from "../../services/github-repo.js";
 import userPluginsRoutes from "../user-plugins.js";
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,24 @@ async function buildApp(): Promise<{
       name === "tidal" ? ({ name: "tidal" } as never) : undefined,
   } as unknown as PluginRegistry);
 
+  // Stub githubRepo service (cloneRepo creates directory; rest are no-ops)
+  const githubRepoStub = {
+    createRepo: async () => ({
+      htmlUrl: "https://github.com/test/tidal-plugin-test",
+      cloneUrl: "https://github.com/test/tidal-plugin-test.git",
+    }),
+    cloneRepo: async (_url: string, dest: string) => {
+      await fsp.mkdir(dest, { recursive: true });
+      // Simulate git init (create .git dir so it looks like a clone)
+      await fsp.mkdir(path.join(dest, ".git"), { recursive: true });
+    },
+    configureGitUser: async () => {},
+    commitAndPush: async () => {},
+    pull: async () => {},
+    getStatus: async () => ({ dirty: false, files: [] }),
+  } as unknown as GitHubRepoService;
+  app.decorate("githubRepo", githubRepoStub);
+
   await app.register(cookie);
   await app.register(authPlugin);
   await app.register(userPluginsRoutes);
@@ -114,6 +133,21 @@ async function createUserAndJwt(db: Database, login = "alice") {
   });
   const token = await createJwt({ sub: user.id, githubLogin: login });
   return { user, token };
+}
+
+async function createUserWithTokenAndJwt(
+  db: Database,
+  login = "alice",
+  token = "gho_test_token",
+) {
+  const user = db.upsertUser({
+    githubId: Math.floor(Math.random() * 1e9),
+    githubLogin: login,
+    githubAvatarUrl: null,
+    githubAccessToken: token,
+  });
+  const jwt = await createJwt({ sub: user.id, githubLogin: login });
+  return { user, token: jwt, ghToken: token };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,13 +194,13 @@ describe("POST /api/user-plugins", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "my-model", displayName: "My Model" },
+      payload: { name: "my_model", displayName: "My Model" },
     });
 
     assert.equal(resp.statusCode, 201);
     const body = resp.json();
     assert.ok(body.plugin.id);
-    assert.equal(body.plugin.name, "my-model");
+    assert.equal(body.plugin.name, "my_model");
     assert.equal(body.plugin.displayName, "My Model");
 
     await app.close();
@@ -210,17 +244,54 @@ describe("POST /api/user-plugins", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "dup-test", displayName: "First" },
+      payload: { name: "dup_test", displayName: "First" },
     });
 
     const resp = await app.inject({
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "dup-test", displayName: "Second" },
+      payload: { name: "dup_test", displayName: "Second" },
     });
 
     assert.equal(resp.statusCode, 409);
+    await app.close();
+  });
+
+  it("creates plugin with github_repo_url when user has token", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserWithTokenAndJwt(db, "ghuser");
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "my_model", displayName: "My Model" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    const body = resp.json();
+    assert.ok(body.plugin.githubRepoUrl);
+    assert.ok(body.plugin.githubRepoUrl.includes("github.com"));
+
+    await app.close();
+  });
+
+  it("creates plugin without github_repo_url when user has no token", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserAndJwt(db, "notoken_user");
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "local_model", displayName: "Local Model" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    const body = resp.json();
+    assert.equal(body.plugin.githubRepoUrl, "");
+
     await app.close();
   });
 });
@@ -254,14 +325,14 @@ describe("GET /api/user-plugins", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: aliceToken },
-      payload: { name: "alice-model", displayName: "Alice" },
+      payload: { name: "alice_model", displayName: "Alice" },
     });
 
     await app.inject({
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: bobToken },
-      payload: { name: "bob-model", displayName: "Bob" },
+      payload: { name: "bob_model", displayName: "Bob" },
     });
 
     const resp = await app.inject({
@@ -272,7 +343,7 @@ describe("GET /api/user-plugins", () => {
 
     const { plugins } = resp.json();
     assert.equal(plugins.length, 1);
-    assert.equal(plugins[0].name, "alice-model");
+    assert.equal(plugins[0].name, "alice_model");
 
     await app.close();
   });
@@ -291,7 +362,7 @@ describe("GET /api/user-plugins/:id", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "get-test", displayName: "Get Test" },
+      payload: { name: "get_test", displayName: "Get Test" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -302,7 +373,7 @@ describe("GET /api/user-plugins/:id", () => {
     });
 
     assert.equal(resp.statusCode, 200);
-    assert.equal(resp.json().plugin.name, "get-test");
+    assert.equal(resp.json().plugin.name, "get_test");
 
     await app.close();
   });
@@ -316,7 +387,7 @@ describe("GET /api/user-plugins/:id", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: aliceToken },
-      payload: { name: "private-model", displayName: "Private" },
+      payload: { name: "private_model", displayName: "Private" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -344,7 +415,7 @@ describe("PUT /api/user-plugins/:id", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "upd-test", displayName: "Old Name" },
+      payload: { name: "upd_test", displayName: "Old Name" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -375,7 +446,7 @@ describe("DELETE /api/user-plugins/:id", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "del-test", displayName: "Delete Me" },
+      payload: { name: "del_test", displayName: "Delete Me" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -396,7 +467,7 @@ describe("DELETE /api/user-plugins/:id", () => {
       tmpDir,
       "user-plugins",
       user.id,
-      "del-test",
+      "del_test",
     );
     await assert.rejects(fsp.access(pluginDir));
 
@@ -417,7 +488,7 @@ describe("GET /api/user-plugins/:id/files", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "tree-model", displayName: "Tree" },
+      payload: { name: "tree_model", displayName: "Tree" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -450,7 +521,7 @@ describe("GET /api/user-plugins/:id/files/*", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "read-model", displayName: "Read" },
+      payload: { name: "read_model", displayName: "Read" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -474,7 +545,7 @@ describe("GET /api/user-plugins/:id/files/*", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "trav-model", displayName: "Trav" },
+      payload: { name: "trav_model", displayName: "Trav" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -508,7 +579,7 @@ describe("PUT /api/user-plugins/:id/files/*", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "write-model", displayName: "Write" },
+      payload: { name: "write_model", displayName: "Write" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -546,7 +617,7 @@ describe("POST /api/user-plugins/:id/files/*", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "newfile-model", displayName: "NewFile" },
+      payload: { name: "newfile_model", displayName: "NewFile" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -584,7 +655,7 @@ describe("DELETE /api/user-plugins/:id/files/*", () => {
       method: "POST",
       url: "/api/user-plugins",
       cookies: { tidal_session: token },
-      payload: { name: "delfile-model", displayName: "DelFile" },
+      payload: { name: "delfile_model", displayName: "DelFile" },
     });
     const pluginId = createResp.json().plugin.id;
 
@@ -603,6 +674,177 @@ describe("DELETE /api/user-plugins/:id/files/*", () => {
       cookies: { tidal_session: token },
     });
     assert.equal(readResp.statusCode, 404);
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/user-plugins/:id/git/status — git status
+// ---------------------------------------------------------------------------
+
+describe("GET /api/user-plugins/:id/git/status", () => {
+  it("returns git status", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserAndJwt(db);
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "git_status_test", displayName: "Git Status" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/user-plugins/${pluginId}/git/status`,
+      cookies: { tidal_session: token },
+    });
+
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.equal(typeof body.dirty, "boolean");
+    assert.ok(Array.isArray(body.files));
+
+    await app.close();
+  });
+
+  it("returns 404 for another user's plugin", async () => {
+    const { app, db } = await buildApp();
+    const { token: aliceToken } = await createUserAndJwt(db, "alice");
+    const { token: bobToken } = await createUserAndJwt(db, "bob");
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: aliceToken },
+      payload: { name: "alice_git", displayName: "Alice" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/user-plugins/${pluginId}/git/status`,
+      cookies: { tidal_session: bobToken },
+    });
+
+    assert.equal(resp.statusCode, 404);
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/user-plugins/:id/git/pull — git pull
+// ---------------------------------------------------------------------------
+
+describe("POST /api/user-plugins/:id/git/pull", () => {
+  it("returns ok on pull", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserAndJwt(db);
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "git_pull_test", displayName: "Pull Test" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/user-plugins/${pluginId}/git/pull`,
+      cookies: { tidal_session: token },
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().ok, true);
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/user-plugins/:id/git/push — git push
+// ---------------------------------------------------------------------------
+
+describe("POST /api/user-plugins/:id/git/push", () => {
+  it("returns ok on push with message", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserWithTokenAndJwt(db, "pusher");
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "git_push_test", displayName: "Push Test" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/user-plugins/${pluginId}/git/push`,
+      cookies: { tidal_session: token },
+      payload: { message: "Update model" },
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().ok, true);
+
+    await app.close();
+  });
+
+  it("returns 400 when no GitHub token", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserAndJwt(db, "notoken");
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "no_token_push", displayName: "No Token" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/user-plugins/${pluginId}/git/push`,
+      cookies: { tidal_session: token },
+      payload: { message: "test" },
+    });
+
+    assert.equal(resp.statusCode, 400);
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/user-plugins/:id/manifest — manifest
+// ---------------------------------------------------------------------------
+
+describe("GET /api/user-plugins/:id/manifest", () => {
+  it("returns parsed manifest as JSON", async () => {
+    const { app, db } = await buildApp();
+    const { token } = await createUserAndJwt(db);
+
+    const createResp = await app.inject({
+      method: "POST",
+      url: "/api/user-plugins",
+      cookies: { tidal_session: token },
+      payload: { name: "manifest_test", displayName: "Manifest" },
+    });
+    const pluginId = createResp.json().plugin.id;
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/user-plugins/${pluginId}/manifest`,
+      cookies: { tidal_session: token },
+    });
+
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.ok(body.manifest);
+    assert.equal(body.manifest.name, "tidal");
 
     await app.close();
   });

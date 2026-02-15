@@ -126,6 +126,101 @@ describe("UserPluginStore.createFromTemplate()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// rewriteImports (called during createFromTemplate)
+// ---------------------------------------------------------------------------
+
+describe("UserPluginStore.createFromTemplate() import rewriting", () => {
+  it("rewrites 'from plugins.tidal.X' to 'from .X' in .py files", async () => {
+    const baseDir = await freshTmpDir();
+    // Create a template with tidal-specific imports
+    const templateDir = path.join(baseDir, "plugins", "tidal");
+    await fsp.mkdir(templateDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(templateDir, "manifest.yaml"),
+      "name: tidal\nversion: 1.0\n",
+    );
+    await fsp.writeFile(
+      path.join(templateDir, "Model.py"),
+      [
+        "from plugins.tidal.TransformerLM import TransformerLM",
+        "from plugins.tidal.GatingModulator import GatingModulator",
+        "import torch",
+        "",
+        "class Model:",
+        "    pass",
+      ].join("\n"),
+    );
+    await fsp.writeFile(path.join(templateDir, "__init__.py"), "");
+
+    const userPluginsDir = path.join(baseDir, "user-plugins");
+    const store = createStore(userPluginsDir, templateDir);
+    await store.createFromTemplate("user1", "my_model");
+
+    const content = await fsp.readFile(
+      path.join(userPluginsDir, "user1", "my_model", "Model.py"),
+      "utf-8",
+    );
+
+    assert.ok(content.includes("from .TransformerLM import TransformerLM"));
+    assert.ok(content.includes("from .GatingModulator import GatingModulator"));
+    assert.ok(content.includes("import torch"));
+    assert.ok(!content.includes("from plugins.tidal."));
+  });
+
+  it("leaves existing relative imports unchanged", async () => {
+    const baseDir = await freshTmpDir();
+    const templateDir = path.join(baseDir, "plugins", "tidal");
+    await fsp.mkdir(templateDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(templateDir, "manifest.yaml"),
+      "name: tidal\nversion: 1.0\n",
+    );
+    await fsp.writeFile(
+      path.join(templateDir, "Helper.py"),
+      [
+        "from .utils import helper_fn",
+        "from plugins.tidal.Model import Model",
+      ].join("\n"),
+    );
+
+    const userPluginsDir = path.join(baseDir, "user-plugins");
+    const store = createStore(userPluginsDir, templateDir);
+    await store.createFromTemplate("user1", "my_model");
+
+    const content = await fsp.readFile(
+      path.join(userPluginsDir, "user1", "my_model", "Helper.py"),
+      "utf-8",
+    );
+
+    assert.ok(content.includes("from .utils import helper_fn"));
+    assert.ok(content.includes("from .Model import Model"));
+    assert.ok(!content.includes("from plugins.tidal."));
+  });
+
+  it("does not modify non-.py files", async () => {
+    const baseDir = await freshTmpDir();
+    const templateDir = path.join(baseDir, "plugins", "tidal");
+    await fsp.mkdir(templateDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(templateDir, "manifest.yaml"),
+      "name: tidal\nfrom_plugins: plugins.tidal.something\n",
+    );
+
+    const userPluginsDir = path.join(baseDir, "user-plugins");
+    const store = createStore(userPluginsDir, templateDir);
+    await store.createFromTemplate("user1", "yaml_test");
+
+    const content = await fsp.readFile(
+      path.join(userPluginsDir, "user1", "yaml_test", "manifest.yaml"),
+      "utf-8",
+    );
+
+    // YAML should be unchanged
+    assert.ok(content.includes("from_plugins: plugins.tidal.something"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getFileTree
 // ---------------------------------------------------------------------------
 

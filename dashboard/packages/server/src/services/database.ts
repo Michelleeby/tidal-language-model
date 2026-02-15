@@ -18,6 +18,7 @@ interface UserRow {
   github_id: number;
   github_login: string;
   github_avatar_url: string | null;
+  github_access_token: string | null;
   created_at: number;
   last_login_at: number;
 }
@@ -36,6 +37,7 @@ interface UserPluginRow {
   user_id: string;
   name: string;
   display_name: string;
+  github_repo_url: string;
   created_at: number;
   updated_at: number;
 }
@@ -50,6 +52,7 @@ function userRowToUser(row: UserRow): User {
     githubId: row.github_id,
     githubLogin: row.github_login,
     githubAvatarUrl: row.github_avatar_url,
+    githubAccessToken: row.github_access_token,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
   };
@@ -72,6 +75,7 @@ function pluginRowToPlugin(row: UserPluginRow): UserPlugin {
     userId: row.user_id,
     name: row.name,
     displayName: row.display_name,
+    githubRepoUrl: row.github_repo_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -82,6 +86,7 @@ function pluginRowToSummary(row: UserPluginRow): UserPluginSummary {
     id: row.id,
     name: row.name,
     displayName: row.display_name,
+    githubRepoUrl: row.github_repo_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -122,6 +127,7 @@ export class Database {
         github_id INTEGER UNIQUE NOT NULL,
         github_login TEXT NOT NULL,
         github_avatar_url TEXT,
+        github_access_token TEXT,
         created_at INTEGER NOT NULL,
         last_login_at INTEGER NOT NULL
       );
@@ -140,21 +146,34 @@ export class Database {
         user_id TEXT NOT NULL REFERENCES users(id),
         name TEXT NOT NULL,
         display_name TEXT NOT NULL,
+        github_repo_url TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         UNIQUE(user_id, name)
       );
     `);
+
+    // Migrations for existing databases
+    this.migrateAddColumn("users", "github_access_token", "TEXT");
+    this.migrateAddColumn("user_plugins", "github_repo_url", "TEXT NOT NULL DEFAULT ''");
+  }
+
+  private migrateAddColumn(table: string, column: string, type: string): void {
+    const info = this.db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+    if (!info.some((col) => col.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
   }
 
   private prepareStatements() {
     return {
       upsertUser: this.db.prepare(`
-        INSERT INTO users (id, github_id, github_login, github_avatar_url, created_at, last_login_at)
-        VALUES (@id, @githubId, @githubLogin, @githubAvatarUrl, @now, @now)
+        INSERT INTO users (id, github_id, github_login, github_avatar_url, github_access_token, created_at, last_login_at)
+        VALUES (@id, @githubId, @githubLogin, @githubAvatarUrl, @githubAccessToken, @now, @now)
         ON CONFLICT(github_id) DO UPDATE SET
           github_login = @githubLogin,
           github_avatar_url = @githubAvatarUrl,
+          github_access_token = @githubAccessToken,
           last_login_at = @now
       `),
       getUserById: this.db.prepare("SELECT * FROM users WHERE id = ?"),
@@ -179,8 +198,8 @@ export class Database {
       `),
 
       createUserPlugin: this.db.prepare(`
-        INSERT INTO user_plugins (id, user_id, name, display_name, created_at, updated_at)
-        VALUES (@id, @userId, @name, @displayName, @now, @now)
+        INSERT INTO user_plugins (id, user_id, name, display_name, github_repo_url, created_at, updated_at)
+        VALUES (@id, @userId, @name, @displayName, @githubRepoUrl, @now, @now)
       `),
       getUserPlugin: this.db.prepare("SELECT * FROM user_plugins WHERE id = ?"),
       getUserPluginByUserAndName: this.db.prepare(
@@ -204,6 +223,7 @@ export class Database {
     githubId: number;
     githubLogin: string;
     githubAvatarUrl: string | null;
+    githubAccessToken?: string | null;
   }): User {
     const now = Date.now();
     // Check if user already exists to preserve their internal id
@@ -215,6 +235,7 @@ export class Database {
       githubId: params.githubId,
       githubLogin: params.githubLogin,
       githubAvatarUrl: params.githubAvatarUrl,
+      githubAccessToken: params.githubAccessToken ?? null,
       now,
     });
 
@@ -312,6 +333,7 @@ export class Database {
     userId: string;
     name: string;
     displayName: string;
+    githubRepoUrl?: string;
   }): UserPlugin {
     const now = Date.now();
     const id = nanoid();
@@ -321,6 +343,7 @@ export class Database {
       userId: params.userId,
       name: params.name,
       displayName: params.displayName,
+      githubRepoUrl: params.githubRepoUrl ?? "",
       now,
     });
 

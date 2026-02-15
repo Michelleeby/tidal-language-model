@@ -13,6 +13,7 @@ import databasePlugin from "./plugins/database.js";
 import rateLimitPlugin from "./plugins/rate-limit.js";
 import provisioningPlugin from "./plugins/provisioning.js";
 import userPluginStorePlugin from "./plugins/user-plugin-store.js";
+import githubRepoPlugin from "./plugins/github-repo.js";
 import experimentsRoutes from "./routes/experiments.js";
 import metricsRoutes from "./routes/metrics.js";
 import rlMetricsRoutes from "./routes/rl-metrics.js";
@@ -89,6 +90,7 @@ async function main() {
   await fastify.register(rateLimitPlugin);
   await fastify.register(provisioningPlugin);
   await fastify.register(userPluginStorePlugin);
+  await fastify.register(githubRepoPlugin);
 
   // Migrate legacy JSON reports into SQLite (idempotent, runs before routes)
   const reportsDir = path.join(config.projectRoot, "reports");

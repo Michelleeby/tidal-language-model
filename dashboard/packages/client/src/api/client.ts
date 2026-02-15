@@ -32,6 +32,10 @@ import type {
   PluginFileTreeResponse,
   PluginFileReadResponse,
   PluginFileWriteRequest,
+  PluginGitStatusResponse,
+  PluginGitPullResponse,
+  PluginGitPushResponse,
+  PluginManifestResponse,
 } from "@tidal/shared";
 
 const BASE = "/api";
@@ -218,5 +222,33 @@ export const api = {
     fetchJson<{ path: string; deleted: boolean }>(
       `${BASE}/user-plugins/${pluginId}/files/${filePath}`,
       { method: "DELETE" },
+    ),
+
+  // User Plugin Git
+  getPluginGitStatus: (pluginId: string) =>
+    fetchJson<PluginGitStatusResponse>(
+      `${BASE}/user-plugins/${pluginId}/git/status`,
+    ),
+
+  pullPlugin: (pluginId: string) =>
+    fetchJson<PluginGitPullResponse>(
+      `${BASE}/user-plugins/${pluginId}/git/pull`,
+      { method: "POST" },
+    ),
+
+  pushPlugin: (pluginId: string, message: string) =>
+    fetchJson<PluginGitPushResponse>(
+      `${BASE}/user-plugins/${pluginId}/git/push`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      },
+    ),
+
+  // User Plugin Manifest
+  getUserPluginManifest: (pluginId: string) =>
+    fetchJson<PluginManifestResponse>(
+      `${BASE}/user-plugins/${pluginId}/manifest`,
     ),
 };
