@@ -54,21 +54,61 @@ export class GitHubRepoService {
       }),
     });
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      const msg = (body as { message?: string }).message ?? res.statusText;
-      throw new Error(`Failed to create GitHub repo (${res.status}): ${msg}`);
+    if (res.ok) {
+      const data = (await res.json()) as {
+        html_url: string;
+        clone_url: string;
+      };
+      return { htmlUrl: data.html_url, cloneUrl: data.clone_url };
     }
 
-    const data = (await res.json()) as {
+    // 422 usually means the repo already exists — try to fetch it
+    if (res.status === 422) {
+      return this.getExistingRepo(token, repoName);
+    }
+
+    const body = await res.json().catch(() => ({}));
+    const msg = (body as { message?: string }).message ?? res.statusText;
+    throw new Error(`Failed to create GitHub repo (${res.status}): ${msg}`);
+  }
+
+  private async getExistingRepo(
+    token: string,
+    repoName: string,
+  ): Promise<CreateRepoResult> {
+    // First get the authenticated user's login
+    const userRes = await fetch(`${GITHUB_API}/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    });
+    if (!userRes.ok) {
+      throw new Error(
+        `Failed to create GitHub repo (422) and could not look up user: ${userRes.status}`,
+      );
+    }
+    const userData = (await userRes.json()) as { login: string };
+
+    const repoRes = await fetch(
+      `${GITHUB_API}/repos/${userData.login}/${repoName}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      },
+    );
+    if (!repoRes.ok) {
+      throw new Error(
+        `Failed to create GitHub repo (422) and existing repo not found: ${repoRes.status}`,
+      );
+    }
+    const repoData = (await repoRes.json()) as {
       html_url: string;
       clone_url: string;
     };
-
-    return {
-      htmlUrl: data.html_url,
-      cloneUrl: data.clone_url,
-    };
+    return { htmlUrl: repoData.html_url, cloneUrl: repoData.clone_url };
   }
 
   // -------------------------------------------------------------------------

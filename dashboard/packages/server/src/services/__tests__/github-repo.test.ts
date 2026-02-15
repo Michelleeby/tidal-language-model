@@ -104,15 +104,62 @@ describe("GitHubRepoService", () => {
     it("throws on GitHub API error", async () => {
       fetchResponse = {
         ok: false,
-        status: 422,
-        json: async () => ({ message: "Validation Failed" }),
+        status: 500,
+        json: async () => ({ message: "Internal Server Error" }),
       };
 
       const svc = createService();
       await assert.rejects(
         svc.createRepo("gho_token123", "my_model", "desc"),
-        /Failed to create GitHub repo.*422/,
+        /Failed to create GitHub repo.*500/,
       );
+    });
+
+    it("falls back to existing repo on 422 (name already taken)", async () => {
+      let callCount = 0;
+      globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        fetchCalls.push({ url: urlStr, init });
+        callCount++;
+        if (callCount === 1) {
+          // First call: POST /user/repos → 422
+          return Promise.resolve({
+            ok: false,
+            status: 422,
+            json: async () => ({
+              message: "Repository creation failed.",
+              errors: [{ message: "name already exists on this account" }],
+            }),
+          } as Response);
+        }
+        if (callCount === 2) {
+          // Second call: GET /user → authenticated user
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ login: "alice" }),
+          } as Response);
+        }
+        // Third call: GET /repos/alice/tidal-plugin-my_model → 200
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            html_url: "https://github.com/alice/tidal-plugin-my_model",
+            clone_url: "https://github.com/alice/tidal-plugin-my_model.git",
+          }),
+        } as Response);
+      }) as typeof fetch;
+
+      const svc = createService();
+      const result = await svc.createRepo("gho_token123", "my_model", "desc");
+
+      assert.equal(result.htmlUrl, "https://github.com/alice/tidal-plugin-my_model");
+      assert.equal(result.cloneUrl, "https://github.com/alice/tidal-plugin-my_model.git");
+      // Should have made 3 fetch calls: POST create, GET /user, GET /repos/:owner/:repo
+      assert.equal(fetchCalls.length, 3);
+      assert.ok(fetchCalls[1].url.includes("/user"));
+      assert.ok(fetchCalls[2].url.includes("/repos/alice/tidal-plugin-my_model"));
     });
   });
 

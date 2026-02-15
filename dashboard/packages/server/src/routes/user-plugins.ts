@@ -104,7 +104,7 @@ export default async function userPluginsRoutes(fastify: FastifyInstance) {
       let githubRepoUrl = "";
 
       if (ghToken) {
-        // Create GitHub repo
+        // Create GitHub repo (reuses existing on 422)
         const repo = await fastify.githubRepo.createRepo(
           ghToken,
           name,
@@ -112,21 +112,33 @@ export default async function userPluginsRoutes(fastify: FastifyInstance) {
         );
         githubRepoUrl = repo.htmlUrl;
 
-        // Clone empty repo, copy template into it, commit+push
+        // Clone repo locally; if dir already exists, pull instead
         const pluginDir = `${fastify.serverConfig.userPluginsDir}/${userId}/${name}`;
-        await fastify.githubRepo.cloneRepo(repo.cloneUrl, pluginDir);
-        await fastify.githubRepo.configureGitUser(
-          pluginDir,
-          user!.githubLogin,
-        );
-        await fastify.userPluginStore.copyTemplateInto(userId, name);
-        await fastify.githubRepo.commitAndPush(
-          pluginDir,
-          ghToken,
-          user!.githubLogin,
-          repo.cloneUrl,
-          "Initial plugin from tidal template",
-        );
+        let dirExists = false;
+        try {
+          await fsp.access(pluginDir);
+          dirExists = true;
+        } catch {
+          // does not exist
+        }
+
+        if (dirExists) {
+          await fastify.githubRepo.pull(pluginDir);
+        } else {
+          await fastify.githubRepo.cloneRepo(repo.cloneUrl, pluginDir);
+          await fastify.githubRepo.configureGitUser(
+            pluginDir,
+            user!.githubLogin,
+          );
+          await fastify.userPluginStore.copyTemplateInto(userId, name);
+          await fastify.githubRepo.commitAndPush(
+            pluginDir,
+            ghToken,
+            user!.githubLogin,
+            repo.cloneUrl,
+            "Initial plugin from tidal template",
+          );
+        }
       } else {
         // No GitHub token — create plugin files locally only
         await fastify.userPluginStore.createFromTemplate(userId, name);
