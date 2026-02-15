@@ -51,7 +51,7 @@ export default function App() {
           </svg>
         </button>
         <h1 className="text-lg font-semibold tracking-tight">
-          Tidal Dashboard
+          🌊
         </h1>
 
         {/* Nav tabs */}
