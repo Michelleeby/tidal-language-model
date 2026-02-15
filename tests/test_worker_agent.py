@@ -1041,6 +1041,43 @@ class TestBuildCommandUserPlugin(unittest.TestCase):
         idx = args.index("-m")
         self.assertEqual(args[idx + 1], "my_model.Main")
 
+    def test_relative_configPath_resolved_against_plugin_dir(self):
+        """A relative configPath like 'configs/base_config.yaml' should be
+        resolved to '<plugin_dir>/configs/base_config.yaml' so it works
+        regardless of where the plugin is on disk.
+        """
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        phase = {"entrypoint": "Main.py", "args": {"config": "--config"}}
+        config = {"configPath": "configs/base_config.yaml"}
+        plugin_dir = os.path.join(agent._project_root, "plugins", "my_model")
+
+        args = agent._build_command(phase, config, plugin_dir)
+        # The --config value should be the full path under plugin_dir
+        idx = args.index("--config")
+        self.assertEqual(
+            args[idx + 1],
+            os.path.join(plugin_dir, "configs", "base_config.yaml"),
+        )
+
+    def test_absolute_configPath_left_unchanged(self):
+        """A configPath that already includes the plugin prefix should not
+        be doubled up — but paths starting with 'plugins/' or 'user-plugins/'
+        are passed through as-is for backward compatibility.
+        """
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        phase = {"entrypoint": "Main.py", "args": {"config": "--config"}}
+        config = {"configPath": "plugins/tidal/configs/base_config.yaml"}
+        plugin_dir = os.path.join(agent._project_root, "plugins", "tidal")
+
+        args = agent._build_command(phase, config, plugin_dir)
+        idx = args.index("--config")
+        # Should keep the original path (backward compat with system plugins)
+        self.assertEqual(args[idx + 1], "plugins/tidal/configs/base_config.yaml")
+
 
 # ---------------------------------------------------------------------------
 # _spawn_and_monitor — extra_env support

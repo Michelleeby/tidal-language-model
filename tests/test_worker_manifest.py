@@ -190,7 +190,7 @@ class TestBuildCommand(unittest.TestCase):
         }
         config = {
             "type": "lm-training",
-            "configPath": "configs/base_config.yaml",
+            "configPath": "plugins/tidal/configs/base_config.yaml",
         }
         plugin_dir = "/project/plugins/tidal"
 
@@ -200,7 +200,7 @@ class TestBuildCommand(unittest.TestCase):
         self.assertEqual(args[2], "plugins.tidal.Main")
         self.assertIn("--config", args)
         idx = args.index("--config")
-        self.assertEqual(args[idx + 1], "configs/base_config.yaml")
+        self.assertEqual(args[idx + 1], "plugins/tidal/configs/base_config.yaml")
 
     def test_builds_rl_training_command(self):
         transport = _make_redis_transport()
@@ -219,8 +219,8 @@ class TestBuildCommand(unittest.TestCase):
         }
         config = {
             "type": "rl-training",
-            "configPath": "configs/base_config.yaml",
-            "rlConfigPath": "configs/rl_config.yaml",
+            "configPath": "plugins/tidal/configs/base_config.yaml",
+            "rlConfigPath": "plugins/tidal/configs/rl_config.yaml",
             "checkpoint": "experiments/exp-1/model.pth",
             "timesteps": 5000,
         }

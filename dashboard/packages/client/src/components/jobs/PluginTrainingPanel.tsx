@@ -88,9 +88,7 @@ export default function PluginTrainingPanel() {
 
   const handleStartPhase = (phase: TrainingPhase) => {
     if (dirty || !selectedId) return;
-    const configPath = phase.configFiles?.[0]
-      ? `user-plugins/${selectedId}/${phase.configFiles[0]}`
-      : "";
+    const configPath = phase.configFiles?.[0] ?? "";
     createJob.mutate({
       type: phase.id,
       plugin: pluginName,

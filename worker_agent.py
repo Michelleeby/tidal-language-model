@@ -276,10 +276,21 @@ class WorkerAgent:
             "timesteps": "timesteps",
         }
 
+        # Keys whose values are file paths relative to the plugin directory.
+        # If the value doesn't already start with a known prefix (like
+        # "plugins/" or "user-plugins/"), resolve it against plugin_dir.
+        PATH_KEYS = {"configPath", "rlConfigPath", "checkpoint"}
+
         for arg_key, cli_flag in phase.get("args", {}).items():
             config_key = ARG_CONFIG_MAP.get(arg_key, arg_key)
             value = config.get(config_key)
             if value is not None:
+                if (
+                    config_key in PATH_KEYS
+                    and not value.startswith(("plugins/", "user-plugins/", "experiments/"))
+                    and not os.path.isabs(value)
+                ):
+                    value = os.path.join(plugin_dir, value)
                 args += [cli_flag, str(value)]
 
         return args
