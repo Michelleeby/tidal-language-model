@@ -76,6 +76,11 @@ export interface ServerConfig {
   inferenceUrl: string | null;
   defaultComputeProvider: ComputeProviderType;
   authToken: string | null;
+  jwtSecret: string | null;
+  githubClientId: string | null;
+  githubClientSecret: string | null;
+  dbPath: string;
+  publicUrl: string;
   vastaiApiKey: string | null;
   digitaloceanApiKey: string | null;
   digitaloceanRegion: string;
@@ -107,6 +112,12 @@ export function loadConfig(): ServerConfig {
     defaultComputeProvider:
       (process.env.DEFAULT_COMPUTE_PROVIDER as ComputeProviderType) ?? "local",
     authToken: process.env.TIDAL_AUTH_TOKEN ?? null,
+    jwtSecret: process.env.JWT_SECRET ?? null,
+    githubClientId: process.env.GITHUB_CLIENT_ID ?? null,
+    githubClientSecret: process.env.GITHUB_CLIENT_SECRET ?? null,
+    dbPath:
+      process.env.DB_PATH ?? path.join(projectRoot, "dashboard.db"),
+    publicUrl: process.env.PUBLIC_URL ?? "http://localhost:4400",
     vastaiApiKey: process.env.VASTAI_API_KEY ?? null,
     digitaloceanApiKey: process.env.DO_API_KEY ?? null,
     digitaloceanRegion: process.env.DO_REGION ?? "tor1",

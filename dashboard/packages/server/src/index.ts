@@ -1,12 +1,15 @@
 import Fastify from "fastify";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
+import cookie from "@fastify/cookie";
 import { loadConfig, validateConfig, type ServerConfig } from "./config.js";
 import { PluginRegistry } from "./services/plugin-registry.js";
+import { migrateLegacyReports } from "./services/report-migration.js";
 import redisPlugin from "./plugins/redis.js";
 import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
 import authPlugin from "./plugins/auth.js";
+import databasePlugin from "./plugins/database.js";
 import rateLimitPlugin from "./plugins/rate-limit.js";
 import provisioningPlugin from "./plugins/provisioning.js";
 import experimentsRoutes from "./routes/experiments.js";
@@ -22,6 +25,7 @@ import workerRoutes from "./routes/workers.js";
 import pluginsRoutes from "./routes/plugins.js";
 import configsRoutes from "./routes/configs.js";
 import reportsRoutes from "./routes/reports.js";
+import authRoutes from "./routes/auth.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -73,15 +77,31 @@ async function main() {
   }
   fastify.decorate("pluginRegistry", pluginRegistry);
 
-  // Plugins (order matters: redis before sse, auth/rate-limit after redis, all before routes)
+  // Plugins (order matters: cookie + database before auth, redis before sse, all before routes)
+  await fastify.register(cookie);
   await fastify.register(corsPlugin);
+  await fastify.register(databasePlugin);
   await fastify.register(redisPlugin, { url: config.redisUrl });
   await fastify.register(ssePlugin);
   await fastify.register(authPlugin);
   await fastify.register(rateLimitPlugin);
   await fastify.register(provisioningPlugin);
 
+  // Migrate legacy JSON reports into SQLite (idempotent, runs before routes)
+  const reportsDir = path.join(config.projectRoot, "reports");
+  const migrationResult = await migrateLegacyReports(
+    reportsDir,
+    fastify.db,
+    fastify.log,
+  );
+  if (migrationResult.imported > 0) {
+    fastify.log.info(
+      `Report migration: ${migrationResult.imported} imported, ${migrationResult.skipped} skipped, ${migrationResult.errors} errors`,
+    );
+  }
+
   // API routes
+  await fastify.register(authRoutes);
   await fastify.register(experimentsRoutes);
   await fastify.register(metricsRoutes);
   await fastify.register(rlMetricsRoutes);

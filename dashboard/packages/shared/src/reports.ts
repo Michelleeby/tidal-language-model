@@ -8,6 +8,7 @@ export type BlockContent = Record<string, unknown>;
 /** Full report as stored on disk / returned by GET /api/reports/:id. */
 export interface Report {
   id: string;
+  userId: string | null;
   title: string;
   blocks: BlockContent[];
   createdAt: number; // epoch ms
@@ -17,6 +18,7 @@ export interface Report {
 /** Lightweight summary for list views (no blocks payload). */
 export interface ReportSummary {
   id: string;
+  userId: string | null;
   title: string;
   createdAt: number;
   updatedAt: number;

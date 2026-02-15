@@ -1,8 +1,11 @@
+import { useEffect } from "react";
 import ExperimentSidebar from "./components/notebook/ExperimentSidebar.js";
 import ExperimentNotebook from "./pages/ExperimentNotebook.js";
 import ReportsSidebar from "./components/reports/ReportsSidebar.js";
 import ReportEditor from "./pages/ReportEditor.js";
-import AuthPrompt from "./components/AuthPrompt.js";
+import LoginPage from "./components/LoginPage.js";
+import UserMenu from "./components/UserMenu.js";
+import { useAuthStore, checkAuth } from "./hooks/useAuth.js";
 import { useExperimentStore } from "./stores/experimentStore.js";
 import type { ViewType } from "./stores/experimentStore.js";
 
@@ -13,11 +16,27 @@ const TABS: { id: ViewType; label: string }[] = [
 
 export default function App() {
   const { view, setView, setSidebarOpen } = useExperimentStore();
+  const user = useAuthStore((s) => s.user);
+  const loading = useAuthStore((s) => s.loading);
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
-      <AuthPrompt />
-
       {/* Header */}
       <header className="border-b border-gray-800 px-3 md:px-6 py-3 flex items-center gap-3">
         <button
@@ -48,6 +67,8 @@ export default function App() {
             </button>
           ))}
         </nav>
+
+        <UserMenu />
       </header>
 
       {/* Sidebar + Main Content */}

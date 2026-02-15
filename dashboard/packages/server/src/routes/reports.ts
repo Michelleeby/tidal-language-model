@@ -1,15 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import path from "node:path";
-import { ReportStore } from "../services/report-store.js";
 import type { CreateReportRequest, UpdateReportRequest } from "@tidal/shared";
 
 export default async function reportsRoutes(fastify: FastifyInstance) {
-  const reportsDir = path.join(fastify.serverConfig.projectRoot, "reports");
-  const store = new ReportStore(reportsDir);
-
   // List all reports (summaries only)
   fastify.get("/api/reports", async () => {
-    const reports = await store.list();
+    const reports = fastify.db.listReports();
     return { reports };
   });
 
@@ -17,7 +12,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>(
     "/api/reports/:id",
     async (request, reply) => {
-      const report = await store.get(request.params.id);
+      const report = fastify.db.getReport(request.params.id);
       if (!report) {
         return reply.status(404).send({ error: "Report not found" });
       }
@@ -30,7 +25,9 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
     "/api/reports",
     { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
-      const report = await store.create(request.body?.title);
+      const userId =
+        request.user?.type === "jwt" ? request.user.userId : null;
+      const report = fastify.db.createReport(request.body?.title, userId ?? undefined);
       return reply.status(201).send({ report });
     },
   );
@@ -40,7 +37,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
     "/api/reports/:id",
     { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
-      const report = await store.update(request.params.id, {
+      const report = fastify.db.updateReport(request.params.id, {
         title: request.body?.title,
         blocks: request.body?.blocks,
       });
@@ -56,7 +53,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
     "/api/reports/:id",
     { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
-      const deleted = await store.delete(request.params.id);
+      const deleted = fastify.db.deleteReport(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Report not found" });
       }

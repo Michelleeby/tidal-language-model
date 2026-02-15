@@ -25,21 +25,18 @@ import type {
   UpdateReportRequest,
   DeleteReportResponse,
 } from "@tidal/shared";
-import { getAuthToken, requestAuth } from "../hooks/useAuth.js";
 
 const BASE = "/api";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  const token = getAuthToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  const res = await fetch(url, { ...init, headers });
+  const res = await fetch(url, {
+    ...init,
+    credentials: "include",
+  });
 
   if (res.status === 401) {
-    requestAuth();
+    // Redirect to login page
+    window.location.href = "/";
     throw new Error("Authentication required");
   }
 

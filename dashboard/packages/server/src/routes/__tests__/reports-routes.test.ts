@@ -4,8 +4,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import Fastify from "fastify";
+import cookie from "@fastify/cookie";
+import { SignJWT } from "jose";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../../config.js";
+import { Database } from "../../services/database.js";
 import authPlugin from "../../plugins/auth.js";
 import reportsRoutes from "../reports.js";
 
@@ -14,34 +17,47 @@ import reportsRoutes from "../reports.js";
 // ---------------------------------------------------------------------------
 
 const TEST_TOKEN = "test-secret-token";
+const JWT_SECRET = "test-jwt-secret-at-least-32-chars-long!";
 const AUTH_HEADER = `Bearer ${TEST_TOKEN}`;
 
-const cleanups: string[] = [];
+const cleanups: Array<() => Promise<void>> = [];
 
 async function freshTmpDir(): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "reports-route-test-"));
-  cleanups.push(dir);
+  cleanups.push(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
   return dir;
 }
 
 after(async () => {
-  for (const dir of cleanups) {
-    await fsp.rm(dir, { recursive: true, force: true });
-  }
+  for (const fn of cleanups) await fn();
 });
 
-async function buildApp(projectRoot: string): Promise<FastifyInstance> {
+async function buildApp(): Promise<{ app: FastifyInstance; db: Database }> {
+  const dir = await freshTmpDir();
+  const db = new Database(path.join(dir, "test.db"));
+
   const app = Fastify({ logger: false });
   app.decorate("serverConfig", {
-    projectRoot,
+    projectRoot: dir,
     authToken: TEST_TOKEN,
+    jwtSecret: JWT_SECRET,
   } as unknown as ServerConfig);
+  app.decorate("db", db);
+
+  await app.register(cookie);
   await app.register(authPlugin);
   await app.register(reportsRoutes);
-  return app;
+
+  cleanups.push(async () => {
+    db.close();
+  });
+
+  return { app, db };
 }
 
-/** Helper: create a report with auth, return the report object. */
+/** Helper: create a report with Bearer auth, return the report object. */
 async function createReport(app: FastifyInstance, title?: string) {
   const resp = await app.inject({
     method: "POST",
@@ -53,14 +69,22 @@ async function createReport(app: FastifyInstance, title?: string) {
   return resp.json().report;
 }
 
+async function createJwt(payload: Record<string, unknown>): Promise<string> {
+  const key = new TextEncoder().encode(JWT_SECRET);
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(key);
+}
+
 // ---------------------------------------------------------------------------
 // Auth enforcement
 // ---------------------------------------------------------------------------
 
 describe("Reports auth enforcement", () => {
   it("returns 401 for POST without token", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "POST",
@@ -73,8 +97,7 @@ describe("Reports auth enforcement", () => {
   });
 
   it("returns 401 for PUT without token", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "PUT",
@@ -87,8 +110,7 @@ describe("Reports auth enforcement", () => {
   });
 
   it("returns 401 for DELETE without token", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "DELETE",
@@ -100,8 +122,7 @@ describe("Reports auth enforcement", () => {
   });
 
   it("allows GET /api/reports without token", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "GET",
@@ -113,8 +134,7 @@ describe("Reports auth enforcement", () => {
   });
 
   it("allows GET /api/reports/:id without token", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const report = await createReport(app);
 
@@ -134,8 +154,7 @@ describe("Reports auth enforcement", () => {
 
 describe("POST /api/reports", () => {
   it("creates a report with default title", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "POST",
@@ -154,8 +173,7 @@ describe("POST /api/reports", () => {
   });
 
   it("creates a report with a custom title", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "POST",
@@ -169,6 +187,47 @@ describe("POST /api/reports", () => {
 
     await app.close();
   });
+
+  it("sets userId from JWT cookie", async () => {
+    const { app, db } = await buildApp();
+
+    const user = db.upsertUser({
+      githubId: 42,
+      githubLogin: "jwtuser",
+      githubAvatarUrl: null,
+    });
+
+    const token = await createJwt({ sub: user.id, githubLogin: "jwtuser" });
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports",
+      cookies: { tidal_session: token },
+      payload: { title: "JWT Report" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    const body = resp.json();
+    assert.equal(body.report.userId, user.id);
+
+    await app.close();
+  });
+
+  it("sets userId to null for Bearer auth", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports",
+      headers: { authorization: AUTH_HEADER },
+      payload: { title: "Bearer Report" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.equal(resp.json().report.userId, null);
+
+    await app.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -177,8 +236,7 @@ describe("POST /api/reports", () => {
 
 describe("GET /api/reports", () => {
   it("returns empty list when no reports exist", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "GET",
@@ -192,8 +250,7 @@ describe("GET /api/reports", () => {
   });
 
   it("returns created reports", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     await createReport(app, "A");
     await createReport(app, "B");
@@ -206,6 +263,19 @@ describe("GET /api/reports", () => {
 
     await app.close();
   });
+
+  it("includes userId in summaries", async () => {
+    const { app } = await buildApp();
+
+    await createReport(app, "Test");
+
+    const resp = await app.inject({ method: "GET", url: "/api/reports" });
+    const { reports } = resp.json();
+
+    assert.equal(reports[0].userId, null);
+
+    await app.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -214,8 +284,7 @@ describe("GET /api/reports", () => {
 
 describe("GET /api/reports/:id", () => {
   it("returns a report by id", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const report = await createReport(app, "Test");
 
@@ -232,8 +301,7 @@ describe("GET /api/reports/:id", () => {
   });
 
   it("returns 404 for non-existent id", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "GET",
@@ -252,8 +320,7 @@ describe("GET /api/reports/:id", () => {
 
 describe("PUT /api/reports/:id", () => {
   it("updates report title", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const report = await createReport(app);
 
@@ -271,8 +338,7 @@ describe("PUT /api/reports/:id", () => {
   });
 
   it("updates report blocks", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const report = await createReport(app);
 
@@ -291,8 +357,7 @@ describe("PUT /api/reports/:id", () => {
   });
 
   it("returns 404 for non-existent id", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "PUT",
@@ -313,8 +378,7 @@ describe("PUT /api/reports/:id", () => {
 
 describe("DELETE /api/reports/:id", () => {
   it("deletes an existing report", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const report = await createReport(app);
 
@@ -338,8 +402,7 @@ describe("DELETE /api/reports/:id", () => {
   });
 
   it("returns 404 for non-existent id", async () => {
-    const tmpDir = await freshTmpDir();
-    const app = await buildApp(tmpDir);
+    const { app } = await buildApp();
 
     const resp = await app.inject({
       method: "DELETE",

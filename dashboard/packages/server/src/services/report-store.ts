@@ -25,6 +25,7 @@ export class ReportStore {
     const now = Date.now();
     const report: Report = {
       id: nanoid(),
+      userId: null,
       title: title ?? "Untitled Report",
       blocks: [],
       createdAt: now,
@@ -63,6 +64,7 @@ export class ReportStore {
         const report = JSON.parse(raw) as Report;
         summaries.push({
           id: report.id,
+          userId: report.userId ?? null,
           title: report.title,
           createdAt: report.createdAt,
           updatedAt: report.updatedAt,
