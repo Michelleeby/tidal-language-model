@@ -58,9 +58,11 @@ services:
       - TIDAL_DASHBOARD_URL=${TIDAL_DASHBOARD_URL:-}
       - DO_API_KEY=${DO_API_KEY:-}
       - DO_SSH_KEY=${DO_SSH_KEY:-}
+      - USER_PLUGINS_DIR=/data/user-plugins
     volumes:
       - experiments:/data/experiments
       - db-data:/data
+      - user-plugins:/data/user-plugins
 
   caddy:
     image: caddy:2-alpine
@@ -78,3 +80,4 @@ volumes:
   redis-data:
   experiments:
   db-data:
+  user-plugins:

@@ -5,3 +5,4 @@ export * from "./jobs.js";
 export * from "./plugin-manifest.js";
 export * from "./reports.js";
 export * from "./auth.js";
+export * from "./user-plugins.js";

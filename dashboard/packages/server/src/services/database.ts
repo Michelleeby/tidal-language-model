@@ -1,6 +1,13 @@
 import BetterSqlite3 from "better-sqlite3";
 import { nanoid } from "nanoid";
-import type { Report, ReportSummary, BlockContent, User } from "@tidal/shared";
+import type {
+  Report,
+  ReportSummary,
+  BlockContent,
+  User,
+  UserPlugin,
+  UserPluginSummary,
+} from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
 // Row types (SQLite stores integers, JSON as TEXT)
@@ -20,6 +27,15 @@ interface ReportRow {
   user_id: string | null;
   title: string;
   blocks: string; // JSON text
+  created_at: number;
+  updated_at: number;
+}
+
+interface UserPluginRow {
+  id: string;
+  user_id: string;
+  name: string;
+  display_name: string;
   created_at: number;
   updated_at: number;
 }
@@ -45,6 +61,27 @@ function reportRowToReport(row: ReportRow): Report {
     userId: row.user_id,
     title: row.title,
     blocks: JSON.parse(row.blocks) as BlockContent[],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function pluginRowToPlugin(row: UserPluginRow): UserPlugin {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    displayName: row.display_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function pluginRowToSummary(row: UserPluginRow): UserPluginSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    displayName: row.display_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -97,6 +134,16 @@ export class Database {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS user_plugins (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        name TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(user_id, name)
+      );
     `);
   }
 
@@ -130,6 +177,22 @@ export class Database {
         INSERT OR IGNORE INTO reports (id, user_id, title, blocks, created_at, updated_at)
         VALUES (@id, NULL, @title, @blocks, @createdAt, @updatedAt)
       `),
+
+      createUserPlugin: this.db.prepare(`
+        INSERT INTO user_plugins (id, user_id, name, display_name, created_at, updated_at)
+        VALUES (@id, @userId, @name, @displayName, @now, @now)
+      `),
+      getUserPlugin: this.db.prepare("SELECT * FROM user_plugins WHERE id = ?"),
+      getUserPluginByUserAndName: this.db.prepare(
+        "SELECT * FROM user_plugins WHERE user_id = ? AND name = ?",
+      ),
+      listUserPluginsByUser: this.db.prepare(
+        "SELECT * FROM user_plugins WHERE user_id = ? ORDER BY updated_at DESC",
+      ),
+      updateUserPlugin: this.db.prepare(
+        "UPDATE user_plugins SET display_name = @displayName, updated_at = @now WHERE id = @id",
+      ),
+      deleteUserPlugin: this.db.prepare("DELETE FROM user_plugins WHERE id = ?"),
     };
   }
 
@@ -238,6 +301,81 @@ export class Database {
 
   deleteReport(id: string): boolean {
     const result = this.stmts.deleteReport.run(id);
+    return result.changes > 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // User plugin operations
+  // -------------------------------------------------------------------------
+
+  createUserPlugin(params: {
+    userId: string;
+    name: string;
+    displayName: string;
+  }): UserPlugin {
+    const now = Date.now();
+    const id = nanoid();
+
+    this.stmts.createUserPlugin.run({
+      id,
+      userId: params.userId,
+      name: params.name,
+      displayName: params.displayName,
+      now,
+    });
+
+    return pluginRowToPlugin(
+      this.stmts.getUserPlugin.get(id) as UserPluginRow,
+    );
+  }
+
+  getUserPlugin(id: string): UserPlugin | null {
+    const row = this.stmts.getUserPlugin.get(id) as
+      | UserPluginRow
+      | undefined;
+    return row ? pluginRowToPlugin(row) : null;
+  }
+
+  getUserPluginByUserAndName(
+    userId: string,
+    name: string,
+  ): UserPlugin | null {
+    const row = this.stmts.getUserPluginByUserAndName.get(userId, name) as
+      | UserPluginRow
+      | undefined;
+    return row ? pluginRowToPlugin(row) : null;
+  }
+
+  listUserPluginsByUser(userId: string): UserPluginSummary[] {
+    const rows = this.stmts.listUserPluginsByUser.all(
+      userId,
+    ) as UserPluginRow[];
+    return rows.map(pluginRowToSummary);
+  }
+
+  updateUserPlugin(
+    id: string,
+    patch: { displayName: string },
+  ): UserPlugin | null {
+    const existing = this.stmts.getUserPlugin.get(id) as
+      | UserPluginRow
+      | undefined;
+    if (!existing) return null;
+
+    const now = Date.now();
+    this.stmts.updateUserPlugin.run({
+      id,
+      displayName: patch.displayName,
+      now,
+    });
+
+    return pluginRowToPlugin(
+      this.stmts.getUserPlugin.get(id) as UserPluginRow,
+    );
+  }
+
+  deleteUserPlugin(id: string): boolean {
+    const result = this.stmts.deleteUserPlugin.run(id);
     return result.changes > 0;
   }
 

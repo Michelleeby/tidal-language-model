@@ -3,6 +3,8 @@ import ExperimentSidebar from "./components/notebook/ExperimentSidebar.js";
 import ExperimentNotebook from "./pages/ExperimentNotebook.js";
 import ReportsSidebar from "./components/reports/ReportsSidebar.js";
 import ReportEditor from "./pages/ReportEditor.js";
+import ModelSidebar from "./components/model/ModelSidebar.js";
+import ModelEditor from "./pages/ModelEditor.js";
 import LoginPage from "./components/LoginPage.js";
 import UserMenu from "./components/UserMenu.js";
 import { useAuthStore, checkAuth } from "./hooks/useAuth.js";
@@ -12,6 +14,7 @@ import type { ViewType } from "./stores/experimentStore.js";
 const TABS: { id: ViewType; label: string }[] = [
   { id: "experiments", label: "Experiments" },
   { id: "reports", label: "Reports" },
+  { id: "model", label: "Model" },
 ];
 
 export default function App() {
@@ -80,11 +83,18 @@ export default function App() {
               <ExperimentNotebook />
             </main>
           </>
-        ) : (
+        ) : view === "reports" ? (
           <>
             <ReportsSidebar />
             <main className="flex-1 min-w-0 p-3 md:p-6">
               <ReportEditor />
+            </main>
+          </>
+        ) : (
+          <>
+            <ModelSidebar />
+            <main className="flex-1 min-w-0">
+              <ModelEditor />
             </main>
           </>
         )}

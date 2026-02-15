@@ -24,6 +24,14 @@ import type {
   CreateReportRequest,
   UpdateReportRequest,
   DeleteReportResponse,
+  UserPluginsListResponse,
+  UserPluginResponse,
+  CreateUserPluginRequest,
+  UpdateUserPluginRequest,
+  DeleteUserPluginResponse,
+  PluginFileTreeResponse,
+  PluginFileReadResponse,
+  PluginFileWriteRequest,
 } from "@tidal/shared";
 
 const BASE = "/api";
@@ -149,4 +157,66 @@ export const api = {
     fetchJson<DeleteReportResponse>(`${BASE}/reports/${id}`, {
       method: "DELETE",
     }),
+
+  // User Plugins
+  getUserPlugins: () =>
+    fetchJson<UserPluginsListResponse>(`${BASE}/user-plugins`),
+
+  getUserPlugin: (id: string) =>
+    fetchJson<UserPluginResponse>(`${BASE}/user-plugins/${id}`),
+
+  createUserPlugin: (body: CreateUserPluginRequest) =>
+    fetchJson<UserPluginResponse>(`${BASE}/user-plugins`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  updateUserPlugin: (id: string, body: UpdateUserPluginRequest) =>
+    fetchJson<UserPluginResponse>(`${BASE}/user-plugins/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  deleteUserPlugin: (id: string) =>
+    fetchJson<DeleteUserPluginResponse>(`${BASE}/user-plugins/${id}`, {
+      method: "DELETE",
+    }),
+
+  getPluginFileTree: (pluginId: string) =>
+    fetchJson<PluginFileTreeResponse>(
+      `${BASE}/user-plugins/${pluginId}/files`,
+    ),
+
+  getPluginFile: (pluginId: string, filePath: string) =>
+    fetchJson<PluginFileReadResponse>(
+      `${BASE}/user-plugins/${pluginId}/files/${filePath}`,
+    ),
+
+  savePluginFile: (pluginId: string, filePath: string, content: string) =>
+    fetchJson<{ path: string; saved: boolean }>(
+      `${BASE}/user-plugins/${pluginId}/files/${filePath}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content } satisfies PluginFileWriteRequest),
+      },
+    ),
+
+  createPluginFile: (pluginId: string, filePath: string, content: string) =>
+    fetchJson<{ path: string; created: boolean }>(
+      `${BASE}/user-plugins/${pluginId}/files/${filePath}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content } satisfies PluginFileWriteRequest),
+      },
+    ),
+
+  deletePluginFile: (pluginId: string, filePath: string) =>
+    fetchJson<{ path: string; deleted: boolean }>(
+      `${BASE}/user-plugins/${pluginId}/files/${filePath}`,
+      { method: "DELETE" },
+    ),
 };

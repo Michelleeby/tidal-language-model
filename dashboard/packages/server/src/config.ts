@@ -87,6 +87,7 @@ export interface ServerConfig {
   digitaloceanSshKey: string | null;
   repoUrl: string | null;
   dashboardUrl: string | null;
+  userPluginsDir: string;
 }
 
 export function loadConfig(): ServerConfig {
@@ -124,5 +125,7 @@ export function loadConfig(): ServerConfig {
     digitaloceanSshKey: process.env.DO_SSH_KEY ?? null,
     repoUrl: process.env.TIDAL_REPO_URL ?? null,
     dashboardUrl: process.env.TIDAL_DASHBOARD_URL ?? null,
+    userPluginsDir:
+      process.env.USER_PLUGINS_DIR ?? path.join(projectRoot, "user-plugins"),
   };
 }
