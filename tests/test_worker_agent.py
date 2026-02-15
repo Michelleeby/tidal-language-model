@@ -828,15 +828,20 @@ class TestLogStreaming(unittest.TestCase):
 class TestRunTrainingUserPlugins(unittest.TestCase):
     """Tests for _run_training with pluginRepoUrl and pluginDir."""
 
-    def test_clones_plugin_repo_when_pluginRepoUrl_present(self):
-        """When pluginRepoUrl is in config, git clone to plugins/<name>/."""
+    def test_uses_pluginName_for_remote_user_plugin(self):
+        """When pluginName is set (remote GPU), uses plugins/<name>/ directly.
+
+        On remote GPUs, the onstart script already cloned the user repo into
+        plugins/<name>/ before the worker starts, so _run_training just needs
+        to read the manifest from that directory — no clone needed.
+        """
         transport = _make_http_transport()
         agent = _make_agent(transport)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             agent._project_root = tmpdir
 
-            # Create the plugins dir and a manifest that will exist after "clone"
+            # Simulate the onstart script having already cloned the user repo
             plugin_dir = os.path.join(tmpdir, "plugins", "my_model")
             os.makedirs(plugin_dir, exist_ok=True)
             manifest = {
@@ -856,27 +861,17 @@ class TestRunTrainingUserPlugins(unittest.TestCase):
                 "type": "lm-training",
                 "plugin": "my_model",
                 "configPath": "plugins/my_model/configs/base_config.yaml",
-                "pluginRepoUrl": "https://github.com/user/tidal-plugin-my_model.git",
                 "pluginName": "my_model",
             }
 
-            clone_called = []
-            def fake_clone(url, dest):
-                clone_called.append((url, dest))
-                # Simulate clone creating the dir (already exists from setup)
-
-            with patch.object(agent, "_clone_plugin_repo", side_effect=fake_clone):
-                with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
-                    result = agent._run_training(config)
+            with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
+                result = agent._run_training(config)
 
             self.assertEqual(result, 0)
-            self.assertEqual(len(clone_called), 1)
-            self.assertEqual(
-                clone_called[0][0],
-                "https://github.com/user/tidal-plugin-my_model.git",
-            )
-            self.assertIn("plugins", clone_called[0][1])
-            self.assertIn("my_model", clone_called[0][1])
+            # No extra_env — remote user plugins are at plugins/<name>/ just like system plugins
+            call_kwargs = mock_spawn.call_args
+            extra_env = call_kwargs[1].get("extra_env") or call_kwargs.kwargs.get("extra_env")
+            self.assertIsNone(extra_env)
 
     def test_uses_pluginDir_for_local_user_plugin(self):
         """When pluginDir is in config, uses that dir and sets PYTHONPATH."""
@@ -1064,57 +1059,6 @@ class TestSpawnAndMonitorExtraEnv(unittest.TestCase):
             self.assertIn("TRAINING_JOB_ID", env)
             self.assertIn("METRICS_REDIS_PREFIX", env)
 
-
-# ---------------------------------------------------------------------------
-# _clone_plugin_repo
-# ---------------------------------------------------------------------------
-
-class TestClonePluginRepo(unittest.TestCase):
-    """Tests for _clone_plugin_repo helper."""
-
-    def test_runs_git_clone(self):
-        """Calls subprocess.run with git clone."""
-        transport = _make_http_transport()
-        agent = _make_agent(transport)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent._project_root = tmpdir
-            dest = os.path.join(tmpdir, "plugins", "my_model")
-
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0)
-                agent._clone_plugin_repo(
-                    "https://github.com/user/repo.git",
-                    dest,
-                )
-
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            self.assertEqual(cmd[0], "git")
-            self.assertEqual(cmd[1], "clone")
-            self.assertIn("https://github.com/user/repo.git", cmd)
-            self.assertIn(dest, cmd)
-
-    def test_raises_on_clone_failure(self):
-        """Raises RuntimeError if git clone exits non-zero."""
-        transport = _make_http_transport()
-        agent = _make_agent(transport)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent._project_root = tmpdir
-            dest = os.path.join(tmpdir, "plugins", "my_model")
-
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    returncode=128,
-                    stderr="fatal: repo not found",
-                )
-                with self.assertRaises(RuntimeError) as ctx:
-                    agent._clone_plugin_repo(
-                        "https://github.com/user/repo.git",
-                        dest,
-                    )
-                self.assertIn("clone", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

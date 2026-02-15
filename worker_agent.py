@@ -233,18 +233,6 @@ class WorkerAgent:
         with open(manifest_path) as f:
             return dict(yaml.load(f))
 
-    def _clone_plugin_repo(self, repo_url: str, dest: str) -> None:
-        """Clone a user plugin repo via git."""
-        result = subprocess.run(
-            ["git", "clone", repo_url, dest],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to clone plugin repo: {result.stderr}"
-            )
-
     def _find_phase(self, manifest: dict, job_type: str) -> dict:
         """Look up a training phase by ID in a manifest."""
         for phase in manifest["trainingPhases"]:
@@ -341,29 +329,25 @@ class WorkerAgent:
     def _run_training(self, config: dict) -> int:
         """Build and run a training command from the plugin manifest.
 
-        Supports three modes:
-        1. pluginRepoUrl: clone the user's repo into plugins/<name>/, then
-           run from there (remote GPU path).
-        2. pluginDir: use the directory directly, set PYTHONPATH so the
+        Supports two modes:
+        1. pluginDir: use the directory directly, set PYTHONPATH so the
            module can be found (local user plugin path).
-        3. Neither: standard system plugin in plugins/<name>/.
+        2. Default: standard plugin in plugins/<name>/ — works for both
+           system plugins and remote user plugins (whose repo is cloned
+           into plugins/<name>/ by the onstart script before the worker
+           starts).
         """
         plugin_name = config.get("plugin", "tidal")
         extra_env = None
 
-        if config.get("pluginRepoUrl") and config.get("pluginName"):
-            # Remote GPU: clone user plugin repo into plugins/<name>/
-            dest = os.path.join(self._project_root, "plugins", config["pluginName"])
-            self._clone_plugin_repo(config["pluginRepoUrl"], dest)
-            plugin_dir = dest
-        elif config.get("pluginDir"):
+        if config.get("pluginDir"):
             # Local user plugin: resolve relative to project root
             plugin_dir = os.path.join(self._project_root, config["pluginDir"])
             # PYTHONPATH includes parent so `python -m <name>.Main` works
             parent = os.path.dirname(plugin_dir)
             extra_env = {"PYTHONPATH": parent}
         else:
-            # System plugin
+            # System plugin or remote user plugin (already at plugins/<name>/)
             plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)
 
         manifest = self._load_manifest_from_dir(plugin_dir)
