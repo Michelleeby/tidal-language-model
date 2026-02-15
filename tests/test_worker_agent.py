@@ -958,6 +958,51 @@ class TestRunTrainingUserPlugins(unittest.TestCase):
             extra_env = call_kwargs[1].get("extra_env") or call_kwargs.kwargs.get("extra_env")
             self.assertIsNone(extra_env)
 
+    def test_falls_back_when_pluginDir_does_not_exist(self):
+        """On remote GPUs, pluginDir points to a local-only path that doesn't
+        exist. The worker should fall back to plugins/<plugin>/ which was
+        cloned by the onstart script.
+        """
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent._project_root = tmpdir
+
+            # Create the plugin at plugins/<name>/ (as onstart script would)
+            plugin_dir = os.path.join(tmpdir, "plugins", "my_model")
+            os.makedirs(plugin_dir, exist_ok=True)
+            manifest = {
+                "name": "my_model",
+                "trainingPhases": [{
+                    "id": "lm-training",
+                    "entrypoint": "Main.py",
+                    "args": {"config": "--config"},
+                }],
+                "metrics": {"redisPrefix": "my_model"},
+            }
+            yaml = YAML()
+            with open(os.path.join(plugin_dir, "manifest.yaml"), "w") as f:
+                yaml.dump(manifest, f)
+
+            # Do NOT create user-plugins/user123/my_model/ — simulates remote GPU
+            config = {
+                "type": "lm-training",
+                "plugin": "my_model",
+                "configPath": "plugins/my_model/configs/base_config.yaml",
+                "pluginDir": "user-plugins/user123/my_model",  # doesn't exist
+                "pluginName": "my_model",
+            }
+
+            with patch.object(agent, "_spawn_and_monitor", return_value=0) as mock_spawn:
+                result = agent._run_training(config)
+
+            self.assertEqual(result, 0)
+            # Should have fallen back to plugins/<name>/ — no PYTHONPATH needed
+            call_kwargs = mock_spawn.call_args
+            extra_env = call_kwargs[1].get("extra_env") or call_kwargs.kwargs.get("extra_env")
+            self.assertIsNone(extra_env)
+
 
 # ---------------------------------------------------------------------------
 # _build_command — non-plugins/ directory

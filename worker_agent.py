@@ -340,9 +340,16 @@ class WorkerAgent:
         plugin_name = config.get("plugin", "tidal")
         extra_env = None
 
-        if config.get("pluginDir"):
+        plugin_dir_cfg = config.get("pluginDir")
+        resolved = (
+            os.path.join(self._project_root, plugin_dir_cfg)
+            if plugin_dir_cfg
+            else None
+        )
+
+        if resolved and os.path.isdir(resolved):
             # Local user plugin: resolve relative to project root
-            plugin_dir = os.path.join(self._project_root, config["pluginDir"])
+            plugin_dir = resolved
             # PYTHONPATH includes parent so `python -m <name>.Main` works
             parent = os.path.dirname(plugin_dir)
             extra_env = {"PYTHONPATH": parent}
