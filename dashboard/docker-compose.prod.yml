@@ -46,6 +46,11 @@ services:
       - REDIS_URL=redis://redis:6379
       - INFERENCE_URL=http://inference:5000
       - TIDAL_AUTH_TOKEN=${TIDAL_AUTH_TOKEN}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - JWT_SECRET=${JWT_SECRET}
+      - DB_PATH=/data/dashboard.db
+      - PUBLIC_URL=${TIDAL_DASHBOARD_URL:-http://localhost:4400}
       - EXPERIMENTS_DIR=/data/experiments
       - DEFAULT_COMPUTE_PROVIDER=${DEFAULT_COMPUTE_PROVIDER:-local}
       - VASTAI_API_KEY=${VASTAI_API_KEY:-}
@@ -55,6 +60,7 @@ services:
       - DO_SSH_KEY=${DO_SSH_KEY:-}
     volumes:
       - experiments:/data/experiments
+      - db-data:/data
 
   caddy:
     image: caddy:2-alpine
@@ -71,3 +77,4 @@ services:
 volumes:
   redis-data:
   experiments:
+  db-data:
