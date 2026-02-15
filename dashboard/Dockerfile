@@ -18,6 +18,7 @@ RUN npm run build -w packages/shared && \
 
 # ---- Production stage ----
 FROM node:20-alpine
+RUN apk add --no-cache git
 WORKDIR /app/dashboard
 
 COPY dashboard/package.json dashboard/package-lock.json ./
