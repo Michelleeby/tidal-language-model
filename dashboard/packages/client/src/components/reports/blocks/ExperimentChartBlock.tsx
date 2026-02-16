@@ -153,10 +153,17 @@ export function extractValues(
 
 const RL_KEYS: ReadonlySet<string> = new Set([
   "episode_rewards",
-  "episode_lengths",
   "policy_loss",
   "value_loss",
   "entropy",
+  "gate_creativity",
+  "gate_focus",
+  "gate_stability",
+  "reward_perplexity",
+  "reward_diversity",
+  "reward_repetition",
+  "reward_coherence",
+  "explained_variance",
 ]);
 
 /** Extract a numeric array from an RLTrainingHistory by key. */
@@ -165,7 +172,7 @@ export function extractRLValues(
   key: string,
 ): number[] {
   if (!history || !RL_KEYS.has(key)) return [];
-  return (history[key as keyof RLTrainingHistory] as number[]).filter(
+  return ((history[key as keyof RLTrainingHistory] as number[] | undefined) ?? []).filter(
     (v) => !isNaN(v),
   );
 }
@@ -215,10 +222,17 @@ export function metricOptionsForMode(
     case "rl":
       return [
         { value: "episode_rewards", label: "Episode Rewards" },
-        { value: "episode_lengths", label: "Episode Lengths" },
         { value: "policy_loss", label: "Policy Loss" },
         { value: "value_loss", label: "Value Loss" },
         { value: "entropy", label: "Entropy" },
+        { value: "gate_creativity", label: "Gate: Creativity" },
+        { value: "gate_focus", label: "Gate: Focus" },
+        { value: "gate_stability", label: "Gate: Stability" },
+        { value: "reward_perplexity", label: "Reward: Perplexity" },
+        { value: "reward_diversity", label: "Reward: Diversity" },
+        { value: "reward_repetition", label: "Reward: Repetition" },
+        { value: "reward_coherence", label: "Reward: Coherence" },
+        { value: "explained_variance", label: "Explained Variance" },
       ];
     case "ablation":
       return [
@@ -319,10 +333,17 @@ function MiniChart({
 
 const RL_COLORS: Record<string, string> = {
   episode_rewards: "#22c55e",
-  episode_lengths: "#14b8a6",
   policy_loss: "#ef4444",
   value_loss: "#3b82f6",
   entropy: "#f59e0b",
+  gate_creativity: "#f472b6",
+  gate_focus: "#60a5fa",
+  gate_stability: "#34d399",
+  reward_perplexity: "#c084fc",
+  reward_diversity: "#4ade80",
+  reward_repetition: "#fb923c",
+  reward_coherence: "#38bdf8",
+  explained_variance: "#a78bfa",
 };
 
 /** Canvas line chart for RL training metrics. */

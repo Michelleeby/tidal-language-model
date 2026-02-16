@@ -21,10 +21,17 @@ export interface TrainingStatus {
 /** RL training history (matches RLTrainer._save_metrics output). */
 export interface RLTrainingHistory {
   episode_rewards: number[];
-  episode_lengths: number[];
   policy_loss: number[];
   value_loss: number[];
   entropy: number[];
+  gate_creativity?: number[];
+  gate_focus?: number[];
+  gate_stability?: number[];
+  reward_perplexity?: number[];
+  reward_diversity?: number[];
+  reward_repetition?: number[];
+  reward_coherence?: number[];
+  explained_variance?: number[];
 }
 
 /** RL metrics snapshot from Redis / disk. */

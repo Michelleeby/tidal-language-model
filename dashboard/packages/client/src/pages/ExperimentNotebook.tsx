@@ -17,7 +17,9 @@ import PerplexityChart from "../components/charts/PerplexityChart.js";
 import ThroughputChart from "../components/charts/ThroughputChart.js";
 import RLRewardCurve from "../components/charts/RLRewardCurve.js";
 import RLLossChart from "../components/charts/RLLossChart.js";
-import RLEpisodeLengthChart from "../components/charts/RLEpisodeLengthChart.js";
+import RLGateSignalsChart from "../components/charts/RLGateSignalsChart.js";
+import RLRewardComponentsChart from "../components/charts/RLRewardComponentsChart.js";
+import RLExplainedVarianceChart from "../components/charts/RLExplainedVarianceChart.js";
 import AblationComparison from "../components/charts/AblationComparison.js";
 import CheckpointBrowser from "../components/charts/CheckpointBrowser.js";
 import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
@@ -336,15 +338,50 @@ export default function ExperimentNotebook() {
                     />
                   }
                 />
-                <RLEpisodeLengthChart
+                <RLGateSignalsChart
                   history={rlHistory}
                   actions={
                     <ChartExportButton
                       data={{
-                        headers: ["episode", "mean_length"],
-                        rows: rlHistory!.episode_lengths.map((l, i) => [i, l]),
+                        headers: ["step", "creativity", "focus", "stability"],
+                        rows: (rlHistory!.gate_creativity ?? []).map((_, i) => [
+                          i,
+                          rlHistory!.gate_creativity?.[i] ?? 0,
+                          rlHistory!.gate_focus?.[i] ?? 0,
+                          rlHistory!.gate_stability?.[i] ?? 0,
+                        ]),
                       }}
-                      filename="rl_episode_lengths"
+                      filename="rl_gate_signals"
+                    />
+                  }
+                />
+                <RLRewardComponentsChart
+                  history={rlHistory}
+                  actions={
+                    <ChartExportButton
+                      data={{
+                        headers: ["step", "perplexity", "diversity", "repetition", "coherence"],
+                        rows: (rlHistory!.reward_perplexity ?? []).map((_, i) => [
+                          i,
+                          rlHistory!.reward_perplexity?.[i] ?? 0,
+                          rlHistory!.reward_diversity?.[i] ?? 0,
+                          rlHistory!.reward_repetition?.[i] ?? 0,
+                          rlHistory!.reward_coherence?.[i] ?? 0,
+                        ]),
+                      }}
+                      filename="rl_reward_components"
+                    />
+                  }
+                />
+                <RLExplainedVarianceChart
+                  history={rlHistory}
+                  actions={
+                    <ChartExportButton
+                      data={{
+                        headers: ["step", "explained_variance"],
+                        rows: (rlHistory!.explained_variance ?? []).map((v, i) => [i, v]),
+                      }}
+                      filename="rl_explained_variance"
                     />
                   }
                 />
