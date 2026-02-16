@@ -125,48 +125,35 @@ class RewardComputer:
 
     def compute_diversity_reward(
         self,
-        generated_tokens: List[int],
-        window_size: int = 20
+        logits: torch.Tensor,
     ) -> float:
         """
-        Compute diversity-based reward measuring vocabulary variety.
+        Compute diversity reward from logits-distribution entropy.
 
-        Uses distinct-n metrics (ratio of unique n-grams) on recent tokens.
+        Measures H(softmax(logits)) and rewards proximity to the entropy
+        target via a Gaussian. This replaces the previous distinct-n metric
+        which was trivially saturated at ~1.0 with BPE tokenization.
+
+        The creativity gate controls temperature which directly affects
+        logits entropy, creating a real gradient signal for the RL agent.
 
         Args:
-            generated_tokens: All generated tokens so far
-            window_size: Number of recent tokens to consider
+            logits: Logits for next token prediction (vocab_size,)
 
         Returns:
-            Diversity reward in [0, 1] range
+            Diversity reward in [0, 1] range, peaking at entropy_target
         """
-        if len(generated_tokens) < 2:
-            return 0.5  # Neutral for short sequences
+        probs = F.softmax(logits, dim=-1)
+        log_probs = F.log_softmax(logits, dim=-1)
+        entropy = -(probs * log_probs).sum().item()
 
-        # Use recent window
-        recent = generated_tokens[-window_size:] if len(generated_tokens) > window_size else generated_tokens
+        # Gaussian reward centered on target entropy
+        # bandwidth = target / 2 gives useful gradient across the range
+        bandwidth = self.entropy_target * 0.5
+        deviation = entropy - self.entropy_target
+        reward = math.exp(-0.5 * (deviation / bandwidth) ** 2)
 
-        # Distinct-1: unique unigrams / total unigrams
-        distinct_1 = len(set(recent)) / len(recent)
-
-        # Distinct-2: unique bigrams / total bigrams
-        if len(recent) > 1:
-            bigrams = [(recent[i], recent[i+1]) for i in range(len(recent) - 1)]
-            distinct_2 = len(set(bigrams)) / len(bigrams)
-        else:
-            distinct_2 = 1.0
-
-        # Distinct-3: unique trigrams / total trigrams
-        if len(recent) > 2:
-            trigrams = [(recent[i], recent[i+1], recent[i+2]) for i in range(len(recent) - 2)]
-            distinct_3 = len(set(trigrams)) / len(trigrams)
-        else:
-            distinct_3 = 1.0
-
-        # Weighted combination
-        diversity = 0.3 * distinct_1 + 0.4 * distinct_2 + 0.3 * distinct_3
-
-        return diversity
+        return reward
 
     def compute_repetition_penalty(
         self,
@@ -281,7 +268,7 @@ class RewardComputer:
         """
         # Compute individual components
         perplexity_reward = self.compute_perplexity_reward(logits, new_token)
-        diversity_reward = self.compute_diversity_reward(generated_tokens + [new_token])
+        diversity_reward = self.compute_diversity_reward(logits)
 
         repetition_penalty = self.compute_repetition_penalty(generated_tokens, new_token)
 

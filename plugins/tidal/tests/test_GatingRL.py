@@ -4,6 +4,7 @@ test_GatingRL.py
 Unit tests for the RL Gating Controller components.
 """
 
+import math
 import torch
 import numpy as np
 import unittest
@@ -92,19 +93,26 @@ class TestRewardComputer(unittest.TestCase):
             "RL_REWARD_REPETITION_WEIGHT": 0.2,
             "RL_REWARD_COHERENCE_WEIGHT": 0.1,
             "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_ENTROPY_TARGET": 5.0,
         }
         self.vocab_size = 1000
         self.reward_computer = RewardComputer(self.config, self.vocab_size)
 
-    def test_diversity_reward_high_diversity(self):
-        tokens = list(range(20))
-        diversity = self.reward_computer.compute_diversity_reward(tokens)
-        self.assertGreater(diversity, 0.9)
+    def test_diversity_reward_peaked_logits(self):
+        """Peaked logits (near-deterministic) produce low diversity reward."""
+        logits = torch.full((1000,), -100.0)
+        logits[0] = 10.0
+        diversity = self.reward_computer.compute_diversity_reward(logits)
+        self.assertLess(diversity, 0.3)
 
-    def test_diversity_reward_low_diversity(self):
-        tokens = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        diversity = self.reward_computer.compute_diversity_reward(tokens)
-        self.assertLess(diversity, 0.5)
+    def test_diversity_reward_target_entropy(self):
+        """Logits near target entropy produce high diversity reward."""
+        # Uniform over exp(5) ≈ 148 tokens gives entropy ≈ 5.0
+        logits = torch.full((1000,), -100.0)
+        k = int(math.exp(5.0))
+        logits[:k] = 0.0
+        diversity = self.reward_computer.compute_diversity_reward(logits)
+        self.assertGreater(diversity, 0.8)
 
     def test_repetition_penalty(self):
         tokens = [1, 2, 3, 4, 5]
@@ -126,6 +134,98 @@ class TestRewardComputer(unittest.TestCase):
         self.assertIn("diversity", components)
         self.assertIn("repetition", components)
         self.assertIn("coherence", components)
+
+
+class TestLogitsEntropyDiversity(unittest.TestCase):
+    """Tests that diversity reward uses logits entropy, not trivially-saturated distinct-n."""
+
+    def setUp(self):
+        self.config = {
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_ENTROPY_TARGET": 5.0,
+        }
+        self.vocab_size = 1000
+        self.rc = RewardComputer(self.config, self.vocab_size)
+
+    def test_accepts_logits_tensor(self):
+        """compute_diversity_reward takes a logits tensor, not a token list."""
+        logits = torch.randn(1000)
+        reward = self.rc.compute_diversity_reward(logits)
+        self.assertIsInstance(reward, float)
+
+    def test_reward_always_in_0_1(self):
+        """Output is always in [0, 1] for arbitrary logits."""
+        for _ in range(50):
+            logits = torch.randn(1000) * 10
+            reward = self.rc.compute_diversity_reward(logits)
+            self.assertGreaterEqual(reward, 0.0)
+            self.assertLessEqual(reward, 1.0)
+
+    def test_peaked_logits_low_reward(self):
+        """Near-deterministic distribution (entropy ≈ 0) gives low reward."""
+        logits = torch.full((1000,), -100.0)
+        logits[0] = 10.0
+        reward = self.rc.compute_diversity_reward(logits)
+        self.assertLess(reward, 0.2)
+
+    def test_target_entropy_peak_reward(self):
+        """Logits with entropy ≈ target give reward near 1.0."""
+        # Uniform over exp(5) ≈ 148 tokens → entropy ≈ 5.0
+        logits = torch.full((1000,), -100.0)
+        k = int(math.exp(5.0))
+        logits[:k] = 0.0
+        reward = self.rc.compute_diversity_reward(logits)
+        self.assertGreater(reward, 0.8)
+
+    def test_uniform_logits_below_peak(self):
+        """Uniform over full vocab (entropy=log(1000)≈6.9 > target=5.0) gives < 1.0."""
+        logits = torch.zeros(1000)
+        reward = self.rc.compute_diversity_reward(logits)
+        self.assertLess(reward, 1.0)
+        self.assertGreater(reward, 0.1)  # not zero, still reasonable entropy
+
+    def test_gradient_signal_not_saturated(self):
+        """Different logits produce meaningfully different rewards — not all ≈ 1.0."""
+        # Peaked (entropy ≈ 0)
+        logits_peaked = torch.full((1000,), -100.0)
+        logits_peaked[0] = 10.0
+
+        # Near-target (entropy ≈ 5.0)
+        logits_target = torch.full((1000,), -100.0)
+        logits_target[:int(math.exp(5.0))] = 0.0
+
+        # Uniform (entropy ≈ 6.9)
+        logits_uniform = torch.zeros(1000)
+
+        r_peaked = self.rc.compute_diversity_reward(logits_peaked)
+        r_target = self.rc.compute_diversity_reward(logits_target)
+        r_uniform = self.rc.compute_diversity_reward(logits_uniform)
+
+        # Target entropy gives highest reward
+        self.assertGreater(r_target, r_peaked)
+        self.assertGreater(r_target, r_uniform)
+        # All three are distinct — no saturation
+        self.assertGreater(r_target - r_peaked, 0.3)
+
+    def test_config_entropy_target_used(self):
+        """Different RL_ENTROPY_TARGET values shift the peak."""
+        config_low = dict(self.config, RL_ENTROPY_TARGET=2.0)
+        config_high = dict(self.config, RL_ENTROPY_TARGET=6.0)
+        rc_low = RewardComputer(config_low, self.vocab_size)
+        rc_high = RewardComputer(config_high, self.vocab_size)
+
+        # Logits with entropy ≈ 2.0 (uniform over exp(2) ≈ 7 tokens)
+        logits_low_ent = torch.full((1000,), -100.0)
+        logits_low_ent[:7] = 0.0
+
+        # rc_low (target=2.0) should reward this more than rc_high (target=6.0)
+        r_low_target = rc_low.compute_diversity_reward(logits_low_ent)
+        r_high_target = rc_high.compute_diversity_reward(logits_low_ent)
+        self.assertGreater(r_low_target, r_high_target)
 
 
 class TestGatingPolicyAgent(unittest.TestCase):
