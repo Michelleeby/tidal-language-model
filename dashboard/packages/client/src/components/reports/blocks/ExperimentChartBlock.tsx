@@ -85,21 +85,23 @@ export const ExperimentChartBlock = createReactBlockSpec(
                   </option>
                 ))}
               </select>
-              <select
-                className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-sm px-2 py-1"
-                value={activeMetricKey}
-                onChange={(e) => {
-                  editor.updateBlock(block, {
-                    props: { [metricPropName]: e.target.value },
-                  });
-                }}
-              >
-                {modeOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              {chartMode !== "ablation" && (
+                <select
+                  className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-sm px-2 py-1"
+                  value={activeMetricKey}
+                  onChange={(e) => {
+                    editor.updateBlock(block, {
+                      props: { [metricPropName]: e.target.value },
+                    });
+                  }}
+                >
+                  {modeOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
 
@@ -119,9 +121,7 @@ export const ExperimentChartBlock = createReactBlockSpec(
             />
           ) : chartMode === "ablation" ? (
             <MiniAblationChart
-              key={ablationMetricKey}
               results={ablationData?.results ?? null}
-              metricKey={ablationMetricKey}
             />
           ) : points.length === 0 ? (
             <div className="text-gray-500 text-sm py-8 text-center">
@@ -183,6 +183,28 @@ export function extractAblationValues(
     return { labels, values, errors };
   }
   return { labels, values };
+}
+
+const ABLATION_SERIES = [
+  { key: "mean_reward", label: "reward", color: "#3b82f6" },
+  { key: "mean_diversity", label: "diversity", color: "#22c55e" },
+  { key: "mean_perplexity", label: "perplexity", color: "#a855f7" },
+] as const;
+
+/** Extract all ablation metrics grouped by policy for a grouped bar chart. */
+export function extractAllAblationMetrics(
+  results: AblationResults | null,
+): {
+  policies: string[];
+  series: Array<{ key: string; label: string; color: string; values: number[] }>;
+} {
+  if (!results) return { policies: [], series: [] };
+  const policies = Object.keys(results);
+  const series = ABLATION_SERIES.map((m) => ({
+    ...m,
+    values: policies.map((p) => (results[p] as any)[m.key] as number),
+  }));
+  return { policies, series };
 }
 
 /** Return the metric select options for a given chart mode. */
@@ -390,15 +412,18 @@ function MiniRLChart({
   );
 }
 
-/** Canvas grouped bar chart for ablation study results. */
+const ABLATION_H = 250;
+
+/** Canvas grouped bar chart for ablation study results — shows all metrics. */
 function MiniAblationChart({
   results,
-  metricKey,
 }: {
   results: AblationResults | null;
-  metricKey: string;
 }) {
-  const { labels, values, errors } = extractAblationValues(results, metricKey);
+  const { policies, series } = extractAllAblationMetrics(results);
+
+  // Collect every value across all series to find the global range.
+  const allValues = series.flatMap((s) => s.values);
 
   const canvasRef = (canvas: HTMLCanvasElement | null) => {
     if (!canvas) return;
@@ -407,107 +432,133 @@ function MiniAblationChart({
 
     const dpr = window.devicePixelRatio || 1;
     canvas.width = BASE_W * dpr;
-    canvas.height = BASE_H * dpr;
+    canvas.height = ABLATION_H * dpr;
     canvas.style.width = `${BASE_W}px`;
-    canvas.style.height = `${BASE_H}px`;
+    canvas.style.height = `${ABLATION_H}px`;
     ctx.scale(dpr, dpr);
 
-    if (values.length === 0) return;
+    if (allValues.length === 0) return;
 
-    ctx.clearRect(0, 0, BASE_W, BASE_H);
+    ctx.clearRect(0, 0, BASE_W, ABLATION_H);
 
-    const minVal = Math.min(...values);
-    const maxVal = Math.max(...values.map((v, i) => v + (errors?.[i] ?? 0)));
-    const range = maxVal - minVal || 1;
-    const barPadding = 12;
-    const labelArea = 20;
-    const chartH = BASE_H - labelArea - 8;
-    const barWidth = Math.min(60, (BASE_W - barPadding * 2) / values.length - barPadding);
-    const totalBarsWidth = values.length * (barWidth + barPadding) - barPadding;
-    const startX = (BASE_W - totalBarsWidth) / 2;
+    const dataMin = Math.min(...allValues);
+    const dataMax = Math.max(...allValues);
+    // Ensure the zero line is always visible in the chart range.
+    const rangeMin = Math.min(dataMin, 0);
+    const rangeMax = Math.max(dataMax, 0);
+    const range = rangeMax - rangeMin || 1;
 
-    // Grid lines
+    const yAxisW = 44;
+    const labelArea = 22;
+    const legendH = 20;
+    const chartTop = 8;
+    const chartH = ABLATION_H - labelArea - chartTop - legendH;
+    const chartW = BASE_W - yAxisW;
+
+    /** Map a data value to a y pixel. */
+    const toY = (v: number) => chartTop + chartH - ((v - rangeMin) / range) * chartH;
+    const zeroY = toY(0);
+
+    // Grid lines at nice intervals
     ctx.strokeStyle = "#374151";
     ctx.lineWidth = 0.5;
-    for (let i = 0; i < 4; i++) {
-      const y = 8 + (chartH / 4) * i;
+    const gridSteps = 4;
+    for (let i = 0; i <= gridSteps; i++) {
+      const v = rangeMin + (range / gridSteps) * i;
+      const y = toY(v);
       ctx.beginPath();
-      ctx.moveTo(0, y);
+      ctx.moveTo(yAxisW, y);
       ctx.lineTo(BASE_W, y);
       ctx.stroke();
+
+      // Y-axis tick labels
+      ctx.fillStyle = "#9ca3af";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(v.toFixed(1), yAxisW - 4, y + 3);
     }
 
-    for (let i = 0; i < values.length; i++) {
-      const x = startX + i * (barWidth + barPadding);
-      const barH = ((values[i] - minVal) / range) * chartH;
-      const y = 8 + chartH - barH;
+    // Zero line (heavier)
+    ctx.strokeStyle = "#6b7280";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(yAxisW, zeroY);
+    ctx.lineTo(BASE_W, zeroY);
+    ctx.stroke();
 
-      // Bar
-      ctx.fillStyle = "#3b82f6";
-      ctx.fillRect(x, y, barWidth, barH);
+    // Grouped bars
+    const numSeries = series.length;
+    const groupPadding = 24;
+    const groupW = (chartW - groupPadding) / policies.length;
+    const barGap = 2;
+    const barWidth = Math.min(
+      24,
+      (groupW - groupPadding - barGap * (numSeries - 1)) / numSeries,
+    );
+    const barsBlockW = numSeries * barWidth + (numSeries - 1) * barGap;
 
-      // Error bar
-      if (errors?.[i] != null) {
-        const errH = (errors[i] / range) * chartH;
-        const cx = x + barWidth / 2;
-        ctx.strokeStyle = "#9ca3af";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(cx, y - errH);
-        ctx.lineTo(cx, y + errH);
-        ctx.stroke();
-        // Caps
-        ctx.beginPath();
-        ctx.moveTo(cx - 3, y - errH);
-        ctx.lineTo(cx + 3, y - errH);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(cx - 3, y + errH);
-        ctx.lineTo(cx + 3, y + errH);
-        ctx.stroke();
+    for (let pi = 0; pi < policies.length; pi++) {
+      const groupX = yAxisW + groupPadding / 2 + pi * groupW;
+      const barsStartX = groupX + (groupW - barsBlockW) / 2;
+
+      for (let si = 0; si < numSeries; si++) {
+        const val = series[si].values[pi];
+        const x = barsStartX + si * (barWidth + barGap);
+        const barTop = val >= 0 ? toY(val) : zeroY;
+        const barH = Math.abs(val) / range * chartH;
+
+        ctx.fillStyle = series[si].color;
+        ctx.fillRect(x, barTop, barWidth, barH);
       }
 
-      // Label
+      // Policy label
       ctx.fillStyle = "#9ca3af";
-      ctx.font = "9px monospace";
+      ctx.font = "10px monospace";
       ctx.textAlign = "center";
+      const labelX = groupX + groupW / 2;
+      const labelY = chartTop + chartH + 14;
+      const name = policies[pi];
       ctx.fillText(
-        labels[i].length > 10 ? labels[i].slice(0, 10) + "..." : labels[i],
-        x + barWidth / 2,
-        BASE_H - 4,
+        name.length > 12 ? name.slice(0, 12) + "..." : name,
+        labelX,
+        labelY,
       );
     }
-    ctx.textAlign = "start";
 
-    // Y-axis labels
-    ctx.fillStyle = "#9ca3af";
+    // Legend
+    const legendY = ABLATION_H - 6;
+    let lx = yAxisW + 8;
     ctx.font = "10px monospace";
-    ctx.fillText(maxVal.toFixed(2), 4, 16);
-    ctx.fillText(minVal.toFixed(2), 4, 8 + chartH);
+    ctx.textAlign = "left";
+    for (const s of series) {
+      ctx.fillStyle = s.color;
+      ctx.fillRect(lx, legendY - 8, 10, 10);
+      ctx.fillStyle = "#9ca3af";
+      ctx.fillText(s.label, lx + 14, legendY);
+      lx += ctx.measureText(s.label).width + 30;
+    }
   };
 
-  if (values.length === 0) {
+  if (policies.length === 0) {
     return (
       <div className="text-gray-500 text-sm py-8 text-center">
-        No ablation data available for {metricKey}
+        No ablation data available
       </div>
     );
   }
 
-  const label = metricOptionsForMode("ablation").find((o) => o.value === metricKey)?.label ?? metricKey;
-
   return (
     <div>
-      <div className="text-xs text-gray-400 mb-1 font-mono">{label}</div>
+      <div className="text-xs text-gray-400 mb-1 font-mono">Ablation Comparison</div>
       <canvas
         ref={canvasRef}
         width={BASE_W}
-        height={BASE_H}
+        height={ABLATION_H}
         className="w-full rounded bg-gray-950"
-        style={{ height: BASE_H }}
+        style={{ height: ABLATION_H }}
       />
       <div className="text-xs text-gray-500 mt-1">
-        {labels.length} policies
+        {policies.length} policies
       </div>
     </div>
   );

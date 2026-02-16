@@ -3,6 +3,7 @@ import {
   extractValues,
   extractRLValues,
   extractAblationValues,
+  extractAllAblationMetrics,
   metricOptionsForMode,
 } from "./ExperimentChartBlock.js";
 import type { RLTrainingHistory, AblationResults } from "@tidal/shared";
@@ -173,6 +174,48 @@ describe("extractAblationValues", () => {
     expect(out.labels).toEqual(["only"]);
     expect(out.values).toEqual([3.0]);
     expect(out.errors).toEqual([0.5]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractAllAblationMetrics
+// ---------------------------------------------------------------------------
+
+describe("extractAllAblationMetrics", () => {
+  const results: AblationResults = {
+    baseline: { mean_reward: 1.0, std_reward: 0.1, mean_diversity: 0.5, mean_perplexity: 50 },
+    creative: { mean_reward: 2.0, std_reward: 0.2, mean_diversity: 0.8, mean_perplexity: 60 },
+  };
+
+  it("returns all 3 metric series grouped by policy", () => {
+    const out = extractAllAblationMetrics(results);
+    expect(out.policies).toEqual(["baseline", "creative"]);
+    expect(out.series).toHaveLength(3);
+
+    expect(out.series[0].key).toBe("mean_reward");
+    expect(out.series[0].values).toEqual([1.0, 2.0]);
+
+    expect(out.series[1].key).toBe("mean_diversity");
+    expect(out.series[1].values).toEqual([0.5, 0.8]);
+
+    expect(out.series[2].key).toBe("mean_perplexity");
+    expect(out.series[2].values).toEqual([50, 60]);
+  });
+
+  it("includes label and color for each series", () => {
+    const out = extractAllAblationMetrics(results);
+    expect(out.series[0].label).toBe("reward");
+    expect(out.series[1].label).toBe("diversity");
+    expect(out.series[2].label).toBe("perplexity");
+    // Each series has a distinct color
+    const colors = out.series.map((s) => s.color);
+    expect(new Set(colors).size).toBe(3);
+  });
+
+  it("returns empty for null results", () => {
+    const out = extractAllAblationMetrics(null);
+    expect(out.policies).toEqual([]);
+    expect(out.series).toEqual([]);
   });
 });
 
