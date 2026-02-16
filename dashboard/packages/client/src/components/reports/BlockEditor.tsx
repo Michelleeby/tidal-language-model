@@ -58,13 +58,43 @@ export default function BlockEditor({ initialBlocks, onChange }: BlockEditorProp
           onItemClick: () => {
             const current = editor.getTextCursorPosition().block;
             (editor as any).insertBlocks(
-              [{ type: "experimentChart", props: { experimentId: "", metricKey: "Losses/Total" } }],
+              [{ type: "experimentChart", props: { experimentId: "", metricKey: "Losses/Total", chartMode: "lm" } }],
               current,
               "after",
             );
           },
           aliases: ["chart", "plot", "graph"] as string[],
           key: "experiment_chart",
+        },
+        {
+          title: "RL Training Chart",
+          subtext: "Insert an RL training metrics chart",
+          group: "Experiment Data",
+          onItemClick: () => {
+            const current = editor.getTextCursorPosition().block;
+            (editor as any).insertBlocks(
+              [{ type: "experimentChart", props: { experimentId: "", chartMode: "rl", rlMetricKey: "episode_rewards" } }],
+              current,
+              "after",
+            );
+          },
+          aliases: ["rl", "reward", "ppo"] as string[],
+          key: "rl_training_chart",
+        },
+        {
+          title: "Ablation Chart",
+          subtext: "Insert an ablation study comparison chart",
+          group: "Experiment Data",
+          onItemClick: () => {
+            const current = editor.getTextCursorPosition().block;
+            (editor as any).insertBlocks(
+              [{ type: "experimentChart", props: { experimentId: "", chartMode: "ablation", ablationMetricKey: "mean_reward" } }],
+              current,
+              "after",
+            );
+          },
+          aliases: ["ablation", "comparison", "baseline"] as string[],
+          key: "ablation_chart",
         },
         {
           title: "Metrics Table",

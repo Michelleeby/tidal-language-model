@@ -35,12 +35,20 @@ export function exportToMarkdown(title: string, blocks: ReportBlock[]): string {
       case "table":
         lines.push(renderTableMarkdown(block), "");
         break;
-      case "experimentChart":
+      case "experimentChart": {
+        const eProps = block.props as any;
+        const eMode = eProps.chartMode || "lm";
+        const eMetric =
+          eMode === "rl" ? (eProps.rlMetricKey || "episode_rewards") :
+          eMode === "ablation" ? (eProps.ablationMetricKey || "mean_reward") :
+          (eProps.metricKey || "Losses/Total");
+        const modeLabel = eMode === "rl" ? "RL" : eMode === "ablation" ? "Ablation" : "LM";
         lines.push(
-          `> **Chart**: Experiment \`${(block.props as any).experimentId || "none"}\` — ${(block.props as any).metricKey || "Losses/Total"}`,
+          `> **Chart** (${modeLabel}): Experiment \`${eProps.experimentId || "none"}\` — ${eMetric}`,
           "",
         );
         break;
+      }
       case "metricsTable":
         lines.push(
           `> **Metrics Table**: Experiment \`${(block.props as any).experimentId || "none"}\``,
@@ -91,11 +99,19 @@ export function exportToHTML(title: string, blocks: ReportBlock[]): string {
       case "table":
         bodyParts.push(renderTableHTML(block));
         break;
-      case "experimentChart":
+      case "experimentChart": {
+        const hProps = block.props as any;
+        const hMode = hProps.chartMode || "lm";
+        const hMetric =
+          hMode === "rl" ? (hProps.rlMetricKey || "episode_rewards") :
+          hMode === "ablation" ? (hProps.ablationMetricKey || "mean_reward") :
+          (hProps.metricKey || "Losses/Total");
+        const hModeLabel = hMode === "rl" ? "RL" : hMode === "ablation" ? "Ablation" : "LM";
         bodyParts.push(
-          `<div class="chart-placeholder"><strong>Chart</strong>: Experiment <code>${esc((block.props as any).experimentId || "none")}</code> &mdash; ${esc((block.props as any).metricKey || "Losses/Total")}</div>`,
+          `<div class="chart-placeholder"><strong>Chart</strong> (${esc(hModeLabel)}): Experiment <code>${esc(hProps.experimentId || "none")}</code> &mdash; ${esc(hMetric)}</div>`,
         );
         break;
+      }
       case "metricsTable":
         bodyParts.push(
           `<div class="metrics-placeholder"><strong>Metrics Table</strong>: Experiment <code>${esc((block.props as any).experimentId || "none")}</code></div>`,
