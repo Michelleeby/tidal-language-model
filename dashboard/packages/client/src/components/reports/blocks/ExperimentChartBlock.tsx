@@ -416,7 +416,9 @@ function MiniAblationChart({
 
     ctx.clearRect(0, 0, BASE_W, BASE_H);
 
+    const minVal = Math.min(...values);
     const maxVal = Math.max(...values.map((v, i) => v + (errors?.[i] ?? 0)));
+    const range = maxVal - minVal || 1;
     const barPadding = 12;
     const labelArea = 20;
     const chartH = BASE_H - labelArea - 8;
@@ -437,7 +439,7 @@ function MiniAblationChart({
 
     for (let i = 0; i < values.length; i++) {
       const x = startX + i * (barWidth + barPadding);
-      const barH = maxVal > 0 ? (values[i] / maxVal) * chartH : 0;
+      const barH = ((values[i] - minVal) / range) * chartH;
       const y = 8 + chartH - barH;
 
       // Bar
@@ -446,7 +448,7 @@ function MiniAblationChart({
 
       // Error bar
       if (errors?.[i] != null) {
-        const errH = maxVal > 0 ? (errors[i] / maxVal) * chartH : 0;
+        const errH = (errors[i] / range) * chartH;
         const cx = x + barWidth / 2;
         ctx.strokeStyle = "#9ca3af";
         ctx.lineWidth = 1;
@@ -477,10 +479,11 @@ function MiniAblationChart({
     }
     ctx.textAlign = "start";
 
-    // Y-axis max label
+    // Y-axis labels
     ctx.fillStyle = "#9ca3af";
     ctx.font = "10px monospace";
     ctx.fillText(maxVal.toFixed(2), 4, 16);
+    ctx.fillText(minVal.toFixed(2), 4, 8 + chartH);
   };
 
   if (values.length === 0) {
