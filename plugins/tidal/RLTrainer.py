@@ -145,6 +145,7 @@ class PPOTrainer:
         os.makedirs(self.metrics_dir, exist_ok=True)
 
         self.entropy_coef_final = config.get("RL_ENTROPY_COEF_FINAL", self.entropy_coef)
+        self.entropy_floor = config.get("RL_ENTROPY_FLOOR", None)
 
         self.global_step = 0
         ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
@@ -153,6 +154,11 @@ class PPOTrainer:
         obs_dim = config.get("RL_OBSERVATION_DIM", 64)
         action_dim = config.get("RL_ACTION_DIM", 3)
         self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim)
+
+        # Persist episode counters across rollout boundaries so episodes
+        # that span two collect_rollouts() calls get their true length.
+        self._episode_reward = 0.0
+        self._episode_length = 0
 
     def get_entropy_coef(self, iteration: int, total_iterations: int) -> float:
         """Linear interpolation from initial to final entropy coefficient."""
@@ -165,11 +171,11 @@ class PPOTrainer:
 
         if not hasattr(self.env, "generated_tokens") or len(self.env.generated_tokens) == 0 or self.env.done:
             obs = self.env.reset()
+            self._episode_reward = 0.0
+            self._episode_length = 0
         else:
             obs = self.env._get_observation()
 
-        episode_reward = 0.0
-        episode_length = 0
         rollout_rewards = []
         rollout_values = []
 
@@ -198,14 +204,14 @@ class PPOTrainer:
             rollout_rewards.append(reward)
             rollout_values.append(value.item() if isinstance(value, torch.Tensor) else value)
 
-            episode_reward += reward
-            episode_length += 1
+            self._episode_reward += reward
+            self._episode_length += 1
 
             if done:
-                self.episode_rewards.update(episode_reward)
-                self.episode_lengths.update(episode_length)
-                episode_reward = 0.0
-                episode_length = 0
+                self.episode_rewards.update(self._episode_reward)
+                self.episode_lengths.update(self._episode_length)
+                self._episode_reward = 0.0
+                self._episode_length = 0
                 obs = self.env.reset()
             else:
                 obs = next_obs
@@ -295,10 +301,18 @@ class PPOTrainer:
                 value_loss = nn.functional.mse_loss(values, batch_returns)
                 entropy_loss = -entropy.mean()
 
+                # Entropy floor: proportional boost when entropy drops below target
+                effective_entropy_coef = entropy_coef
+                if self.entropy_floor is not None:
+                    mean_entropy = entropy.mean().item()
+                    if mean_entropy < self.entropy_floor:
+                        boost = 1.0 + 2.0 * (self.entropy_floor - mean_entropy) / abs(self.entropy_floor)
+                        effective_entropy_coef = entropy_coef * boost
+
                 loss = (
                     policy_loss
                     + self.value_coef * value_loss
-                    + entropy_coef * entropy_loss
+                    + effective_entropy_coef * entropy_loss
                 )
 
                 self.optimizer.zero_grad()

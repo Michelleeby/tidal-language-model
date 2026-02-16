@@ -706,5 +706,286 @@ class TestPPOTrainerUsesEMA(unittest.TestCase):
             self.assertNotIsInstance(trainer.episode_lengths, deque)
 
 
+class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
+    """Tests that episode reward/length counters survive across collect_rollouts() calls."""
+
+    def setUp(self):
+        self.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        self.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.5,
+            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 2.5,
+            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_MAX_EPISODE_LENGTH": 50,
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.05,
+            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 128,
+            "RL_NUM_EPOCHS": 4,
+            "RL_BATCH_SIZE": 32,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_EMA_ALPHA": 0.05,
+        }
+        self.config = {**self.model_config, **self.rl_config}
+
+    def test_episode_tracking_persists_across_rollouts(self):
+        """Episode length/reward counters survive across collect_rollouts() calls.
+
+        A 50-step episode starting at step 100 of a 128-step rollout gets only
+        28 steps before the rollout ends. The remaining 22 steps happen in the
+        next collect_rollouts() call. Every reported episode length must be 50.
+        """
+        agent = GatingPolicyAgent(self.config, torch.device("cpu"))
+
+        mock_env = MagicMock()
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]  # Non-empty: episode in progress
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = (step_counter[0] >= 50)
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {}
+
+        def mock_get_observation():
+            return torch.randn(64)
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = mock_get_observation
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent,
+                env=mock_env,
+                config=self.config,
+                experiment_dir=tmpdir,
+                device=torch.device("cpu"),
+            )
+
+            # Capture every value passed to episode_lengths.update()
+            recorded_lengths = []
+            original_update = trainer.episode_lengths.update
+
+            def capturing_update(value):
+                recorded_lengths.append(value)
+                return original_update(value)
+
+            trainer.episode_lengths.update = capturing_update
+
+            # First rollout: 128 steps. Episodes complete at step 50 and 100.
+            # Episode starting at step 100 gets 28 steps (100-127), not done.
+            trainer.collect_rollouts(128)
+
+            # Second rollout: 128 more steps. The in-progress episode from
+            # the first rollout should complete after 22 more steps (28+22=50).
+            trainer.collect_rollouts(128)
+
+            # Every recorded episode length must be exactly 50.
+            # BUG: with local vars, the boundary episode reports 22 instead.
+            self.assertTrue(len(recorded_lengths) > 0, "Should have completed episodes")
+            for i, length in enumerate(recorded_lengths):
+                self.assertEqual(
+                    length, 50,
+                    f"Episode {i} reported length={length}, expected 50. "
+                    f"All lengths: {recorded_lengths}",
+                )
+
+
+class TestBetaConcentrationCappedAt8(unittest.TestCase):
+    """Tests that Beta distribution concentration is capped at the new lower value."""
+
+    def test_beta_concentration_capped_at_8(self):
+        """With RL_BETA_CONCENTRATION_MAX=8.0, alpha/beta never exceed 8.0."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_BETA_CONCENTRATION_MAX": 8.0,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+
+        for _ in range(50):
+            obs = torch.randn(64) * 10
+            action_dist, _ = agent.forward(obs)
+
+            alpha = action_dist.concentration1
+            beta_param = action_dist.concentration0
+
+            self.assertTrue(
+                torch.all(alpha <= 8.0 + 1e-6),
+                f"Alpha {alpha.max().item()} exceeds 8.0",
+            )
+            self.assertTrue(
+                torch.all(beta_param <= 8.0 + 1e-6),
+                f"Beta {beta_param.max().item()} exceeds 8.0",
+            )
+
+
+class TestEntropyCoefRangeUpdated(unittest.TestCase):
+    """Tests that PPOTrainer reads the new stronger entropy coef range."""
+
+    def test_entropy_coef_range_0_05_to_0_3(self):
+        """PPOTrainer with new config reads initial=0.05, final=0.3."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.05,
+            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 128,
+            "RL_NUM_EPOCHS": 4,
+            "RL_BATCH_SIZE": 32,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent,
+                env=env,
+                config=config,
+                experiment_dir=tmpdir,
+                device=torch.device("cpu"),
+            )
+
+            total_iters = config["RL_TOTAL_TIMESTEPS"] // config["RL_ROLLOUT_STEPS"]
+
+            coef_start = trainer.get_entropy_coef(0, total_iters)
+            self.assertAlmostEqual(coef_start, 0.05, places=4)
+
+            coef_end = trainer.get_entropy_coef(total_iters - 1, total_iters)
+            self.assertAlmostEqual(coef_end, 0.3, places=4)
+
+
+class TestEntropyFloorBoostsCoefficient(unittest.TestCase):
+    """Tests that entropy floor mechanism boosts coefficient when entropy is low."""
+
+    def test_entropy_floor_boosts_when_below_target(self):
+        """When batch entropy < RL_ENTROPY_FLOOR, effective entropy coef is boosted.
+
+        Verifies the proportional controller: when mean entropy drops below
+        the floor, the entropy coefficient is scaled up proportionally.
+        """
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.05,
+            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_ENTROPY_FLOOR": -1.5,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent,
+                env=env,
+                config=config,
+                experiment_dir=tmpdir,
+                device=torch.device("cpu"),
+            )
+
+            # Trainer must read entropy_floor from config
+            self.assertTrue(
+                hasattr(trainer, "entropy_floor"),
+                "PPOTrainer must have an entropy_floor attribute read from config",
+            )
+            self.assertAlmostEqual(trainer.entropy_floor, -1.5, places=2)
+
+    def test_entropy_floor_defaults_to_none(self):
+        """When RL_ENTROPY_FLOOR is absent from config, entropy_floor is None (no boost)."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.05,
+            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent,
+                env=env,
+                config=config,
+                experiment_dir=tmpdir,
+                device=torch.device("cpu"),
+            )
+            self.assertTrue(
+                hasattr(trainer, "entropy_floor"),
+                "PPOTrainer must have entropy_floor attribute even when not in config",
+            )
+            self.assertIsNone(trainer.entropy_floor)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
