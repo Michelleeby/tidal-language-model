@@ -521,7 +521,7 @@ class TestBetaConcentrationCapping(unittest.TestCase):
             )
 
     def test_beta_concentration_default_max(self):
-        """Agent uses a default max when config key is absent."""
+        """Agent uses 15.0 as default max when config key is absent."""
         config_no_max = {
             "RL_OBSERVATION_DIM": 64,
             "RL_ACTION_DIM": 3,
@@ -529,14 +529,8 @@ class TestBetaConcentrationCapping(unittest.TestCase):
         }
         agent = GatingPolicyAgent(config_no_max, self.device)
 
-        obs = torch.randn(64) * 10
-        action_dist, _ = agent.forward(obs)
-        alpha = action_dist.concentration1
-        beta_param = action_dist.concentration0
-
-        # Should still be bounded (default max)
-        self.assertTrue(torch.all(alpha <= 20.0 + 1e-6))
-        self.assertTrue(torch.all(beta_param <= 20.0 + 1e-6))
+        # Directly check the attribute value
+        self.assertAlmostEqual(agent.beta_concentration_max, 15.0, places=1)
 
 
 class TestEntropyCoefAnnealing(unittest.TestCase):
@@ -695,15 +689,19 @@ class TestPPOTrainerUsesEMA(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-            # Should have EMA trackers, not deques
+            # Should have EMA tracker for rewards
             self.assertIsInstance(trainer.episode_rewards, ExponentialMovingAverage)
-            self.assertIsInstance(trainer.episode_lengths, ExponentialMovingAverage)
             self.assertEqual(trainer.episode_rewards.alpha, 0.05)
+
+            # episode_lengths EMA is removed — provides no information
+            self.assertFalse(
+                hasattr(trainer, "episode_lengths"),
+                "PPOTrainer must not have episode_lengths — replaced with richer metrics",
+            )
 
             # Should NOT have deque attributes
             from collections import deque
             self.assertNotIsInstance(trainer.episode_rewards, deque)
-            self.assertNotIsInstance(trainer.episode_lengths, deque)
 
 
 class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
@@ -753,11 +751,12 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
         self.config = {**self.model_config, **self.rl_config}
 
     def test_episode_tracking_persists_across_rollouts(self):
-        """Episode length/reward counters survive across collect_rollouts() calls.
+        """Episode reward counters survive across collect_rollouts() calls.
 
         A 50-step episode starting at step 100 of a 128-step rollout gets only
         28 steps before the rollout ends. The remaining 22 steps happen in the
-        next collect_rollouts() call. Every reported episode length must be 50.
+        next collect_rollouts() call. Every reported episode reward must be 50.0
+        (50 steps * 1.0 reward/step).
         """
         agent = GatingPolicyAgent(self.config, torch.device("cpu"))
 
@@ -778,7 +777,10 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
                 mock_env.done = True
             else:
                 mock_env.generated_tokens = list(range(step_counter[0]))
-            return torch.randn(64), 1.0, done, {}
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"creativity": 0.5, "focus": 0.5, "stability": 0.5},
+                "reward_components": {"perplexity": 0.0, "diversity": 0.0, "repetition": 0.0, "coherence": 0.0},
+            }
 
         def mock_get_observation():
             return torch.randn(64)
@@ -799,15 +801,15 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
                 device=torch.device("cpu"),
             )
 
-            # Capture every value passed to episode_lengths.update()
-            recorded_lengths = []
-            original_update = trainer.episode_lengths.update
+            # Capture every value passed to episode_rewards.update()
+            recorded_rewards = []
+            original_update = trainer.episode_rewards.update
 
             def capturing_update(value):
-                recorded_lengths.append(value)
+                recorded_rewards.append(value)
                 return original_update(value)
 
-            trainer.episode_lengths.update = capturing_update
+            trainer.episode_rewards.update = capturing_update
 
             # First rollout: 128 steps. Episodes complete at step 50 and 100.
             # Episode starting at step 100 gets 28 steps (100-127), not done.
@@ -817,27 +819,27 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
             # the first rollout should complete after 22 more steps (28+22=50).
             trainer.collect_rollouts(128)
 
-            # Every recorded episode length must be exactly 50.
-            # BUG: with local vars, the boundary episode reports 22 instead.
-            self.assertTrue(len(recorded_lengths) > 0, "Should have completed episodes")
-            for i, length in enumerate(recorded_lengths):
-                self.assertEqual(
-                    length, 50,
-                    f"Episode {i} reported length={length}, expected 50. "
-                    f"All lengths: {recorded_lengths}",
+            # Every recorded episode reward must be exactly 50.0 (50 steps * 1.0).
+            # BUG: with local vars, the boundary episode reports 22.0 instead.
+            self.assertTrue(len(recorded_rewards) > 0, "Should have completed episodes")
+            for i, reward in enumerate(recorded_rewards):
+                self.assertAlmostEqual(
+                    reward, 50.0,
+                    msg=f"Episode {i} reported reward={reward}, expected 50.0. "
+                    f"All rewards: {recorded_rewards}",
                 )
 
 
-class TestBetaConcentrationCappedAt8(unittest.TestCase):
-    """Tests that Beta distribution concentration is capped at the new lower value."""
+class TestBetaConcentrationCappedAt15(unittest.TestCase):
+    """Tests that Beta distribution concentration is capped at 15.0."""
 
-    def test_beta_concentration_capped_at_8(self):
-        """With RL_BETA_CONCENTRATION_MAX=8.0, alpha/beta never exceed 8.0."""
+    def test_beta_concentration_capped_at_15(self):
+        """With RL_BETA_CONCENTRATION_MAX=15.0, alpha/beta never exceed 15.0."""
         config = {
             "RL_OBSERVATION_DIM": 64,
             "RL_ACTION_DIM": 3,
             "RL_HIDDEN_DIM": 128,
-            "RL_BETA_CONCENTRATION_MAX": 8.0,
+            "RL_BETA_CONCENTRATION_MAX": 15.0,
         }
         agent = GatingPolicyAgent(config, torch.device("cpu"))
 
@@ -849,20 +851,20 @@ class TestBetaConcentrationCappedAt8(unittest.TestCase):
             beta_param = action_dist.concentration0
 
             self.assertTrue(
-                torch.all(alpha <= 8.0 + 1e-6),
-                f"Alpha {alpha.max().item()} exceeds 8.0",
+                torch.all(alpha <= 15.0 + 1e-6),
+                f"Alpha {alpha.max().item()} exceeds 15.0",
             )
             self.assertTrue(
-                torch.all(beta_param <= 8.0 + 1e-6),
-                f"Beta {beta_param.max().item()} exceeds 8.0",
+                torch.all(beta_param <= 15.0 + 1e-6),
+                f"Beta {beta_param.max().item()} exceeds 15.0",
             )
 
 
 class TestEntropyCoefRangeUpdated(unittest.TestCase):
-    """Tests that PPOTrainer reads the new stronger entropy coef range."""
+    """Tests that PPOTrainer reads the recalibrated entropy coef range."""
 
-    def test_entropy_coef_range_0_05_to_0_3(self):
-        """PPOTrainer with new config reads initial=0.05, final=0.3."""
+    def test_entropy_coef_range_0_01_to_0_03(self):
+        """PPOTrainer with new config reads initial=0.01, final=0.03."""
         config = {
             "RL_OBSERVATION_DIM": 64,
             "RL_ACTION_DIM": 3,
@@ -871,8 +873,8 @@ class TestEntropyCoefRangeUpdated(unittest.TestCase):
             "RL_GAMMA": 0.99,
             "RL_GAE_LAMBDA": 0.95,
             "RL_CLIP_EPSILON": 0.2,
-            "RL_ENTROPY_COEF": 0.05,
-            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
             "RL_VALUE_COEF": 0.5,
             "RL_MAX_GRAD_NORM": 0.5,
             "RL_ROLLOUT_STEPS": 128,
@@ -896,21 +898,17 @@ class TestEntropyCoefRangeUpdated(unittest.TestCase):
             total_iters = config["RL_TOTAL_TIMESTEPS"] // config["RL_ROLLOUT_STEPS"]
 
             coef_start = trainer.get_entropy_coef(0, total_iters)
-            self.assertAlmostEqual(coef_start, 0.05, places=4)
+            self.assertAlmostEqual(coef_start, 0.01, places=4)
 
             coef_end = trainer.get_entropy_coef(total_iters - 1, total_iters)
-            self.assertAlmostEqual(coef_end, 0.3, places=4)
+            self.assertAlmostEqual(coef_end, 0.03, places=4)
 
 
-class TestEntropyFloorBoostsCoefficient(unittest.TestCase):
-    """Tests that entropy floor mechanism boosts coefficient when entropy is low."""
+class TestEntropyFloorRemoved(unittest.TestCase):
+    """Tests that entropy floor mechanism has been removed from PPOTrainer."""
 
-    def test_entropy_floor_boosts_when_below_target(self):
-        """When batch entropy < RL_ENTROPY_FLOOR, effective entropy coef is boosted.
-
-        Verifies the proportional controller: when mean entropy drops below
-        the floor, the entropy coefficient is scaled up proportionally.
-        """
+    def test_no_entropy_floor_attribute(self):
+        """PPOTrainer must NOT have an entropy_floor attribute — the mechanism is removed."""
         config = {
             "RL_OBSERVATION_DIM": 64,
             "RL_ACTION_DIM": 3,
@@ -919,8 +917,44 @@ class TestEntropyFloorBoostsCoefficient(unittest.TestCase):
             "RL_GAMMA": 0.99,
             "RL_GAE_LAMBDA": 0.95,
             "RL_CLIP_EPSILON": 0.2,
-            "RL_ENTROPY_COEF": 0.05,
-            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent,
+                env=env,
+                config=config,
+                experiment_dir=tmpdir,
+                device=torch.device("cpu"),
+            )
+            self.assertFalse(
+                hasattr(trainer, "entropy_floor"),
+                "PPOTrainer must not have entropy_floor — the mechanism is removed",
+            )
+
+    def test_no_entropy_floor_even_if_config_has_it(self):
+        """Even if RL_ENTROPY_FLOOR is in config, trainer must not use it."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
             "RL_VALUE_COEF": 0.5,
             "RL_MAX_GRAD_NORM": 0.5,
             "RL_ROLLOUT_STEPS": 16,
@@ -941,16 +975,17 @@ class TestEntropyFloorBoostsCoefficient(unittest.TestCase):
                 experiment_dir=tmpdir,
                 device=torch.device("cpu"),
             )
-
-            # Trainer must read entropy_floor from config
-            self.assertTrue(
+            self.assertFalse(
                 hasattr(trainer, "entropy_floor"),
-                "PPOTrainer must have an entropy_floor attribute read from config",
+                "PPOTrainer must not read RL_ENTROPY_FLOOR from config",
             )
-            self.assertAlmostEqual(trainer.entropy_floor, -1.5, places=2)
 
-    def test_entropy_floor_defaults_to_none(self):
-        """When RL_ENTROPY_FLOOR is absent from config, entropy_floor is None (no boost)."""
+
+class TestCollectRolloutsReturnsGateSignals(unittest.TestCase):
+    """Tests that collect_rollouts() returns mean gate signal values."""
+
+    def test_rollout_stats_contain_gate_signals(self):
+        """collect_rollouts() stats include mean_gate_creativity/focus/stability."""
         config = {
             "RL_OBSERVATION_DIM": 64,
             "RL_ACTION_DIM": 3,
@@ -959,32 +994,193 @@ class TestEntropyFloorBoostsCoefficient(unittest.TestCase):
             "RL_GAMMA": 0.99,
             "RL_GAE_LAMBDA": 0.95,
             "RL_CLIP_EPSILON": 0.2,
-            "RL_ENTROPY_COEF": 0.05,
-            "RL_ENTROPY_COEF_FINAL": 0.3,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 4,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+
+        mock_env = MagicMock()
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"creativity": 0.5, "focus": 0.6, "stability": 0.7},
+                "reward_components": {"perplexity": 0.1, "diversity": 0.2, "repetition": 0.3, "coherence": 0.4},
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            stats = trainer.collect_rollouts(16)
+
+            self.assertIn("mean_gate_creativity", stats)
+            self.assertIn("mean_gate_focus", stats)
+            self.assertIn("mean_gate_stability", stats)
+            self.assertAlmostEqual(stats["mean_gate_creativity"], 0.5, places=4)
+            self.assertAlmostEqual(stats["mean_gate_focus"], 0.6, places=4)
+            self.assertAlmostEqual(stats["mean_gate_stability"], 0.7, places=4)
+
+
+class TestCollectRolloutsReturnsRewardComponents(unittest.TestCase):
+    """Tests that collect_rollouts() returns mean reward component values."""
+
+    def test_rollout_stats_contain_reward_components(self):
+        """collect_rollouts() stats include mean_reward_perplexity/diversity/repetition/coherence."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 4,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+
+        mock_env = MagicMock()
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"creativity": 0.5, "focus": 0.6, "stability": 0.7},
+                "reward_components": {"perplexity": 0.1, "diversity": 0.2, "repetition": 0.3, "coherence": 0.4},
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            stats = trainer.collect_rollouts(16)
+
+            self.assertIn("mean_reward_perplexity", stats)
+            self.assertIn("mean_reward_diversity", stats)
+            self.assertIn("mean_reward_repetition", stats)
+            self.assertIn("mean_reward_coherence", stats)
+            self.assertAlmostEqual(stats["mean_reward_perplexity"], 0.1, places=4)
+            self.assertAlmostEqual(stats["mean_reward_diversity"], 0.2, places=4)
+            self.assertAlmostEqual(stats["mean_reward_repetition"], 0.3, places=4)
+            self.assertAlmostEqual(stats["mean_reward_coherence"], 0.4, places=4)
+
+
+class TestExplainedVarianceComputation(unittest.TestCase):
+    """Tests that train() history contains explained_variance."""
+
+    def test_history_contains_explained_variance(self):
+        """train() history includes explained_variance in [-1, 1] range."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
             "RL_VALUE_COEF": 0.5,
             "RL_MAX_GRAD_NORM": 0.5,
             "RL_ROLLOUT_STEPS": 16,
             "RL_NUM_EPOCHS": 1,
             "RL_BATCH_SIZE": 16,
-            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_TOTAL_TIMESTEPS": 32,
         }
         agent = GatingPolicyAgent(config, torch.device("cpu"))
-        env = MagicMock()
+
+        mock_env = MagicMock()
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"creativity": 0.5, "focus": 0.6, "stability": 0.7},
+                "reward_components": {"perplexity": 0.1, "diversity": 0.2, "repetition": 0.3, "coherence": 0.4},
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
 
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             trainer = PPOTrainer(
-                agent=agent,
-                env=env,
-                config=config,
-                experiment_dir=tmpdir,
-                device=torch.device("cpu"),
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
             )
-            self.assertTrue(
-                hasattr(trainer, "entropy_floor"),
-                "PPOTrainer must have entropy_floor attribute even when not in config",
-            )
-            self.assertIsNone(trainer.entropy_floor)
+            history = trainer.train(total_timesteps=32)
+
+            self.assertIn("explained_variance", history)
+            self.assertTrue(len(history["explained_variance"]) > 0)
+            for ev in history["explained_variance"]:
+                self.assertGreaterEqual(ev, -1.0)
+                self.assertLessEqual(ev, 1.0)
 
 
 if __name__ == "__main__":

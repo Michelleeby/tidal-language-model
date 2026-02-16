@@ -22,8 +22,8 @@ RL_LEARNING_RATE: 3.0e-4
 RL_GAMMA: 0.99  # Discount factor
 RL_GAE_LAMBDA: 0.95  # GAE lambda for advantage estimation
 RL_CLIP_EPSILON: 0.2  # PPO clipping parameter
-RL_ENTROPY_COEF: 0.05  # Entropy bonus coefficient (initial, 5x stronger to prevent early collapse)
-RL_ENTROPY_COEF_FINAL: 0.3  # Entropy bonus coefficient (final, 3x stronger for sustained exploration)
+RL_ENTROPY_COEF: 0.01  # Entropy bonus coefficient (initial)
+RL_ENTROPY_COEF_FINAL: 0.03  # Entropy bonus coefficient (final, gentle 3x ramp)
 RL_VALUE_COEF: 0.5  # Value loss coefficient
 RL_MAX_GRAD_NORM: 0.5  # Gradient clipping
 
@@ -35,12 +35,8 @@ RL_TOTAL_TIMESTEPS: 100000  # Total training steps
 RL_EMA_ALPHA: 0.05  # Smoothing factor for episode stat tracking (replaces deque)
 
 # Beta distribution concentration cap (prevents entropy collapse)
-# Beta(8,8) has entropy ≈ -2.0 per 3D action space, providing a meaningful floor
-RL_BETA_CONCENTRATION_MAX: 8.0
-
-# Soft entropy floor: when mean batch entropy drops below this target,
-# the entropy coefficient is boosted proportionally to resist collapse
-RL_ENTROPY_FLOOR: -1.5
+# Beta(15,15) entropy ≈ -0.8; allows peaked distributions for exploitation
+RL_BETA_CONCENTRATION_MAX: 15.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

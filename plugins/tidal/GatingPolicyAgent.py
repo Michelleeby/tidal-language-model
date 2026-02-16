@@ -43,7 +43,7 @@ class GatingPolicyAgent(nn.Module):
         self.obs_dim = config.get("RL_OBSERVATION_DIM", 64)
         self.action_dim = config.get("RL_ACTION_DIM", 3)
         self.hidden_dim = config.get("RL_HIDDEN_DIM", 128)
-        self.beta_concentration_max = config.get("RL_BETA_CONCENTRATION_MAX", 20.0)
+        self.beta_concentration_max = config.get("RL_BETA_CONCENTRATION_MAX", 15.0)
 
         self.feature_extractor = nn.Sequential(
             nn.LayerNorm(self.obs_dim),
