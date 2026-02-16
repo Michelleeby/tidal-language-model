@@ -48,6 +48,45 @@ class ExponentialMovingAverage:
             self.value = self.alpha * new_value + (1 - self.alpha) * self.value
 
 
+class EntropyHomeostasis:
+    """Closed-loop homeostatic controller for the entropy coefficient.
+
+    Monitors policy entropy and reactively adjusts the entropy coefficient
+    to prevent entropy collapse. When entropy drops below the target, the
+    coefficient is boosted (release). Between boosts, it decays toward a
+    baseline. Inspired by the SemanticEndocrineSystem's trigger-based
+    release + exponential decay pattern.
+
+    Loop:
+        1. Release: if entropy < target → coef += release_rate * (target - entropy)
+        2. Decay:   coef = decay_rate * coef + (1 - decay_rate) * baseline
+        3. Clamp:   coef = clamp(coef, min, max)
+    """
+
+    def __init__(self, config: dict):
+        self.baseline = config.get("RL_ENTROPY_COEF", 0.01)
+        self.coef = self.baseline
+        self.target = config.get("RL_POLICY_ENTROPY_TARGET", -1.0)
+        self.release_rate = config.get("RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE", 0.05)
+        self.decay_rate = config.get("RL_ENTROPY_HOMEOSTASIS_DECAY_RATE", 0.95)
+        self.coef_min = config.get("RL_ENTROPY_COEF_MIN", 0.01)
+        self.coef_max = config.get("RL_ENTROPY_COEF_MAX", 0.5)
+
+    def step(self, current_entropy: float) -> float:
+        """Update coef based on observed policy entropy. Returns new coef."""
+        # Release: boost when entropy is too low
+        if current_entropy < self.target:
+            self.coef += self.release_rate * (self.target - current_entropy)
+
+        # Decay toward baseline
+        self.coef = self.decay_rate * self.coef + (1 - self.decay_rate) * self.baseline
+
+        # Clamp
+        self.coef = max(self.coef_min, min(self.coef_max, self.coef))
+
+        return self.coef
+
+
 class RolloutBuffer:
     """Pre-allocated buffer for storing rollout data.
 
@@ -145,6 +184,12 @@ class PPOTrainer:
         os.makedirs(self.metrics_dir, exist_ok=True)
 
         self.entropy_coef_final = config.get("RL_ENTROPY_COEF_FINAL", self.entropy_coef)
+
+        entropy_schedule = config.get("RL_ENTROPY_SCHEDULE", "linear")
+        if entropy_schedule == "homeostasis":
+            self.entropy_homeostasis = EntropyHomeostasis(config)
+        else:
+            self.entropy_homeostasis = None
 
         self.global_step = 0
         ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
@@ -346,6 +391,7 @@ class PPOTrainer:
             "policy_loss": [],
             "value_loss": [],
             "entropy": [],
+            "entropy_coef": [],
             "gate_creativity": [],
             "gate_focus": [],
             "gate_stability": [],
@@ -362,8 +408,17 @@ class PPOTrainer:
         for iteration in range(num_iterations):
             rollout_stats = self.collect_rollouts(self.rollout_steps)
             advantages, returns = self.compute_advantages()
-            current_entropy_coef = self.get_entropy_coef(iteration, num_iterations)
+
+            if self.entropy_homeostasis is not None:
+                current_entropy_coef = self.entropy_homeostasis.coef
+            else:
+                current_entropy_coef = self.get_entropy_coef(iteration, num_iterations)
+
             update_stats = self.update_policy(advantages, returns, current_entropy_coef)
+
+            if self.entropy_homeostasis is not None:
+                current_entropy_coef = self.entropy_homeostasis.step(update_stats["entropy"])
+
             self.lr_scheduler.step()
 
             # Explained variance: 1 - Var(returns - values) / Var(returns)
@@ -382,6 +437,7 @@ class PPOTrainer:
             history["policy_loss"].append(update_stats["policy_loss"])
             history["value_loss"].append(update_stats["value_loss"])
             history["entropy"].append(update_stats["entropy"])
+            history["entropy_coef"].append(current_entropy_coef)
             history["gate_creativity"].append(rollout_stats.get("mean_gate_creativity", 0.0))
             history["gate_focus"].append(rollout_stats.get("mean_gate_focus", 0.0))
             history["gate_stability"].append(rollout_stats.get("mean_gate_stability", 0.0))
@@ -395,6 +451,7 @@ class PPOTrainer:
             self.writer.add_scalar("RL/policy_loss", update_stats["policy_loss"], self.global_step)
             self.writer.add_scalar("RL/value_loss", update_stats["value_loss"], self.global_step)
             self.writer.add_scalar("RL/entropy", update_stats["entropy"], self.global_step)
+            self.writer.add_scalar("RL/entropy_coef", current_entropy_coef, self.global_step)
             self.writer.add_scalar("RL/learning_rate", self.optimizer.param_groups[0]["lr"], self.global_step)
             self.writer.add_scalar("RL/gate_creativity", rollout_stats.get("mean_gate_creativity", 0.0), self.global_step)
             self.writer.add_scalar("RL/gate_focus", rollout_stats.get("mean_gate_focus", 0.0), self.global_step)
@@ -412,7 +469,8 @@ class PPOTrainer:
                     f"Reward: {mean_ep_reward:.3f} | "
                     f"Policy Loss: {update_stats['policy_loss']:.4f} | "
                     f"Value Loss: {update_stats['value_loss']:.4f} | "
-                    f"Entropy: {update_stats['entropy']:.4f}"
+                    f"Entropy: {update_stats['entropy']:.4f} | "
+                    f"Entropy Coef: {current_entropy_coef:.4f}"
                 )
 
             if (iteration + 1) % 50 == 0:
@@ -443,15 +501,15 @@ class PPOTrainer:
 
     def save_checkpoint(self, filename: str):
         checkpoint_path = os.path.join(self.experiment_dir, filename)
-        torch.save(
-            {
-                "agent_state_dict": self.agent.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "global_step": self.global_step,
-                "config": self.config,
-            },
-            checkpoint_path,
-        )
+        checkpoint_dict = {
+            "agent_state_dict": self.agent.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "global_step": self.global_step,
+            "config": self.config,
+        }
+        if self.entropy_homeostasis is not None:
+            checkpoint_dict["entropy_homeostasis_coef"] = self.entropy_homeostasis.coef
+        torch.save(checkpoint_dict, checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         if self.metrics_logger is not None:
             self.metrics_logger.upload_checkpoint(checkpoint_path)
@@ -461,6 +519,8 @@ class PPOTrainer:
         self.agent.load_state_dict(checkpoint["agent_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.global_step = checkpoint["global_step"]
+        if self.entropy_homeostasis is not None and "entropy_homeostasis_coef" in checkpoint:
+            self.entropy_homeostasis.coef = checkpoint["entropy_homeostasis_coef"]
         print(f"Loaded checkpoint from step {self.global_step}")
 
 

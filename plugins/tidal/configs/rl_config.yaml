@@ -27,6 +27,16 @@ RL_ENTROPY_COEF_FINAL: 0.03  # Entropy bonus coefficient (final, gentle 3x ramp)
 RL_VALUE_COEF: 0.5  # Value loss coefficient
 RL_MAX_GRAD_NORM: 0.5  # Gradient clipping
 
+# Entropy schedule: "linear" (default) or "homeostasis" (adaptive closed-loop)
+RL_ENTROPY_SCHEDULE: "homeostasis"
+
+# Homeostatic entropy regulation (used when RL_ENTROPY_SCHEDULE = "homeostasis")
+RL_POLICY_ENTROPY_TARGET: -1.0  # Target policy entropy (Beta dist entropy)
+RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE: 0.05  # Boost rate when entropy < target
+RL_ENTROPY_HOMEOSTASIS_DECAY_RATE: 0.95  # Decay rate toward baseline
+RL_ENTROPY_COEF_MIN: 0.01  # Floor for entropy coefficient
+RL_ENTROPY_COEF_MAX: 0.5  # Ceiling for entropy coefficient
+
 # Training loop
 RL_ROLLOUT_STEPS: 128  # Steps per rollout before update
 RL_NUM_EPOCHS: 4  # PPO epochs per rollout

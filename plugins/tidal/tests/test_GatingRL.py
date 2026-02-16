@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 from plugins.tidal.GatingModulator import GatingModulator, GatingEffects, RandomGatingPolicy, FixedGatingPolicy
 from plugins.tidal.RewardComputer import RewardComputer
 from plugins.tidal.GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPolicyAgent, create_agent
-from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage
+from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis
 from plugins.tidal.GatingEnvironment import GatingEnvironment
 from plugins.tidal.TransformerLM import TransformerLM
 
@@ -1181,6 +1181,212 @@ class TestExplainedVarianceComputation(unittest.TestCase):
             for ev in history["explained_variance"]:
                 self.assertGreaterEqual(ev, -1.0)
                 self.assertLessEqual(ev, 1.0)
+
+
+class TestEntropyHomeostasis(unittest.TestCase):
+    """Tests for the EntropyHomeostasis closed-loop controller."""
+
+    def setUp(self):
+        self.config = {
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_POLICY_ENTROPY_TARGET": -1.0,
+            "RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE": 0.05,
+            "RL_ENTROPY_HOMEOSTASIS_DECAY_RATE": 0.95,
+            "RL_ENTROPY_COEF_MIN": 0.01,
+            "RL_ENTROPY_COEF_MAX": 0.5,
+        }
+
+    def test_init_defaults(self):
+        """All attributes initialize from config."""
+        h = EntropyHomeostasis(self.config)
+        self.assertAlmostEqual(h.coef, 0.01)
+        self.assertAlmostEqual(h.baseline, 0.01)
+        self.assertAlmostEqual(h.target, -1.0)
+        self.assertAlmostEqual(h.release_rate, 0.05)
+        self.assertAlmostEqual(h.decay_rate, 0.95)
+        self.assertAlmostEqual(h.coef_min, 0.01)
+        self.assertAlmostEqual(h.coef_max, 0.5)
+
+    def test_boost_when_entropy_too_low(self):
+        """Coef increases when entropy < target."""
+        h = EntropyHomeostasis(self.config)
+        initial_coef = h.coef
+        h.step(current_entropy=-2.5)  # well below target of -1.0
+        self.assertGreater(h.coef, initial_coef)
+
+    def test_no_boost_when_entropy_healthy(self):
+        """Coef decays toward baseline when entropy >= target."""
+        h = EntropyHomeostasis(self.config)
+        # First pump coef up
+        for _ in range(50):
+            h.step(current_entropy=-3.0)
+        pumped_coef = h.coef
+        self.assertGreater(pumped_coef, h.baseline)
+        # Now feed healthy entropy — coef should decrease
+        h.step(current_entropy=-0.5)
+        self.assertLess(h.coef, pumped_coef)
+
+    def test_decay_toward_baseline(self):
+        """After 200 healthy steps, coef converges to baseline."""
+        h = EntropyHomeostasis(self.config)
+        # First pump coef up
+        for _ in range(50):
+            h.step(current_entropy=-3.0)
+        # Now let it decay with healthy entropy
+        for _ in range(200):
+            h.step(current_entropy=-0.5)
+        self.assertAlmostEqual(h.coef, h.baseline, places=2)
+
+    def test_clamping_to_max(self):
+        """Aggressive release never exceeds RL_ENTROPY_COEF_MAX."""
+        config = dict(self.config)
+        config["RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE"] = 10.0  # very aggressive
+        h = EntropyHomeostasis(config)
+        for _ in range(100):
+            h.step(current_entropy=-10.0)
+        self.assertLessEqual(h.coef, config["RL_ENTROPY_COEF_MAX"])
+
+    def test_clamping_to_min(self):
+        """Aggressive decay never drops below RL_ENTROPY_COEF_MIN."""
+        config = dict(self.config)
+        config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 0.01  # very aggressive decay
+        config["RL_ENTROPY_COEF"] = 0.02  # start slightly above min
+        h = EntropyHomeostasis(config)
+        for _ in range(100):
+            h.step(current_entropy=0.0)  # healthy entropy, only decay
+        self.assertGreaterEqual(h.coef, config["RL_ENTROPY_COEF_MIN"])
+
+    def test_step_returns_current_coef(self):
+        """Return value of step() matches h.coef."""
+        h = EntropyHomeostasis(self.config)
+        result = h.step(current_entropy=-2.0)
+        self.assertAlmostEqual(result, h.coef)
+
+    def test_proportional_response(self):
+        """Larger entropy deficit produces a larger boost."""
+        config = dict(self.config)
+        config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 1.0  # no decay, isolate release
+        h1 = EntropyHomeostasis(config)
+        h2 = EntropyHomeostasis(config)
+
+        h1.step(current_entropy=-1.5)  # small deficit (target is -1.0)
+        h2.step(current_entropy=-3.0)  # large deficit
+
+        self.assertGreater(h2.coef, h1.coef)
+
+
+class TestPPOTrainerHomeostaticSchedule(unittest.TestCase):
+    """Tests that PPOTrainer integrates the homeostatic entropy schedule."""
+
+    def _base_config(self):
+        return {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+        }
+
+    def _make_trainer(self, config):
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+        tmpdir = tempfile.mkdtemp()
+        return PPOTrainer(
+            agent=agent, env=env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+        ), tmpdir
+
+    def test_homeostasis_creates_controller(self):
+        """RL_ENTROPY_SCHEDULE='homeostasis' creates EntropyHomeostasis instance."""
+        config = self._base_config()
+        config["RL_ENTROPY_SCHEDULE"] = "homeostasis"
+        config["RL_POLICY_ENTROPY_TARGET"] = -1.0
+        config["RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE"] = 0.05
+        config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 0.95
+        config["RL_ENTROPY_COEF_MIN"] = 0.01
+        config["RL_ENTROPY_COEF_MAX"] = 0.5
+        trainer, _ = self._make_trainer(config)
+        self.assertIsInstance(trainer.entropy_homeostasis, EntropyHomeostasis)
+
+    def test_linear_schedule_no_homeostasis(self):
+        """RL_ENTROPY_SCHEDULE='linear' means entropy_homeostasis is None."""
+        config = self._base_config()
+        config["RL_ENTROPY_SCHEDULE"] = "linear"
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.entropy_homeostasis)
+
+    def test_default_schedule_is_linear(self):
+        """No RL_ENTROPY_SCHEDULE key defaults to linear (backward compat)."""
+        config = self._base_config()
+        # No RL_ENTROPY_SCHEDULE key
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.entropy_homeostasis)
+
+    def test_entropy_coef_logged_in_history(self):
+        """history['entropy_coef'] is populated after train()."""
+        config = self._base_config()
+        config["RL_ENTROPY_SCHEDULE"] = "homeostasis"
+        config["RL_POLICY_ENTROPY_TARGET"] = -1.0
+        config["RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE"] = 0.05
+        config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 0.95
+        config["RL_ENTROPY_COEF_MIN"] = 0.01
+        config["RL_ENTROPY_COEF_MAX"] = 0.5
+        config["RL_TOTAL_TIMESTEPS"] = 32
+        config["RL_ROLLOUT_STEPS"] = 16
+
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        mock_env = MagicMock()
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"creativity": 0.5, "focus": 0.5, "stability": 0.5},
+                "reward_components": {"perplexity": 0.0, "diversity": 0.0, "repetition": 0.0, "coherence": 0.0},
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            history = trainer.train(total_timesteps=32)
+
+            self.assertIn("entropy_coef", history)
+            self.assertEqual(len(history["entropy_coef"]), 2)  # 32 / 16 = 2 iterations
+            for coef in history["entropy_coef"]:
+                self.assertGreaterEqual(coef, config["RL_ENTROPY_COEF_MIN"])
+                self.assertLessEqual(coef, config["RL_ENTROPY_COEF_MAX"])
 
 
 if __name__ == "__main__":
