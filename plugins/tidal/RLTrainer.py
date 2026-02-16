@@ -24,12 +24,28 @@ from dataclasses import dataclass
 import os
 import json
 from datetime import datetime
-from collections import deque
-
 from .GatingPolicyAgent import GatingPolicyAgent, create_agent
 from .GatingEnvironment import GatingEnvironment, VectorizedGatingEnvironment
 from .GatingModulator import GatingModulator
 from .RewardComputer import RewardComputer
+
+
+class ExponentialMovingAverage:
+    """Exponential moving average tracker for episode statistics.
+
+    Replaces deque(maxlen=N) + np.mean() which creates deterministic
+    sliding-window cycling artifacts once the deque is full.
+    """
+
+    def __init__(self, alpha: float = 0.05):
+        self.alpha = alpha
+        self.value: Optional[float] = None
+
+    def update(self, new_value: float):
+        if self.value is None:
+            self.value = new_value
+        else:
+            self.value = self.alpha * new_value + (1 - self.alpha) * self.value
 
 
 class RolloutBuffer:
@@ -128,12 +144,20 @@ class PPOTrainer:
         self.metrics_dir = os.path.join(experiment_dir, "rl_metrics")
         os.makedirs(self.metrics_dir, exist_ok=True)
 
+        self.entropy_coef_final = config.get("RL_ENTROPY_COEF_FINAL", self.entropy_coef)
+
         self.global_step = 0
-        self.episode_rewards = deque(maxlen=100)
-        self.episode_lengths = deque(maxlen=100)
+        ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
+        self.episode_rewards = ExponentialMovingAverage(alpha=ema_alpha)
+        self.episode_lengths = ExponentialMovingAverage(alpha=ema_alpha)
         obs_dim = config.get("RL_OBSERVATION_DIM", 64)
         action_dim = config.get("RL_ACTION_DIM", 3)
         self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim)
+
+    def get_entropy_coef(self, iteration: int, total_iterations: int) -> float:
+        """Linear interpolation from initial to final entropy coefficient."""
+        fraction = iteration / max(total_iterations - 1, 1)
+        return self.entropy_coef + fraction * (self.entropy_coef_final - self.entropy_coef)
 
     def collect_rollouts(self, num_steps: int) -> Dict[str, float]:
         self.buffer.clear()
@@ -178,8 +202,8 @@ class PPOTrainer:
             episode_length += 1
 
             if done:
-                self.episode_rewards.append(episode_reward)
-                self.episode_lengths.append(episode_length)
+                self.episode_rewards.update(episode_reward)
+                self.episode_lengths.update(episode_length)
                 episode_reward = 0.0
                 episode_length = 0
                 obs = self.env.reset()
@@ -227,6 +251,7 @@ class PPOTrainer:
 
     def update_policy(
         self, advantages: torch.Tensor, returns: torch.Tensor,
+        current_entropy_coef: float = None,
     ) -> Dict[str, float]:
         n = len(self.buffer)
         observations = self.buffer.observations[:n].to(self.device)
@@ -234,6 +259,8 @@ class PPOTrainer:
         old_log_probs = self.buffer.log_probs[:n].to(self.device)
         advantages = advantages.to(self.device)
         returns = returns.to(self.device)
+
+        entropy_coef = current_entropy_coef if current_entropy_coef is not None else self.entropy_coef
 
         num_samples = len(self.buffer)
         indices = np.arange(num_samples)
@@ -271,7 +298,7 @@ class PPOTrainer:
                 loss = (
                     policy_loss
                     + self.value_coef * value_loss
-                    + self.entropy_coef * entropy_loss
+                    + entropy_coef * entropy_loss
                 )
 
                 self.optimizer.zero_grad()
@@ -308,12 +335,13 @@ class PPOTrainer:
         for iteration in range(num_iterations):
             rollout_stats = self.collect_rollouts(self.rollout_steps)
             advantages, returns = self.compute_advantages()
-            update_stats = self.update_policy(advantages, returns)
+            current_entropy_coef = self.get_entropy_coef(iteration, num_iterations)
+            update_stats = self.update_policy(advantages, returns, current_entropy_coef)
             self.lr_scheduler.step()
 
-            if len(self.episode_rewards) > 0:
-                mean_ep_reward = np.mean(self.episode_rewards)
-                mean_ep_length = np.mean(self.episode_lengths)
+            if self.episode_rewards.value is not None:
+                mean_ep_reward = self.episode_rewards.value
+                mean_ep_length = self.episode_lengths.value
             else:
                 mean_ep_reward = 0.0
                 mean_ep_length = 0.0

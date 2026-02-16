@@ -22,7 +22,8 @@ RL_LEARNING_RATE: 3.0e-4
 RL_GAMMA: 0.99  # Discount factor
 RL_GAE_LAMBDA: 0.95  # GAE lambda for advantage estimation
 RL_CLIP_EPSILON: 0.2  # PPO clipping parameter
-RL_ENTROPY_COEF: 0.01  # Entropy bonus coefficient
+RL_ENTROPY_COEF: 0.01  # Entropy bonus coefficient (initial)
+RL_ENTROPY_COEF_FINAL: 0.1  # Entropy bonus coefficient (final, annealed linearly)
 RL_VALUE_COEF: 0.5  # Value loss coefficient
 RL_MAX_GRAD_NORM: 0.5  # Gradient clipping
 
@@ -31,6 +32,10 @@ RL_ROLLOUT_STEPS: 128  # Steps per rollout before update
 RL_NUM_EPOCHS: 4  # PPO epochs per rollout
 RL_BATCH_SIZE: 32  # Minibatch size for updates
 RL_TOTAL_TIMESTEPS: 100000  # Total training steps
+RL_EMA_ALPHA: 0.05  # Smoothing factor for episode stat tracking (replaces deque)
+
+# Beta distribution concentration cap (prevents entropy collapse)
+RL_BETA_CONCENTRATION_MAX: 20.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

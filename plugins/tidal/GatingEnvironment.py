@@ -166,7 +166,7 @@ class GatingEnvironment:
         new_token = top_k_indices[next_token_idx].item()
 
         reward, reward_components = self.reward_computer.compute_step_reward(
-            logits[0, -1, :], self.generated_tokens, new_token, normalize=True,
+            logits[0, -1, :], self.generated_tokens, new_token, normalize=False,
         )
 
         # Optionally include training loss in reward

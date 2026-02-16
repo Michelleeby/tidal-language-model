@@ -43,6 +43,7 @@ class GatingPolicyAgent(nn.Module):
         self.obs_dim = config.get("RL_OBSERVATION_DIM", 64)
         self.action_dim = config.get("RL_ACTION_DIM", 3)
         self.hidden_dim = config.get("RL_HIDDEN_DIM", 128)
+        self.beta_concentration_max = config.get("RL_BETA_CONCENTRATION_MAX", 20.0)
 
         self.feature_extractor = nn.Sequential(
             nn.LayerNorm(self.obs_dim),
@@ -88,6 +89,8 @@ class GatingPolicyAgent(nn.Module):
         actor_output = self.actor_head(features)
         alpha = F.softplus(actor_output[:, :self.action_dim]) + 1.0
         beta = F.softplus(actor_output[:, self.action_dim:]) + 1.0
+        alpha = alpha.clamp(max=self.beta_concentration_max)
+        beta = beta.clamp(max=self.beta_concentration_max)
         action_dist = Beta(alpha, beta)
 
         value = self.critic_head(features)
