@@ -57,7 +57,7 @@ export const ExperimentChartBlock = createReactBlockSpec(
                 <option value="Losses/Total">Loss</option>
                 <option value="Learning Rate">Learning Rate</option>
                 <option value="Perplexity">Perplexity</option>
-                <option value="Throughput/IterationsPerSecond">Throughput</option>
+                <option value="Iterations/Second">Throughput</option>
               </select>
             </div>
           )}
@@ -75,13 +75,31 @@ export const ExperimentChartBlock = createReactBlockSpec(
               No data available for {metricKey}
             </div>
           ) : (
-            <MiniChart points={points} metricKey={metricKey} />
+            <MiniChart key={metricKey} points={points} metricKey={metricKey} />
           )}
         </div>
       );
     },
   },
 );
+
+/** Extract numeric values from metric points, handling derived metrics. */
+export function extractValues(
+  points: Array<Record<string, unknown>>,
+  metricKey: string,
+): number[] {
+  if (metricKey === "Perplexity") {
+    return points
+      .map((p) => Math.exp(Number(p["Losses/Total"])))
+      .filter((v) => !isNaN(v) && isFinite(v));
+  }
+  return points
+    .map((p) => Number(p[metricKey]))
+    .filter((v) => !isNaN(v));
+}
+
+const BASE_W = 600;
+const BASE_H = 200;
 
 /** Lightweight inline chart using canvas. */
 function MiniChart({
@@ -97,18 +115,14 @@ function MiniChart({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
+    canvas.width = BASE_W * dpr;
+    canvas.height = BASE_H * dpr;
+    canvas.style.width = `${BASE_W}px`;
+    canvas.style.height = `${BASE_H}px`;
     ctx.scale(dpr, dpr);
 
-    const values = points
-      .map((p) => Number(p[metricKey]))
-      .filter((v) => !isNaN(v));
+    const values = extractValues(points, metricKey);
 
     if (values.length === 0) return;
 
@@ -116,16 +130,16 @@ function MiniChart({
     const max = Math.max(...values);
     const range = max - min || 1;
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, BASE_W, BASE_H);
 
     // Grid lines
     ctx.strokeStyle = "#374151";
     ctx.lineWidth = 0.5;
     for (let i = 0; i < 4; i++) {
-      const y = (height / 4) * i;
+      const y = (BASE_H / 4) * i;
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
+      ctx.lineTo(BASE_W, y);
       ctx.stroke();
     }
 
@@ -134,8 +148,8 @@ function MiniChart({
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     for (let i = 0; i < values.length; i++) {
-      const x = (i / (values.length - 1)) * width;
-      const y = height - ((values[i] - min) / range) * (height - 8) - 4;
+      const x = (i / (values.length - 1)) * BASE_W;
+      const y = BASE_H - ((values[i] - min) / range) * (BASE_H - 8) - 4;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -145,7 +159,7 @@ function MiniChart({
     ctx.fillStyle = "#9ca3af";
     ctx.font = "10px monospace";
     ctx.fillText(max.toFixed(4), 4, 12);
-    ctx.fillText(min.toFixed(4), 4, height - 4);
+    ctx.fillText(min.toFixed(4), 4, BASE_H - 4);
   };
 
   return (
@@ -153,10 +167,10 @@ function MiniChart({
       <div className="text-xs text-gray-400 mb-1 font-mono">{metricKey}</div>
       <canvas
         ref={canvasRef}
-        width={600}
-        height={200}
+        width={BASE_W}
+        height={BASE_H}
         className="w-full rounded bg-gray-950"
-        style={{ height: 200 }}
+        style={{ height: BASE_H }}
       />
       <div className="text-xs text-gray-500 mt-1">
         {points.length} data points
