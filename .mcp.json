@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tidal-dashboard": {
+      "command": "node",
+      "args": ["dashboard/packages/mcp/dist/index.js"],
+      "env": {
+        "TIDAL_API_URL": "https://ai.michelleeby.com",
+        "TIDAL_API_TOKEN": "${TIDAL_AUTH_TOKEN}"
+      }
+    }
+  }
+}

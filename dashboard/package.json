@@ -4,7 +4,8 @@
   "workspaces": [
     "packages/shared",
     "packages/server",
-    "packages/client"
+    "packages/client",
+    "packages/mcp"
   ],
   "scripts": {
     "dev": "npm run build -w packages/shared && npm run dev -w packages/server & npm run dev -w packages/client & npm run dev -w packages/shared & wait",
