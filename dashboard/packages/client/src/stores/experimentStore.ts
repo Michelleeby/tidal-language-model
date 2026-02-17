@@ -8,14 +8,12 @@ interface ExperimentStore {
   comparisonExpIds: string[];
   sidebarOpen: boolean;
   selectedReportId: string | null;
-  selectedPluginId: string | null;
   selectedFilePath: string | null;
   setView: (view: ViewType) => void;
   setSelectedExpId: (id: string | null) => void;
   toggleComparisonExp: (id: string) => void;
   setSidebarOpen: (open: boolean) => void;
   setSelectedReportId: (id: string | null) => void;
-  setSelectedPluginId: (id: string | null) => void;
   setSelectedFilePath: (path: string | null) => void;
 }
 
@@ -25,7 +23,6 @@ export const useExperimentStore = create<ExperimentStore>((set) => ({
   comparisonExpIds: [],
   sidebarOpen: true,
   selectedReportId: null,
-  selectedPluginId: null,
   selectedFilePath: null,
   setView: (view) => set({ view }),
   setSelectedExpId: (id) => set({ selectedExpId: id }),
@@ -38,6 +35,5 @@ export const useExperimentStore = create<ExperimentStore>((set) => ({
     }),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setSelectedReportId: (id) => set({ selectedReportId: id }),
-  setSelectedPluginId: (id) => set({ selectedPluginId: id, selectedFilePath: null }),
   setSelectedFilePath: (path) => set({ selectedFilePath: path }),
 }));

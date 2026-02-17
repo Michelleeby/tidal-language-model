@@ -58,7 +58,7 @@ async function buildApp(experimentsDir: string): Promise<FastifyInstance> {
   app.decorate("redis", redisMock as unknown as Redis);
   app.decorate("serverConfig", { experimentsDir } as unknown as ServerConfig);
   app.decorate("sseManager", { broadcastJobUpdate: () => {} } as unknown as SSEManager);
-  app.decorate("pluginRegistry", { getDefault: () => undefined } as any);
+  app.decorate("tidalManifest", null);
   app.decorate("verifyAuth", async () => {});
 
   await app.register(workerRoutes);

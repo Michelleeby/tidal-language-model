@@ -1,9 +1,10 @@
-import { describe, it, after, before } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { PluginRegistry } from "../../services/plugin-registry.js";
+import { loadTidalManifest } from "../../services/tidal-manifest-loader.js";
+import type { PluginManifest } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,33 +128,36 @@ infrastructure:
 `;
 
 // ---------------------------------------------------------------------------
-// Plugin registry integration (route-level logic)
+// Manifest loading (route-level logic simulation)
 // ---------------------------------------------------------------------------
 
-describe("GET /api/plugins (via registry)", () => {
-  it("lists all plugins with summary info", async () => {
+describe("GET /api/plugins (via tidal manifest)", () => {
+  it("returns summary for tidal manifest", async () => {
     const tmpDir = await freshTmpDir();
-    const pluginDir = path.join(tmpDir, "tidal");
-    await fsp.mkdir(pluginDir, { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "manifest.yaml"), MANIFEST_YAML);
+    const manifestPath = path.join(tmpDir, "manifest.yaml");
+    await fsp.writeFile(manifestPath, MANIFEST_YAML);
 
-    const registry = new PluginRegistry(tmpDir);
-    await registry.load();
+    const manifest = await loadTidalManifest(manifestPath);
+    assert.ok(manifest);
 
-    // Simulate route handler logic: build summary list
-    const plugins = registry.list().map((p) => ({
-      name: p.name,
-      displayName: p.displayName,
-      version: p.version,
-      trainingPhases: p.trainingPhases.map((tp) => ({
-        id: tp.id,
-        displayName: tp.displayName,
-      })),
-      generationModes: p.generation.modes.map((m) => ({
-        id: m.id,
-        displayName: m.displayName,
-      })),
-    }));
+    // Simulate route handler logic: build summary
+    const plugins = manifest
+      ? [
+          {
+            name: manifest.name,
+            displayName: manifest.displayName,
+            version: manifest.version,
+            trainingPhases: manifest.trainingPhases.map((tp: PluginManifest["trainingPhases"][0]) => ({
+              id: tp.id,
+              displayName: tp.displayName,
+            })),
+            generationModes: manifest.generation.modes.map((m: PluginManifest["generation"]["modes"][0]) => ({
+              id: m.id,
+              displayName: m.displayName,
+            })),
+          },
+        ]
+      : [];
 
     assert.equal(plugins.length, 1);
     assert.equal(plugins[0].name, "tidal");
@@ -166,32 +170,21 @@ describe("GET /api/plugins (via registry)", () => {
   });
 });
 
-describe("GET /api/plugins/:name (via registry)", () => {
-  it("returns full manifest for known plugin", async () => {
+describe("GET /api/plugins/:name (via tidal manifest)", () => {
+  it("returns full manifest for tidal", async () => {
     const tmpDir = await freshTmpDir();
-    const pluginDir = path.join(tmpDir, "tidal");
-    await fsp.mkdir(pluginDir, { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "manifest.yaml"), MANIFEST_YAML);
+    const manifestPath = path.join(tmpDir, "manifest.yaml");
+    await fsp.writeFile(manifestPath, MANIFEST_YAML);
 
-    const registry = new PluginRegistry(tmpDir);
-    await registry.load();
-
-    const plugin = registry.get("tidal");
-    assert.ok(plugin);
-    assert.equal(plugin.name, "tidal");
-    assert.equal(plugin.generation.entrypoint, "Generator.py");
-    assert.equal(plugin.infrastructure.dockerImage, "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime");
+    const manifest = await loadTidalManifest(manifestPath);
+    assert.ok(manifest);
+    assert.equal(manifest.name, "tidal");
+    assert.equal(manifest.generation.entrypoint, "Generator.py");
+    assert.equal(manifest.infrastructure.dockerImage, "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime");
   });
 
-  it("returns undefined for unknown plugin", async () => {
-    const tmpDir = await freshTmpDir();
-    const pluginDir = path.join(tmpDir, "tidal");
-    await fsp.mkdir(pluginDir, { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "manifest.yaml"), MANIFEST_YAML);
-
-    const registry = new PluginRegistry(tmpDir);
-    await registry.load();
-
-    assert.equal(registry.get("nonexistent"), undefined);
+  it("returns null for missing manifest", async () => {
+    const manifest = await loadTidalManifest("/tmp/nonexistent-12345.yaml");
+    assert.equal(manifest, null);
   });
 });

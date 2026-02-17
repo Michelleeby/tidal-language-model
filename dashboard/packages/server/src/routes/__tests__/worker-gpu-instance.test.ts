@@ -69,7 +69,7 @@ async function buildApp(experimentsDir: string): Promise<FastifyInstance> {
     broadcastJobUpdate: () => {},
     broadcastLogLines: () => {},
   } as unknown as SSEManager);
-  app.decorate("pluginRegistry", { getDefault: () => undefined } as any);
+  app.decorate("tidalManifest", null);
   app.decorate("provisioningChain", { getProvider: () => undefined } as any);
   app.decorate("workerSpawner", {} as any);
   app.decorate("verifyAuth", async () => {});

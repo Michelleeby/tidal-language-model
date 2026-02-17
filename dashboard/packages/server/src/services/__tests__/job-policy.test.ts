@@ -9,7 +9,7 @@ import {
   JobPolicyRegistry,
   type JobPolicy,
 } from "../job-policy.js";
-import { PluginRegistry } from "../plugin-registry.js";
+import { loadTidalManifest } from "../tidal-manifest-loader.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -206,16 +206,15 @@ describe("LM + RL coexistence", () => {
 // ---------------------------------------------------------------------------
 
 describe("JobPolicyRegistry", () => {
-  it("builds policies from plugin registry", async () => {
+  it("builds policies from tidal manifest", async () => {
     const tmpDir = await freshTmpDir();
-    const pluginDir = path.join(tmpDir, "tidal");
-    await fsp.mkdir(pluginDir, { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "manifest.yaml"), MANIFEST_YAML);
+    const manifestPath = path.join(tmpDir, "manifest.yaml");
+    await fsp.writeFile(manifestPath, MANIFEST_YAML);
 
-    const pluginReg = new PluginRegistry(tmpDir);
-    await pluginReg.load();
+    const manifest = await loadTidalManifest(manifestPath);
+    assert.ok(manifest);
 
-    const registry = new JobPolicyRegistry(pluginReg);
+    const registry = new JobPolicyRegistry(manifest);
     const lm = registry.get("lm-training");
     assert.ok(lm);
     assert.equal(lm.type, "lm-training");
@@ -223,35 +222,26 @@ describe("JobPolicyRegistry", () => {
 
   it("returns registered RL policy", async () => {
     const tmpDir = await freshTmpDir();
-    const pluginDir = path.join(tmpDir, "tidal");
-    await fsp.mkdir(pluginDir, { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "manifest.yaml"), MANIFEST_YAML);
+    const manifestPath = path.join(tmpDir, "manifest.yaml");
+    await fsp.writeFile(manifestPath, MANIFEST_YAML);
 
-    const pluginReg = new PluginRegistry(tmpDir);
-    await pluginReg.load();
+    const manifest = await loadTidalManifest(manifestPath);
+    assert.ok(manifest);
 
-    const registry = new JobPolicyRegistry(pluginReg);
+    const registry = new JobPolicyRegistry(manifest);
     const rl = registry.get("rl-training");
     assert.ok(rl);
     assert.equal(rl.type, "rl-training");
   });
 
   it("returns undefined for unregistered type", async () => {
-    const tmpDir = await freshTmpDir();
-    const pluginReg = new PluginRegistry(tmpDir);
-    await pluginReg.load();
-
-    const registry = new JobPolicyRegistry(pluginReg);
+    const registry = new JobPolicyRegistry(null);
     const result = registry.get("unknown");
     assert.equal(result, undefined);
   });
 
   it("supports custom policy registration", async () => {
-    const tmpDir = await freshTmpDir();
-    const pluginReg = new PluginRegistry(tmpDir);
-    await pluginReg.load();
-
-    const registry = new JobPolicyRegistry(pluginReg);
+    const registry = new JobPolicyRegistry(null);
     const custom: JobPolicy = {
       type: "lm-training",
       checkConcurrency: () => "blocked",

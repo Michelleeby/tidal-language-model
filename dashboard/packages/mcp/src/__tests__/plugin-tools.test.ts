@@ -97,6 +97,20 @@ describe("handleGetPluginManifest", () => {
     await handleGetPluginManifest(client, { pluginName: "tidal" });
     assert.equal(capturedPath, "/api/plugins/tidal");
   });
+
+  it("defaults to 'tidal' when pluginName is omitted", async () => {
+    let capturedPath = "";
+    const client: TidalApiClient = {
+      get: async (path) => {
+        capturedPath = path;
+        return { ok: true, data: { plugin: null }, status: 200 } as ApiResult<never>;
+      },
+      post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+    };
+
+    await handleGetPluginManifest(client, {});
+    assert.equal(capturedPath, "/api/plugins/tidal");
+  });
 });
 
 // ---------------------------------------------------------------------------

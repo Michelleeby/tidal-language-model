@@ -3,7 +3,7 @@ import { ExperimentDiscovery } from "../services/experiment-discovery.js";
 import type { ExperimentsResponse } from "@tidal/shared";
 
 export default async function experimentsRoutes(fastify: FastifyInstance) {
-  const plugin = fastify.pluginRegistry.getDefault();
+  const plugin = fastify.tidalManifest;
   const discoveryConfig = plugin
     ? {
         redisPrefix: plugin.metrics.redisPrefix,

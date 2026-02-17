@@ -1,5 +1,4 @@
-import type { JobType, TrainingJob } from "@tidal/shared";
-import type { PluginRegistry } from "./plugin-registry.js";
+import type { JobType, TrainingJob, PluginManifest } from "@tidal/shared";
 
 export type GpuTier = string;
 
@@ -43,21 +42,19 @@ export class ManifestJobPolicy implements JobPolicy {
 export class JobPolicyRegistry {
   private policies: Map<JobType, JobPolicy>;
 
-  constructor(pluginRegistry?: PluginRegistry) {
+  constructor(manifest?: PluginManifest | null) {
     this.policies = new Map();
 
-    if (pluginRegistry) {
-      for (const plugin of pluginRegistry.list()) {
-        for (const phase of plugin.trainingPhases) {
-          this.register(
-            new ManifestJobPolicy(
-              phase.id,
-              phase.displayName,
-              phase.concurrency,
-              phase.gpuTier,
-            ),
-          );
-        }
+    if (manifest) {
+      for (const phase of manifest.trainingPhases) {
+        this.register(
+          new ManifestJobPolicy(
+            phase.id,
+            phase.displayName,
+            phase.concurrency,
+            phase.gpuTier,
+          ),
+        );
       }
     }
   }

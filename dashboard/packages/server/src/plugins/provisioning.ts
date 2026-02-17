@@ -16,7 +16,7 @@ declare module "fastify" {
 
 export default fp(async function provisioningPlugin(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
-  const plugin = fastify.pluginRegistry?.getDefault();
+  const plugin = fastify.tidalManifest;
 
   const spawner = new WorkerSpawner(
     config.projectRoot,

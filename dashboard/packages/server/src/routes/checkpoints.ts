@@ -12,7 +12,7 @@ export default async function checkpointsRoutes(fastify: FastifyInstance) {
     const { expId } = request.params;
     const expDir = path.join(fastify.serverConfig.experimentsDir, expId);
 
-    const plugin = fastify.pluginRegistry.getDefault();
+    const plugin = fastify.tidalManifest;
     if (!plugin) {
       request.log.warn(
         "No plugin loaded — checkpoint phases will be 'unknown'. Check plugins directory and manifest.yaml.",

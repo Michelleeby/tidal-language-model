@@ -9,7 +9,7 @@ declare module "fastify" {
 }
 
 export default fp(async function ssePlugin(fastify: FastifyInstance) {
-  const plugin = fastify.pluginRegistry?.getDefault();
+  const plugin = fastify.tidalManifest;
   const sseConfig = plugin
     ? sseConfigFromManifest(plugin.redis)
     : undefined;

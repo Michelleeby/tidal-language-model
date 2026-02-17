@@ -3,7 +3,8 @@ import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import cookie from "@fastify/cookie";
 import { loadConfig, validateConfig, type ServerConfig } from "./config.js";
-import { PluginRegistry } from "./services/plugin-registry.js";
+import type { PluginManifest } from "@tidal/shared";
+import { loadTidalManifest } from "./services/tidal-manifest-loader.js";
 import { migrateLegacyReports } from "./services/report-migration.js";
 import redisPlugin from "./plugins/redis.js";
 import corsPlugin from "./plugins/cors.js";
@@ -12,8 +13,6 @@ import authPlugin from "./plugins/auth.js";
 import databasePlugin from "./plugins/database.js";
 import rateLimitPlugin from "./plugins/rate-limit.js";
 import provisioningPlugin from "./plugins/provisioning.js";
-import userPluginStorePlugin from "./plugins/user-plugin-store.js";
-import githubRepoPlugin from "./plugins/github-repo.js";
 import experimentsRoutes from "./routes/experiments.js";
 import metricsRoutes from "./routes/metrics.js";
 import rlMetricsRoutes from "./routes/rl-metrics.js";
@@ -29,12 +28,12 @@ import pluginsRoutes from "./routes/plugins.js";
 import configsRoutes from "./routes/configs.js";
 import reportsRoutes from "./routes/reports.js";
 import authRoutes from "./routes/auth.js";
-import userPluginsRoutes from "./routes/user-plugins.js";
+import modelSourceRoutes from "./routes/model-source.js";
 
 declare module "fastify" {
   interface FastifyInstance {
     serverConfig: ServerConfig;
-    pluginRegistry: PluginRegistry;
+    tidalManifest: PluginManifest | null;
   }
 }
 
@@ -68,18 +67,15 @@ async function main() {
   // Decorate with config
   fastify.decorate("serverConfig", config);
 
-  // Load plugin manifests
-  const pluginRegistry = new PluginRegistry(
-    path.join(config.projectRoot, "plugins"),
-    fastify.log,
-  );
-  await pluginRegistry.load();
-  if (!pluginRegistry.getDefault()) {
+  // Load tidal manifest directly
+  const manifestPath = path.join(config.projectRoot, "plugins", "tidal", "manifest.yaml");
+  const tidalManifest = await loadTidalManifest(manifestPath, fastify.log);
+  if (!tidalManifest) {
     fastify.log.warn(
-      "No default plugin available — checkpoint classification and generation will not work",
+      "Tidal manifest not found — checkpoint classification and generation will not work",
     );
   }
-  fastify.decorate("pluginRegistry", pluginRegistry);
+  fastify.decorate("tidalManifest", tidalManifest);
 
   // Plugins (order matters: cookie + database before auth, redis before sse, all before routes)
   await fastify.register(cookie);
@@ -90,8 +86,6 @@ async function main() {
   await fastify.register(authPlugin);
   await fastify.register(rateLimitPlugin);
   await fastify.register(provisioningPlugin);
-  await fastify.register(userPluginStorePlugin);
-  await fastify.register(githubRepoPlugin);
 
   // Migrate legacy JSON reports into SQLite (idempotent, runs before routes)
   const reportsDir = path.join(config.projectRoot, "reports");
@@ -122,7 +116,7 @@ async function main() {
   await fastify.register(pluginsRoutes);
   await fastify.register(configsRoutes);
   await fastify.register(reportsRoutes);
-  await fastify.register(userPluginsRoutes);
+  await fastify.register(modelSourceRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

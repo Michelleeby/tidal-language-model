@@ -6,7 +6,7 @@ import os from "node:os";
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../../config.js";
-import { PluginRegistry } from "../../services/plugin-registry.js";
+import { loadTidalManifest } from "../../services/tidal-manifest-loader.js";
 import checkpointsRoutes from "../checkpoints.js";
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ infrastructure:
 `;
 
 /**
- * Build a Fastify app wired with a real PluginRegistry and checkpoints route.
+ * Build a Fastify app wired with a tidal manifest and checkpoints route.
  */
 async function buildApp(
   experimentsDir: string,
@@ -124,9 +124,9 @@ async function buildApp(
 
   app.decorate("serverConfig", { experimentsDir } as unknown as ServerConfig);
 
-  const registry = new PluginRegistry(pluginsDir);
-  await registry.load();
-  app.decorate("pluginRegistry", registry);
+  const manifestPath = path.join(pluginsDir, "tidal", "manifest.yaml");
+  const manifest = await loadTidalManifest(manifestPath);
+  app.decorate("tidalManifest", manifest);
 
   await app.register(checkpointsRoutes);
   return app;

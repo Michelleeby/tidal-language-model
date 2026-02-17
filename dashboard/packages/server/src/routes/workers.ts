@@ -12,7 +12,7 @@ import { ExperimentArchiver, archiverConfigFromManifest } from "../services/expe
 const ARTIFACT_FILENAME_RE = /^[\w.-]+\.(pth|json)$/;
 
 export default async function workerRoutes(fastify: FastifyInstance) {
-  const plugin = fastify.pluginRegistry.getDefault();
+  const plugin = fastify.tidalManifest;
   const storeKeys = plugin
     ? jobStoreKeysFromManifest(plugin.redis)
     : undefined;

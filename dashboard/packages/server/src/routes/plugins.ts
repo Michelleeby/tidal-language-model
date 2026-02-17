@@ -2,24 +2,30 @@ import type { FastifyInstance } from "fastify";
 import type { PluginsListResponse, PluginResponse } from "@tidal/shared";
 
 export default async function pluginsRoutes(fastify: FastifyInstance) {
-  /** GET /api/plugins — list all plugins (summary). */
+  /** GET /api/plugins — list plugins (single tidal manifest). */
   fastify.get<{ Reply: PluginsListResponse }>(
     "/api/plugins",
     async () => {
-      const plugins = fastify.pluginRegistry.list().map((p) => ({
-        name: p.name,
-        displayName: p.displayName,
-        version: p.version,
-        trainingPhases: p.trainingPhases.map((tp) => ({
-          id: tp.id,
-          displayName: tp.displayName,
-        })),
-        generationModes: p.generation.modes.map((m) => ({
-          id: m.id,
-          displayName: m.displayName,
-        })),
-      }));
-      return { plugins };
+      const manifest = fastify.tidalManifest;
+      if (!manifest) return { plugins: [] };
+
+      return {
+        plugins: [
+          {
+            name: manifest.name,
+            displayName: manifest.displayName,
+            version: manifest.version,
+            trainingPhases: manifest.trainingPhases.map((tp) => ({
+              id: tp.id,
+              displayName: tp.displayName,
+            })),
+            generationModes: manifest.generation.modes.map((m) => ({
+              id: m.id,
+              displayName: m.displayName,
+            })),
+          },
+        ],
+      };
     },
   );
 
@@ -27,11 +33,11 @@ export default async function pluginsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { name: string }; Reply: PluginResponse }>(
     "/api/plugins/:name",
     async (request, reply) => {
-      const plugin = fastify.pluginRegistry.get(request.params.name);
-      if (!plugin) {
+      const manifest = fastify.tidalManifest;
+      if (!manifest || manifest.name !== request.params.name) {
         return reply.status(404).send({ plugin: null });
       }
-      return { plugin };
+      return { plugin: manifest };
     },
   );
 }

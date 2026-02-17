@@ -4,7 +4,7 @@ import { lttbDownsample } from "../services/downsampler.js";
 import type { MetricsResponse } from "@tidal/shared";
 
 export default async function metricsRoutes(fastify: FastifyInstance) {
-  const plugin = fastify.pluginRegistry.getDefault();
+  const plugin = fastify.tidalManifest;
   const metricsConfig = plugin
     ? metricsReaderConfigFromManifest(plugin.metrics)
     : undefined;

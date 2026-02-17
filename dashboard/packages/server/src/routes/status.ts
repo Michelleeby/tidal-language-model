@@ -3,7 +3,7 @@ import { MetricsReader, metricsReaderConfigFromManifest } from "../services/metr
 import type { StatusResponse } from "@tidal/shared";
 
 export default async function statusRoutes(fastify: FastifyInstance) {
-  const plugin = fastify.pluginRegistry.getDefault();
+  const plugin = fastify.tidalManifest;
   const metricsConfig = plugin
     ? metricsReaderConfigFromManifest(plugin.metrics)
     : undefined;

@@ -97,6 +97,25 @@ export interface GpuTierSpec {
   minCpuCores: number;
 }
 
+// ── File tree types (used by model source browser) ──────────────────
+
+/** A node in the model file tree. */
+export interface PluginFileNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: PluginFileNode[];
+}
+
+export interface PluginFileTreeResponse {
+  files: PluginFileNode[];
+}
+
+export interface PluginFileReadResponse {
+  path: string;
+  content: string;
+}
+
 // ── API response types for plugin endpoints ─────────────────────────
 
 export interface PluginSummary {
