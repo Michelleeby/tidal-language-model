@@ -49,6 +49,8 @@ implement-kv-cache.md
 refactor-absolute-embeddings-to-rotary-positional.md
 CLAUDE.md
 local/scripts/*
+research/
+.claude/
 
 # Ignore all cached data (datasets, vocabularies)
 cache/
