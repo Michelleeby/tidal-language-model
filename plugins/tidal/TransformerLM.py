@@ -557,7 +557,12 @@ class TransformerLM(nn.Module):
                 next_token_logits = next_token_logits / effects.temperature
                 probs = F.softmax(next_token_logits, dim=-1)
 
-                top_k_val = min(top_k, self.vocab_size)
+                # Nucleus (top-p) filtering
+                from .GatingEnvironment import GatingEnvironment
+                probs = GatingEnvironment._apply_nucleus_sampling(probs, effects.top_p)
+
+                # Dynamic top-k filtering
+                top_k_val = min(effects.top_k, self.vocab_size)
                 top_k_probs, top_k_indices = torch.topk(probs, k=top_k_val)
                 next_token_idx = torch.multinomial(top_k_probs, num_samples=1)
                 next_token_id = top_k_indices[next_token_idx]

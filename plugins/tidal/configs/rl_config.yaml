@@ -67,16 +67,23 @@ RL_BASE_REPETITION_PENALTY: 1.2
 
 # Creativity gate effects on temperature
 # Result: base_temp * (min + creativity * (max - min))
-RL_CREATIVITY_TEMP_MIN: 0.5  # At creativity=0: temp = 0.5x base
-RL_CREATIVITY_TEMP_MAX: 1.5  # At creativity=1: temp = 1.5x base
+RL_CREATIVITY_TEMP_MIN: 0.3  # At creativity=0: temp = 0.3x base
+RL_CREATIVITY_TEMP_MAX: 2.0  # At creativity=1: temp = 2.0x base
+
+# Creativity gate effects on nucleus (top-p) sampling
+# Result: top_p_min + creativity * (top_p_max - top_p_min)
+RL_CREATIVITY_TOP_P_MIN: 0.7  # At creativity=0: narrow nucleus
+RL_CREATIVITY_TOP_P_MAX: 1.0  # At creativity=1: full distribution
 
 # Stability gate effects on repetition penalty
 # Result: penalty in range [min, max] based on stability level
 RL_STABILITY_PENALTY_MIN: 1.0  # At stability=0: no extra penalty
-RL_STABILITY_PENALTY_MAX: 2.5  # At stability=1: 2.5x penalty
+RL_STABILITY_PENALTY_MAX: 3.5  # At stability=1: 3.5x penalty
 
-# Focus gate effects on attention
-RL_FOCUS_ATTENTION_STRENGTH: 2.0  # Strength of position-based attention bias
+# Focus gate effects on top-k filtering
+# Result: top_k_max - focus * (top_k_max - top_k_min)
+RL_FOCUS_TOP_K_MIN: 5    # At focus=1: sharp sampling (only top 5 tokens)
+RL_FOCUS_TOP_K_MAX: 100  # At focus=0: wide sampling (top 100 tokens)
 
 # ============================================================================
 # REWARD FUNCTION WEIGHTS

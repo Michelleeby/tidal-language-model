@@ -26,40 +26,82 @@ class TestGatingModulator(unittest.TestCase):
         self.config = {
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.5,
-            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
             "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 2.5,
-            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
         }
         self.modulator = GatingModulator(self.config)
         self.device = torch.device("cpu")
 
     def test_temperature_modulation(self):
         temp_low = self.modulator.compute_temperature(0.0)
-        self.assertAlmostEqual(temp_low, 0.5, places=4)
+        self.assertAlmostEqual(temp_low, 0.3, places=4)
 
         temp_high = self.modulator.compute_temperature(1.0)
-        self.assertAlmostEqual(temp_high, 1.5, places=4)
+        self.assertAlmostEqual(temp_high, 2.0, places=4)
 
         temp_mid = self.modulator.compute_temperature(0.5)
-        self.assertAlmostEqual(temp_mid, 1.0, places=4)
+        self.assertAlmostEqual(temp_mid, 1.15, places=4)
 
     def test_repetition_penalty_modulation(self):
         penalty_low = self.modulator.compute_repetition_penalty(0.0)
         self.assertAlmostEqual(penalty_low, 1.0, places=4)
 
         penalty_high = self.modulator.compute_repetition_penalty(1.0)
-        self.assertAlmostEqual(penalty_high, 2.5, places=4)
+        self.assertAlmostEqual(penalty_high, 3.5, places=4)
 
         penalty_mid = self.modulator.compute_repetition_penalty(0.5)
-        self.assertAlmostEqual(penalty_mid, 1.75, places=4)
+        self.assertAlmostEqual(penalty_mid, 2.25, places=4)
 
         self.assertGreater(penalty_high, penalty_low)
 
-    def test_attention_bias_shape(self):
-        bias = self.modulator.compute_attention_bias(0.5, 10, self.device)
-        self.assertEqual(bias.shape, (10,))
+    def test_top_k_modulation(self):
+        """focus=0 -> k=100 (wide), focus=1 -> k=5 (sharp)."""
+        top_k_wide = self.modulator.compute_top_k(0.0)
+        self.assertEqual(top_k_wide, 100)
+
+        top_k_sharp = self.modulator.compute_top_k(1.0)
+        self.assertEqual(top_k_sharp, 5)
+
+        # Mid-focus should be between
+        top_k_mid = self.modulator.compute_top_k(0.5)
+        self.assertGreater(top_k_mid, 5)
+        self.assertLess(top_k_mid, 100)
+
+    def test_top_p_modulation(self):
+        """creativity=0 -> p=0.7 (narrow nucleus), creativity=1 -> p=1.0 (full)."""
+        top_p_low = self.modulator.compute_top_p(0.0)
+        self.assertAlmostEqual(top_p_low, 0.7, places=4)
+
+        top_p_high = self.modulator.compute_top_p(1.0)
+        self.assertAlmostEqual(top_p_high, 1.0, places=4)
+
+        top_p_mid = self.modulator.compute_top_p(0.5)
+        self.assertAlmostEqual(top_p_mid, 0.85, places=4)
+
+    def test_forward_returns_top_k_and_top_p(self):
+        """GatingEffects from forward() contains top_k and top_p fields."""
+        gate_signals = torch.tensor([0.5, 0.5, 0.5])
+        effects = self.modulator(gate_signals, 20, self.device)
+
+        self.assertIsInstance(effects, GatingEffects)
+        self.assertIsInstance(effects.top_k, int)
+        self.assertIsInstance(effects.top_p, float)
+        self.assertGreaterEqual(effects.top_k, 5)
+        self.assertLessEqual(effects.top_k, 100)
+        self.assertGreaterEqual(effects.top_p, 0.7)
+        self.assertLessEqual(effects.top_p, 1.0)
+
+    def test_no_attention_bias_field(self):
+        """GatingEffects no longer has an attention_bias field."""
+        gate_signals = torch.tensor([0.5, 0.5, 0.5])
+        effects = self.modulator(gate_signals, 20, self.device)
+        self.assertFalse(hasattr(effects, "attention_bias"))
 
     def test_forward_returns_effects(self):
         gate_signals = torch.tensor([0.5, 0.5, 0.5])
@@ -68,7 +110,8 @@ class TestGatingModulator(unittest.TestCase):
         self.assertIsInstance(effects, GatingEffects)
         self.assertIsInstance(effects.temperature, float)
         self.assertIsInstance(effects.repetition_penalty, float)
-        self.assertIsInstance(effects.attention_bias, torch.Tensor)
+        self.assertIsInstance(effects.top_k, int)
+        self.assertIsInstance(effects.top_p, float)
 
     def test_baseline_policies(self):
         random_policy = RandomGatingPolicy(self.device)
@@ -304,11 +347,14 @@ class TestIntegration(unittest.TestCase):
             "RL_HIDDEN_DIM": 128,
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.5,
-            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
             "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 2.5,
-            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
             "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
             "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
             "RL_REWARD_REPETITION_WEIGHT": 0.2,
@@ -327,7 +373,12 @@ class TestIntegration(unittest.TestCase):
 
         self.assertGreater(effects.temperature, 0)
         self.assertGreater(effects.repetition_penalty, 0)
-        self.assertEqual(effects.attention_bias.shape[0], 20)
+        self.assertIsInstance(effects.top_k, int)
+        self.assertGreaterEqual(effects.top_k, 5)
+        self.assertLessEqual(effects.top_k, 100)
+        self.assertIsInstance(effects.top_p, float)
+        self.assertGreaterEqual(effects.top_p, 0.7)
+        self.assertLessEqual(effects.top_p, 1.0)
 
     def test_reward_computation_integration(self):
         reward_computer = RewardComputer(self.config, vocab_size=1000)
@@ -431,11 +482,14 @@ class TestGatingEnvironmentPrecomputed(unittest.TestCase):
         cls.rl_config = {
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.5,
-            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
             "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 2.5,
-            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
             "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
             "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
             "RL_REWARD_REPETITION_WEIGHT": 0.2,
@@ -703,11 +757,14 @@ class TestEnvStepRewardNormalization(unittest.TestCase):
         cls.rl_config = {
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.5,
-            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
             "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 2.5,
-            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
             "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
             "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
             "RL_REWARD_REPETITION_WEIGHT": 0.2,
@@ -820,11 +877,14 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
         self.rl_config = {
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.5,
-            "RL_CREATIVITY_TEMP_MAX": 1.5,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
             "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 2.5,
-            "RL_FOCUS_ATTENTION_STRENGTH": 2.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
             "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
             "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
             "RL_REWARD_REPETITION_WEIGHT": 0.2,
@@ -1487,6 +1547,129 @@ class TestPPOTrainerHomeostaticSchedule(unittest.TestCase):
             for coef in history["entropy_coef"]:
                 self.assertGreaterEqual(coef, config["RL_ENTROPY_COEF_MIN"])
                 self.assertLessEqual(coef, config["RL_ENTROPY_COEF_MAX"])
+
+
+class TestNucleusSampling(unittest.TestCase):
+    """Tests for nucleus (top-p) sampling implementation."""
+
+    def test_nucleus_sampling_filters_tokens(self):
+        """top_p=0.5 zeroes out tokens outside the nucleus."""
+        from plugins.tidal.GatingEnvironment import GatingEnvironment
+
+        # Create a probability distribution where top 2 tokens hold ~80% mass
+        probs = torch.tensor([0.5, 0.3, 0.1, 0.05, 0.05])
+
+        filtered = GatingEnvironment._apply_nucleus_sampling(probs, top_p=0.5)
+
+        # Only the top token (0.5) should survive at top_p=0.5
+        # The cumulative sum reaches 0.5 at the first token
+        self.assertGreater(filtered[0].item(), 0.0)
+        # After renormalization, some lower-prob tokens should be zeroed
+        num_nonzero = (filtered > 0).sum().item()
+        self.assertLess(num_nonzero, len(probs))
+
+    def test_nucleus_sampling_top_p_1_keeps_all(self):
+        """top_p=1.0 keeps all tokens (no filtering)."""
+        from plugins.tidal.GatingEnvironment import GatingEnvironment
+
+        probs = torch.tensor([0.4, 0.3, 0.2, 0.05, 0.05])
+        filtered = GatingEnvironment._apply_nucleus_sampling(probs, top_p=1.0)
+
+        # All tokens should remain non-zero
+        self.assertTrue(torch.all(filtered > 0))
+
+
+class TestGatingEnvironmentDynamicSampling(unittest.TestCase):
+    """Tests that GatingEnvironment.step() uses dynamic top-k and nucleus sampling."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_MAX_EPISODE_LENGTH": 10,
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+        }
+        cls.config = {**cls.model_config, **cls.rl_config}
+        cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
+        cls.model.eval()
+
+    def _make_env(self):
+        modulator = GatingModulator(self.config)
+        reward_computer = RewardComputer(self.config, 100)
+        prompts = [[1, 2, 3, 4, 5]]
+        return GatingEnvironment(
+            model=self.model,
+            modulator=modulator,
+            reward_computer=reward_computer,
+            prompt_tokens=prompts,
+            config=self.config,
+            device=torch.device("cpu"),
+        )
+
+    def test_step_uses_dynamic_top_k(self):
+        """step() info dict contains dynamic top_k from effects."""
+        env = self._make_env()
+        env.reset()
+        action = torch.tensor([0.5, 0.8, 0.5])  # high focus -> low top_k
+        _, _, _, info = env.step(action)
+
+        self.assertIn("top_k", info["effects"])
+        self.assertIsInstance(info["effects"]["top_k"], int)
+        self.assertGreaterEqual(info["effects"]["top_k"], 5)
+        self.assertLessEqual(info["effects"]["top_k"], 100)
+
+    def test_step_uses_nucleus_sampling(self):
+        """step() info dict contains top_p from effects."""
+        env = self._make_env()
+        env.reset()
+        action = torch.tensor([0.9, 0.5, 0.5])  # high creativity -> high top_p
+        _, _, _, info = env.step(action)
+
+        self.assertIn("top_p", info["effects"])
+        self.assertIsInstance(info["effects"]["top_p"], float)
+        self.assertGreaterEqual(info["effects"]["top_p"], 0.7)
+        self.assertLessEqual(info["effects"]["top_p"], 1.0)
+
+    def test_high_focus_produces_lower_top_k(self):
+        """Higher focus signal should produce lower top_k (sharper sampling)."""
+        env = self._make_env()
+
+        env.reset()
+        action_low_focus = torch.tensor([0.5, 0.1, 0.5])
+        _, _, _, info_low = env.step(action_low_focus)
+
+        env.reset()
+        action_high_focus = torch.tensor([0.5, 0.9, 0.5])
+        _, _, _, info_high = env.step(action_high_focus)
+
+        self.assertGreater(
+            info_low["effects"]["top_k"],
+            info_high["effects"]["top_k"],
+        )
 
 
 if __name__ == "__main__":

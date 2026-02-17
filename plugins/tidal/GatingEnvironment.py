@@ -160,7 +160,12 @@ class GatingEnvironment:
         next_token_logits = next_token_logits / effects.temperature
 
         probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-        top_k = min(self.env_config.top_k, self.model.vocab_size)
+
+        # Stage 1: Nucleus (top-p) filtering
+        probs = self._apply_nucleus_sampling(probs, effects.top_p)
+
+        # Stage 2: Top-k filtering (dynamic from focus gate)
+        top_k = min(effects.top_k, self.model.vocab_size)
         top_k_probs, top_k_indices = torch.topk(probs, k=top_k)
         next_token_idx = torch.multinomial(top_k_probs, num_samples=1)
         new_token = top_k_indices[next_token_idx].item()
@@ -198,6 +203,8 @@ class GatingEnvironment:
             "effects": {
                 "temperature": effects.temperature,
                 "repetition_penalty": effects.repetition_penalty,
+                "top_k": effects.top_k,
+                "top_p": effects.top_p,
             },
             "new_token": new_token,
             "step": self.step_count,
@@ -205,6 +212,24 @@ class GatingEnvironment:
         }
 
         return observation, reward, self.done, info
+
+    @staticmethod
+    def _apply_nucleus_sampling(probs: torch.Tensor, top_p: float) -> torch.Tensor:
+        """Filter probability distribution to nucleus (top-p) subset."""
+        if top_p >= 1.0:
+            return probs
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        # Mask tokens whose cumulative probability exceeds top_p
+        # Shift right so the token that crosses the threshold is kept
+        sorted_mask = cumulative_probs - sorted_probs > top_p
+        sorted_probs[sorted_mask] = 0.0
+        # Scatter back to original order
+        filtered = torch.zeros_like(probs)
+        filtered.scatter_(0, sorted_indices, sorted_probs)
+        # Renormalize
+        filtered = filtered / filtered.sum()
+        return filtered
 
     def _get_observation(
         self,

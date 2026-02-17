@@ -4,8 +4,8 @@ GatingModulator.py
 Applies gate signal effects to generation parameters in the TransformerLM.
 
 Gate signals modulate generation parameters directly:
-- creativity: Sampling temperature (more exploration)
-- focus: Attention focus (sharpen attention on recent tokens)
+- creativity: Sampling temperature + nucleus (top-p) width
+- focus: Top-k filtering sharpness
 - stability: Repetition penalty (avoid repeating tokens)
 
 This module provides the bridge between RL-controlled gate signals and
@@ -14,8 +14,7 @@ the generation behavior of the language model.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Dict, Tuple, Optional
+from typing import Dict
 from dataclasses import dataclass
 
 
@@ -24,7 +23,8 @@ class GatingEffects:
     """Container for gate-modulated generation parameters."""
     temperature: float
     repetition_penalty: float
-    attention_bias: Optional[torch.Tensor]
+    top_k: int
+    top_p: float
 
 
 class GatingModulator(nn.Module):
@@ -32,16 +32,17 @@ class GatingModulator(nn.Module):
     Modulates generation parameters based on gate signal levels.
 
     Gate signal effects:
-    - creativity: Controls sampling temperature
-      - Effect: base_temp * (0.5 + creativity) -> [0.5x, 1.5x] of base
-      - High creativity = more exploration
+    - creativity: Controls sampling temperature and nucleus (top-p) width
+      - Temperature: base_temp * (min + creativity * (max - min))
+      - Top-p: top_p_min + creativity * (top_p_max - top_p_min)
+      - High creativity = higher temperature + wider nucleus
 
-    - focus: Controls attention focus on recent tokens
-      - Effect: Adds position-based bias to attention scores
-      - High focus = sharper focus on recent context
+    - focus: Controls top-k filtering (sampling sharpness)
+      - Effect: top_k_max - focus * (top_k_max - top_k_min)
+      - High focus = low top-k = sharper sampling
 
     - stability: Controls repetition penalty
-      - Effect: base_penalty * (1 + stability * 1.5) -> [1x, 2.5x] of base
+      - Effect: penalty in range [min, max] based on stability level
       - High stability = stronger penalty for repeating tokens
     """
 
@@ -53,17 +54,20 @@ class GatingModulator(nn.Module):
         self.base_repetition_penalty = config.get("RL_BASE_REPETITION_PENALTY", 1.2)
 
         self.creativity_temp_min = config.get("RL_CREATIVITY_TEMP_MIN",
-                                              config.get("RL_CATALYST_TEMP_MIN", 0.5))
+                                              config.get("RL_CATALYST_TEMP_MIN", 0.3))
         self.creativity_temp_max = config.get("RL_CREATIVITY_TEMP_MAX",
-                                              config.get("RL_CATALYST_TEMP_MAX", 1.5))
+                                              config.get("RL_CATALYST_TEMP_MAX", 2.0))
 
         self.stability_penalty_min = config.get("RL_STABILITY_PENALTY_MIN",
                                                 config.get("RL_INHIBITOR_PENALTY_MIN", 1.0))
         self.stability_penalty_max = config.get("RL_STABILITY_PENALTY_MAX",
-                                                config.get("RL_INHIBITOR_PENALTY_MAX", 2.5))
+                                                config.get("RL_INHIBITOR_PENALTY_MAX", 3.5))
 
-        self.focus_attention_strength = config.get("RL_FOCUS_ATTENTION_STRENGTH",
-                                                   config.get("RL_STRESS_ATTENTION_STRENGTH", 2.0))
+        self.focus_top_k_min = config.get("RL_FOCUS_TOP_K_MIN", 5)
+        self.focus_top_k_max = config.get("RL_FOCUS_TOP_K_MAX", 100)
+
+        self.creativity_top_p_min = config.get("RL_CREATIVITY_TOP_P_MIN", 0.7)
+        self.creativity_top_p_max = config.get("RL_CREATIVITY_TOP_P_MAX", 1.0)
 
         self.current_gate_activations = {
             "creativity": 0.5,
@@ -79,14 +83,14 @@ class GatingModulator(nn.Module):
         penalty_multiplier = self.stability_penalty_min + stability * (self.stability_penalty_max - self.stability_penalty_min)
         return self.base_repetition_penalty * penalty_multiplier / self.base_repetition_penalty
 
-    def compute_attention_bias(
-        self, focus: float, seq_len: int, device: torch.device,
-    ) -> torch.Tensor:
-        positions = torch.arange(seq_len, device=device, dtype=torch.float32)
-        if seq_len > 1:
-            positions = positions / (seq_len - 1)
-        bias = self.focus_attention_strength * focus * positions
-        return bias
+    def compute_top_k(self, focus: float) -> int:
+        """Map focus signal to top-k. High focus = low top-k (sharper)."""
+        top_k = self.focus_top_k_max - focus * (self.focus_top_k_max - self.focus_top_k_min)
+        return int(round(top_k))
+
+    def compute_top_p(self, creativity: float) -> float:
+        """Map creativity signal to top-p. High creativity = high top-p (wider nucleus)."""
+        return self.creativity_top_p_min + creativity * (self.creativity_top_p_max - self.creativity_top_p_min)
 
     def forward(
         self, gate_signals: torch.Tensor, seq_len: int, device: torch.device,
@@ -110,21 +114,18 @@ class GatingModulator(nn.Module):
 
         temperature = self.compute_temperature(creativity)
         repetition_penalty = self.compute_repetition_penalty(stability)
-        attention_bias = self.compute_attention_bias(focus, seq_len, device)
+        top_k = self.compute_top_k(focus)
+        top_p = self.compute_top_p(creativity)
 
         return GatingEffects(
             temperature=temperature,
             repetition_penalty=repetition_penalty,
-            attention_bias=attention_bias,
+            top_k=top_k,
+            top_p=top_p,
         )
 
     def get_current_gate_activations(self) -> Dict[str, float]:
         return self.current_gate_activations.copy()
-
-    def apply_attention_bias(
-        self, attention_scores: torch.Tensor, attention_bias: torch.Tensor,
-    ) -> torch.Tensor:
-        return attention_scores + attention_bias
 
     def apply_repetition_penalty_to_logits(
         self, logits: torch.Tensor, generated_tokens: torch.Tensor,
