@@ -178,6 +178,19 @@ class TestRewardComputer(unittest.TestCase):
         self.assertIn("repetition", components)
         self.assertIn("coherence", components)
 
+    def test_step_reward_shape_with_focus(self):
+        """When sampling_entropy is provided, 'focus' appears in components."""
+        logits = torch.randn(1000)
+        tokens = [1, 2, 3, 4, 5]
+        new_token = 6
+
+        reward, components = self.reward_computer.compute_step_reward(
+            logits, tokens, new_token, normalize=False, sampling_entropy=2.5,
+        )
+
+        self.assertIsInstance(reward, float)
+        self.assertIn("focus", components)
+
 
 class TestLogitsEntropyDiversity(unittest.TestCase):
     """Tests that diversity reward uses logits entropy, not trivially-saturated distinct-n."""
@@ -1547,6 +1560,113 @@ class TestPPOTrainerHomeostaticSchedule(unittest.TestCase):
             for coef in history["entropy_coef"]:
                 self.assertGreaterEqual(coef, config["RL_ENTROPY_COEF_MIN"])
                 self.assertLessEqual(coef, config["RL_ENTROPY_COEF_MAX"])
+
+
+class TestFocusReward(unittest.TestCase):
+    """Tests for the focus reward component (sampling entropy)."""
+
+    def setUp(self):
+        self.config = {
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_FOCUS_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_ENTROPY_TARGET": 5.0,
+            "RL_SAMPLING_ENTROPY_TARGET": 2.5,
+        }
+        self.vocab_size = 1000
+        self.rc = RewardComputer(self.config, self.vocab_size)
+
+    def test_focus_reward_high_entropy(self):
+        """High sampling entropy (far above target) gives reward < 1.0."""
+        # entropy = 6.0, target = 2.5 → far above target
+        reward = self.rc.compute_focus_reward(6.0)
+        self.assertLess(reward, 0.5)
+
+    def test_focus_reward_low_entropy(self):
+        """Low sampling entropy (far below target) gives reward < 1.0."""
+        # entropy = 0.1, target = 2.5 → far below target
+        reward = self.rc.compute_focus_reward(0.1)
+        self.assertLess(reward, 0.5)
+
+    def test_focus_reward_at_target(self):
+        """Sampling entropy near target gives reward near 1.0."""
+        reward = self.rc.compute_focus_reward(2.5)
+        self.assertGreater(reward, 0.99)
+
+    def test_focus_reward_in_0_1(self):
+        """Output always in [0, 1] for various entropy values."""
+        for entropy in [0.0, 0.5, 1.0, 2.5, 5.0, 8.0, 12.0]:
+            reward = self.rc.compute_focus_reward(entropy)
+            self.assertGreaterEqual(reward, 0.0)
+            self.assertLessEqual(reward, 1.0)
+
+    def test_focus_reward_config_target(self):
+        """Different RL_SAMPLING_ENTROPY_TARGET shifts the peak."""
+        config_low = dict(self.config, RL_SAMPLING_ENTROPY_TARGET=1.0)
+        config_high = dict(self.config, RL_SAMPLING_ENTROPY_TARGET=5.0)
+        rc_low = RewardComputer(config_low, self.vocab_size)
+        rc_high = RewardComputer(config_high, self.vocab_size)
+
+        # Entropy ≈ 1.0 should be rewarded more by rc_low (target=1.0)
+        r_low = rc_low.compute_focus_reward(1.0)
+        r_high = rc_high.compute_focus_reward(1.0)
+        self.assertGreater(r_low, r_high)
+
+
+class TestFocusRewardIntegration(unittest.TestCase):
+    """Integration tests for focus reward in compute_step_reward."""
+
+    def setUp(self):
+        self.config = {
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_FOCUS_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_ENTROPY_TARGET": 5.0,
+            "RL_SAMPLING_ENTROPY_TARGET": 2.5,
+        }
+        self.vocab_size = 1000
+        self.rc = RewardComputer(self.config, self.vocab_size)
+
+    def test_step_reward_includes_focus_component(self):
+        """When sampling_entropy is passed, components dict includes 'focus'."""
+        logits = torch.randn(1000)
+        tokens = [1, 2, 3, 4, 5]
+        reward, components = self.rc.compute_step_reward(
+            logits, tokens, 6, normalize=False, sampling_entropy=2.5,
+        )
+        self.assertIn("focus", components)
+        self.assertIsInstance(components["focus"], float)
+
+    def test_step_reward_without_sampling_entropy_backward_compatible(self):
+        """When sampling_entropy is not passed, no 'focus' key in components."""
+        logits = torch.randn(1000)
+        tokens = [1, 2, 3, 4, 5]
+        reward, components = self.rc.compute_step_reward(
+            logits, tokens, 6, normalize=False,
+        )
+        self.assertNotIn("focus", components)
+
+    def test_different_top_k_produces_different_focus_reward(self):
+        """Different sampling entropies produce different focus rewards."""
+        logits = torch.randn(1000)
+        tokens = [1, 2, 3, 4, 5]
+
+        # Low sampling entropy (peaked distribution after tight top-k)
+        _, comps_low = self.rc.compute_step_reward(
+            logits, tokens, 6, normalize=False, sampling_entropy=0.5,
+        )
+        # High sampling entropy (broad distribution after wide top-k)
+        _, comps_high = self.rc.compute_step_reward(
+            logits, tokens, 6, normalize=False, sampling_entropy=5.0,
+        )
+
+        self.assertNotAlmostEqual(comps_low["focus"], comps_high["focus"], places=2)
 
 
 class TestNucleusSampling(unittest.TestCase):

@@ -90,14 +90,16 @@ RL_FOCUS_TOP_K_MAX: 100  # At focus=0: wide sampling (top 100 tokens)
 # ============================================================================
 
 # Multi-component reward: reward = sum(weight_i * component_i)
-RL_REWARD_PERPLEXITY_WEIGHT: 0.4  # Lower perplexity = better
-RL_REWARD_DIVERSITY_WEIGHT: 0.3  # Higher diversity = better
-RL_REWARD_REPETITION_WEIGHT: 0.2  # Lower repetition = better
-RL_REWARD_COHERENCE_WEIGHT: 0.1  # Higher coherence = better
+RL_REWARD_PERPLEXITY_WEIGHT: 0.30  # Lower perplexity = better
+RL_REWARD_DIVERSITY_WEIGHT: 0.25   # Higher diversity = better (raw logits entropy)
+RL_REWARD_FOCUS_WEIGHT: 0.15       # Sampling entropy of post-filtered distribution
+RL_REWARD_REPETITION_WEIGHT: 0.20  # Lower repetition = better
+RL_REWARD_COHERENCE_WEIGHT: 0.10   # Higher coherence = better
 
 # Reward normalization
 RL_PERPLEXITY_CLIP: 100.0  # Max perplexity before clipping
-RL_ENTROPY_TARGET: 5.0  # Target entropy for diversity
+RL_ENTROPY_TARGET: 5.0  # Target entropy for diversity (raw logits)
+RL_SAMPLING_ENTROPY_TARGET: 2.5  # Target entropy for focus (post-filtered, lower than raw)
 
 # ============================================================================
 # EVALUATION AND ABLATION

@@ -170,8 +170,13 @@ class GatingEnvironment:
         next_token_idx = torch.multinomial(top_k_probs, num_samples=1)
         new_token = top_k_indices[next_token_idx].item()
 
+        # Compute sampling entropy of post-filtered distribution for focus reward
+        top_k_probs_norm = top_k_probs / top_k_probs.sum()
+        sampling_entropy = -(top_k_probs_norm * torch.log(top_k_probs_norm + 1e-10)).sum().item()
+
         reward, reward_components = self.reward_computer.compute_step_reward(
-            logits[0, -1, :], self.generated_tokens, new_token, normalize=False,
+            logits[0, -1, :], self.generated_tokens, new_token,
+            normalize=False, sampling_entropy=sampling_entropy,
         )
 
         # Optionally include training loss in reward
@@ -206,6 +211,7 @@ class GatingEnvironment:
                 "top_k": effects.top_k,
                 "top_p": effects.top_p,
             },
+            "sampling_entropy": sampling_entropy,
             "new_token": new_token,
             "step": self.step_count,
             "sequence_length": len(self.generated_tokens),

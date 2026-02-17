@@ -223,7 +223,7 @@ class PPOTrainer:
         rollout_values = []
 
         gate_signals_sum = {"creativity": 0.0, "focus": 0.0, "stability": 0.0}
-        reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "repetition": 0.0, "coherence": 0.0}
+        reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "focus": 0.0, "repetition": 0.0, "coherence": 0.0}
 
         for step in range(num_steps):
             with torch.no_grad():
@@ -281,6 +281,7 @@ class PPOTrainer:
             "mean_gate_stability": gate_signals_sum["stability"] / num_steps,
             "mean_reward_perplexity": reward_components_sum["perplexity"] / num_steps,
             "mean_reward_diversity": reward_components_sum["diversity"] / num_steps,
+            "mean_reward_focus": reward_components_sum["focus"] / num_steps,
             "mean_reward_repetition": reward_components_sum["repetition"] / num_steps,
             "mean_reward_coherence": reward_components_sum["coherence"] / num_steps,
         }
@@ -398,6 +399,7 @@ class PPOTrainer:
             "explained_variance": [],
             "reward_perplexity": [],
             "reward_diversity": [],
+            "reward_focus": [],
             "reward_repetition": [],
             "reward_coherence": [],
         }
@@ -444,6 +446,7 @@ class PPOTrainer:
             history["explained_variance"].append(explained_var)
             history["reward_perplexity"].append(rollout_stats.get("mean_reward_perplexity", 0.0))
             history["reward_diversity"].append(rollout_stats.get("mean_reward_diversity", 0.0))
+            history["reward_focus"].append(rollout_stats.get("mean_reward_focus", 0.0))
             history["reward_repetition"].append(rollout_stats.get("mean_reward_repetition", 0.0))
             history["reward_coherence"].append(rollout_stats.get("mean_reward_coherence", 0.0))
 
@@ -459,6 +462,7 @@ class PPOTrainer:
             self.writer.add_scalar("RL/explained_variance", explained_var, self.global_step)
             self.writer.add_scalar("RL/reward_perplexity", rollout_stats.get("mean_reward_perplexity", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_diversity", rollout_stats.get("mean_reward_diversity", 0.0), self.global_step)
+            self.writer.add_scalar("RL/reward_focus", rollout_stats.get("mean_reward_focus", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_repetition", rollout_stats.get("mean_reward_repetition", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_coherence", rollout_stats.get("mean_reward_coherence", 0.0), self.global_step)
 
