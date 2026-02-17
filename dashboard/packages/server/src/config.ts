@@ -123,6 +123,10 @@ export function loadConfig(): ServerConfig {
     digitaloceanRegion: process.env.DO_REGION ?? "tor1",
     digitaloceanSshKey: process.env.DO_SSH_KEY ?? null,
     repoUrl: process.env.TIDAL_REPO_URL ?? null,
-    dashboardUrl: process.env.TIDAL_DASHBOARD_URL ?? null,
+    dashboardUrl:
+      process.env.TIDAL_DASHBOARD_URL ??
+      (process.env.TIDAL_DROPLET_IP
+        ? `http://${process.env.TIDAL_DROPLET_IP}`
+        : null),
   };
 }

@@ -112,11 +112,12 @@ VASTAI_API_KEY=your-vastai-api-key-here \
 DEFAULT_COMPUTE_PROVIDER=vastai \
 TIDAL_AUTH_TOKEN=pick-a-secret-token \
 TIDAL_REPO_URL=https://github.com/your-username/tidal-language-model.git \
-TIDAL_DASHBOARD_URL=http://your-public-ip:4400 \
+TIDAL_DROPLET_IP=your-droplet-ip \
+TIDAL_DASHBOARD_URL=http://$TIDAL_DROPLET_IP \
 npm run dev
 ```
 
-The worker on the remote GPU will call back to `TIDAL_DASHBOARD_URL` to report status, so this must be reachable from the internet. If you're behind NAT, use a tunnel (e.g. `ngrok http 4400`) and set `TIDAL_DASHBOARD_URL` to the tunnel URL.
+The worker on the remote GPU will call back to `TIDAL_DASHBOARD_URL` to report status, so this must be reachable from the internet. `TIDAL_DROPLET_IP` is the single source of truth for the server address — all API URLs are derived from it so nothing breaks if the domain changes. If you're behind NAT, use a tunnel (e.g. `ngrok http 4400`) and set `TIDAL_DASHBOARD_URL` to the tunnel URL.
 
 ### 3. Start a Job from the UI
 
@@ -137,7 +138,8 @@ DO_SSH_KEY=your-ssh-key-fingerprint \
 DEFAULT_COMPUTE_PROVIDER=digitalocean \
 TIDAL_AUTH_TOKEN=pick-a-secret-token \
 TIDAL_REPO_URL=https://github.com/your-username/tidal-language-model.git \
-TIDAL_DASHBOARD_URL=http://your-public-ip:4400 \
+TIDAL_DROPLET_IP=your-droplet-ip \
+TIDAL_DASHBOARD_URL=http://$TIDAL_DROPLET_IP \
 npm run dev
 ```
 
@@ -145,6 +147,7 @@ npm run dev
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `TIDAL_DROPLET_IP` | — | Droplet IP address — single source of truth for all API URLs |
 | `PORT` | `4400` | Fastify server port |
 | `HOST` | `0.0.0.0` | Fastify bind address |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
@@ -157,7 +160,7 @@ npm run dev
 | `DO_REGION` | `tor1` | DigitalOcean region |
 | `DO_SSH_KEY` | — | SSH key fingerprint for DigitalOcean droplets |
 | `TIDAL_REPO_URL` | — | Git repo URL for remote workers to clone |
-| `TIDAL_DASHBOARD_URL` | — | Public URL of the dashboard (for remote worker callbacks) |
+| `TIDAL_DASHBOARD_URL` | — | Public URL of the dashboard (derived from `TIDAL_DROPLET_IP`) |
 | `INFERENCE_URL` | — | External inference server URL (optional) |
 
 ## Remote Server (Vast.ai Instance)

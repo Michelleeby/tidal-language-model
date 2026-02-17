@@ -31,11 +31,12 @@ VASTAI_KEY=""
 read -rp "vast.ai API key (leave blank to skip): " VASTAI_KEY
 VASTAI_VARS=""
 if [ -n "$VASTAI_KEY" ]; then
-    read -rp "Dashboard URL (e.g. https://ai.michelleeby.com): " DASHBOARD_URL
+    read -rp "Droplet IP address: " DROPLET_IP
     read -rp "Git repo URL for vast.ai workers: " REPO_URL_VASTAI
     VASTAI_VARS="
+TIDAL_DROPLET_IP=$DROPLET_IP
 VASTAI_API_KEY=$VASTAI_KEY
-TIDAL_DASHBOARD_URL=$DASHBOARD_URL
+TIDAL_DASHBOARD_URL=http://$DROPLET_IP
 TIDAL_REPO_URL=$REPO_URL_VASTAI
 DEFAULT_COMPUTE_PROVIDER=vastai"
 fi

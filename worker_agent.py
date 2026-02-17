@@ -788,7 +788,7 @@ def main():
     parser.add_argument(
         "--api-url",
         default=None,
-        help="Dashboard API URL (for remote mode, e.g. https://ai.michelleeby.com)",
+        help="Dashboard API URL (for remote mode, e.g. http://<droplet-ip>)",
     )
     parser.add_argument(
         "--auth-token",
