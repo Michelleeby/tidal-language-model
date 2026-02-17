@@ -597,8 +597,12 @@ class TransformerLM(nn.Module):
                     })
                     if trajectory_mode == "full":
                         trajectory["observations"].append(observation.clone())
-                        trajectory["logits_history"].append(logits[0, -1, :].clone())
+                        trajectory["logits_history"].append(next_token_logits.clone())
                         trajectory["hidden_states"].append(hidden_states[0, -1, :].clone())
+                        # Compute and store sampling entropy for focus reward parity
+                        top_k_probs_norm = top_k_probs / top_k_probs.sum()
+                        sampling_entropy = -(top_k_probs_norm * torch.log(top_k_probs_norm + 1e-10)).sum().item()
+                        trajectory.setdefault("sampling_entropy", []).append(sampling_entropy)
 
                 generated_tokens = torch.cat([generated_tokens, next_token_id])
 

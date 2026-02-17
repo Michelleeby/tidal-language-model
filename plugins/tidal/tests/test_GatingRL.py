@@ -2004,5 +2004,170 @@ class TestTrajectoryModes(unittest.TestCase):
         self.assertIn("effects", trajectory)
 
 
+class TestAblationRewardParity(unittest.TestCase):
+    """
+    Tests that the ablation evaluation in run_ablation_study computes rewards
+    identically to the RL training loop (GatingEnvironment).
+
+    Three bugs are tested:
+    1. Missing focus reward component (sampling_entropy not passed)
+    2. Raw logits used instead of modified logits (post rep-penalty + temperature)
+    3. Episode length hardcoded instead of config-driven
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_FOCUS_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_ENTROPY_TARGET": 5.0,
+            "RL_MAX_EPISODE_LENGTH": 50,
+            "RL_EVAL_EPISODES": 2,
+        }
+        cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
+        cls.model.eval()
+
+    def test_ablation_reward_includes_focus_component(self):
+        """
+        run_ablation_study must pass sampling_entropy to compute_step_reward
+        so that the focus reward component is included in every policy's results.
+        """
+        from plugins.tidal.RLTrainer import run_ablation_study
+        import tempfile, os
+
+        config = {**self.rl_config, "RL_EVAL_EPISODES": 2}
+        prompt_tokens = [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Spy on compute_step_reward calls to check sampling_entropy
+            original_compute = RewardComputer.compute_step_reward
+            calls_with_entropy = []
+
+            def spy_compute(self_rc, logits, generated_tokens, new_token,
+                            normalize=True, sampling_entropy=None):
+                calls_with_entropy.append(sampling_entropy)
+                return original_compute(
+                    self_rc, logits, generated_tokens, new_token,
+                    normalize=normalize, sampling_entropy=sampling_entropy,
+                )
+
+            with patch.object(RewardComputer, "compute_step_reward", spy_compute):
+                results = run_ablation_study(
+                    model=self.model,
+                    prompt_tokens=prompt_tokens,
+                    config=config,
+                    experiment_dir=tmpdir,
+                    device=torch.device("cpu"),
+                )
+
+            # Every call should have received a non-None sampling_entropy
+            self.assertGreater(len(calls_with_entropy), 0,
+                               "compute_step_reward was never called during ablation")
+            none_calls = [e for e in calls_with_entropy if e is None]
+            self.assertEqual(len(none_calls), 0,
+                             f"sampling_entropy was None in {len(none_calls)}/{len(calls_with_entropy)} calls")
+
+    def test_ablation_uses_modified_logits(self):
+        """
+        Full trajectory logits_history must contain modified logits (after
+        repetition penalty + temperature scaling), not raw model output.
+        """
+        from plugins.tidal.GatingModulator import FixedGatingPolicy, GatingModulator
+
+        # Use high stability (strong rep penalty) so modification is detectable
+        policy = FixedGatingPolicy(0.5, 0.5, 1.0, torch.device("cpu"))
+        modulator = GatingModulator(self.rl_config)
+        prompt_ids = torch.tensor([1, 2, 3, 1, 2, 3], dtype=torch.long)
+
+        _, trajectory = self.model.generate_with_gating(
+            prompt_ids=prompt_ids,
+            max_new_tokens=5,
+            gating_policy=policy,
+            modulator=modulator,
+            trajectory_mode="full",
+        )
+
+        self.assertIsNotNone(trajectory)
+        self.assertGreater(len(trajectory["logits_history"]), 0)
+
+        # Re-run the model forward to get raw logits for comparison
+        with torch.no_grad():
+            generated_tokens = prompt_ids.to(self.model.device).view(-1)
+            context = generated_tokens[-self.model.max_context_length:]
+            raw_logits, _ = self.model.forward_with_hidden(context.unsqueeze(0))
+            raw_first = raw_logits[0, -1, :].clone()
+
+        stored_first = trajectory["logits_history"][0]
+
+        # Modified logits should differ from raw logits (temperature scaling changes them)
+        self.assertFalse(
+            torch.allclose(stored_first, raw_first, atol=1e-5),
+            "Trajectory logits_history stores raw logits instead of modified logits"
+        )
+
+    def test_ablation_episode_length_matches_config(self):
+        """
+        run_ablation_study must use RL_MAX_EPISODE_LENGTH from config,
+        not a hardcoded value.
+        """
+        from plugins.tidal.RLTrainer import run_ablation_study
+        import tempfile
+
+        episode_length = 15
+        config = {
+            **self.rl_config,
+            "RL_MAX_EPISODE_LENGTH": episode_length,
+            "RL_EVAL_EPISODES": 1,
+        }
+        prompt_tokens = [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
+
+        # Spy on generate_with_gating to capture max_new_tokens
+        captured_max_tokens = []
+        original_gen = TransformerLM.generate_with_gating
+
+        def spy_gen(self_model, *args, **kwargs):
+            captured_max_tokens.append(kwargs.get("max_new_tokens", args[1] if len(args) > 1 else None))
+            return original_gen(self_model, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(TransformerLM, "generate_with_gating", spy_gen):
+                run_ablation_study(
+                    model=self.model,
+                    prompt_tokens=prompt_tokens,
+                    config=config,
+                    experiment_dir=tmpdir,
+                    device=torch.device("cpu"),
+                )
+
+        self.assertGreater(len(captured_max_tokens), 0,
+                           "generate_with_gating was never called")
+        for i, mt in enumerate(captured_max_tokens):
+            self.assertEqual(mt, episode_length,
+                             f"Call {i}: max_new_tokens={mt}, expected {episode_length}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -579,7 +579,7 @@ def run_ablation_study(
 
             generated, trajectory = model.generate_with_gating(
                 prompt_ids=torch.tensor(prompt, device=device),
-                max_new_tokens=30,
+                max_new_tokens=config.get("RL_MAX_EPISODE_LENGTH", 50),
                 gating_policy=policy,
                 modulator=modulator,
                 return_trajectory=True,
@@ -591,9 +591,12 @@ def run_ablation_study(
                 ep_perplexity = []
                 generated_so_far = []
 
-                for logits, token in zip(trajectory["logits_history"], trajectory["tokens"]):
+                sampling_entropies = trajectory.get("sampling_entropy", [])
+                for i, (logits, token) in enumerate(zip(trajectory["logits_history"], trajectory["tokens"])):
+                    se = sampling_entropies[i] if i < len(sampling_entropies) else None
                     reward, comps = reward_computer.compute_step_reward(
                         logits, generated_so_far, token, normalize=False,
+                        sampling_entropy=se,
                     )
                     ep_rewards.append(reward)
                     ep_diversity.append(comps["diversity"])
