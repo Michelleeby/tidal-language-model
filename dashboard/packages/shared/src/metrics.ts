@@ -29,6 +29,7 @@ export interface RLTrainingHistory {
   gate_stability?: number[];
   reward_perplexity?: number[];
   reward_diversity?: number[];
+  reward_focus?: number[];
   reward_repetition?: number[];
   reward_coherence?: number[];
   explained_variance?: number[];

@@ -125,6 +125,7 @@ metrics:
       - policy_loss
       - value_loss
       - entropy
+      - reward_focus
       - explained_variance
 
 # ── Redis keys (used by worker_agent, job store, SSE) ────────────────

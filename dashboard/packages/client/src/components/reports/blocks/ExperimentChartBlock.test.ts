@@ -90,6 +90,7 @@ describe("extractRLValues", () => {
     reward_perplexity: [0.3, 0.4, 0.5],
     reward_diversity: [0.2, 0.25, 0.3],
     reward_repetition: [-0.1, -0.05, 0.0],
+    reward_focus: [0.15, 0.2, 0.25],
     reward_coherence: [0.4, 0.45, 0.5],
     explained_variance: [0.1, 0.3, 0.5],
   };
@@ -120,6 +121,10 @@ describe("extractRLValues", () => {
 
   it("extracts reward_repetition", () => {
     expect(extractRLValues(history, "reward_repetition")).toEqual([-0.1, -0.05, 0.0]);
+  });
+
+  it("extracts reward_focus", () => {
+    expect(extractRLValues(history, "reward_focus")).toEqual([0.15, 0.2, 0.25]);
   });
 
   it("extracts reward_coherence", () => {
@@ -280,6 +285,7 @@ describe("metricOptionsForMode", () => {
       { value: "gate_stability", label: "Gate: Stability" },
       { value: "reward_perplexity", label: "Reward: Perplexity" },
       { value: "reward_diversity", label: "Reward: Diversity" },
+      { value: "reward_focus", label: "Reward: Focus" },
       { value: "reward_repetition", label: "Reward: Repetition" },
       { value: "reward_coherence", label: "Reward: Coherence" },
       { value: "explained_variance", label: "Explained Variance" },
