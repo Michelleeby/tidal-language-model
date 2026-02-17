@@ -4,6 +4,7 @@ import { useCheckpoints } from "../../hooks/useMetrics.js";
 import { usePlugin } from "../../hooks/usePlugin.js";
 import { api } from "../../api/client.js";
 import type { GenerateRequest, GenerationMode } from "@tidal/shared";
+import GateTrajectoryChart from "../charts/GateTrajectoryChart.js";
 
 const DEFAULT_MODES: GenerationMode[] = [
   { id: "none", displayName: "None", requiresRLCheckpoint: false },
@@ -223,6 +224,10 @@ export default function GenerationPanel({
             {generateMutation.data.text}
           </div>
         </div>
+      )}
+
+      {generateMutation.data?.trajectory && (
+        <GateTrajectoryChart trajectory={generateMutation.data.trajectory} />
       )}
 
       {generateMutation.isError && (

@@ -503,6 +503,7 @@ class TransformerLM(nn.Module):
         base_temperature: float = 1.0,
         top_k: int = 40,
         return_trajectory: bool = False,
+        trajectory_mode: str = "none",
     ) -> Tuple[List[int], Optional[Dict]]:
         """
         Generate text with RL-controlled gating modulation.
@@ -514,22 +515,37 @@ class TransformerLM(nn.Module):
             modulator: GatingModulator instance
             base_temperature: Base temperature before gating modulation
             top_k: Keep only top k tokens for sampling
-            return_trajectory: If True, return trajectory data for training
+            return_trajectory: If True, treat as trajectory_mode="full" (backward compat)
+            trajectory_mode: "none", "lightweight", or "full"
 
         Returns:
             generated_tokens: List of generated token IDs
-            trajectory: Dict with observations, actions, rewards (if return_trajectory=True)
+            trajectory: Dict with trajectory data (mode-dependent), or None
         """
+        # Backward compat: return_trajectory=True maps to "full"
+        if return_trajectory and trajectory_mode == "none":
+            trajectory_mode = "full"
+
         self.eval()
         generated_tokens = prompt_ids.to(self.device).view(-1)
 
-        trajectory = {
-            "observations": [],
-            "actions": [],
-            "logits_history": [],
-            "tokens": [],
-            "hidden_states": [],
-        } if return_trajectory else None
+        if trajectory_mode == "full":
+            trajectory = {
+                "observations": [],
+                "actions": [],
+                "logits_history": [],
+                "tokens": [],
+                "hidden_states": [],
+                "effects": [],
+            }
+        elif trajectory_mode == "lightweight":
+            trajectory = {
+                "actions": [],
+                "effects": [],
+                "tokens": [],
+            }
+        else:
+            trajectory = None
 
         with torch.no_grad():
             for step in range(max_new_tokens):
@@ -568,14 +584,21 @@ class TransformerLM(nn.Module):
                 next_token_id = top_k_indices[next_token_idx]
 
                 if trajectory is not None:
-                    trajectory["observations"].append(observation.clone())
                     trajectory["actions"].append(
                         gate_signals.clone() if isinstance(gate_signals, torch.Tensor)
                         else torch.tensor(gate_signals)
                     )
-                    trajectory["logits_history"].append(logits[0, -1, :].clone())
                     trajectory["tokens"].append(next_token_id.item())
-                    trajectory["hidden_states"].append(hidden_states[0, -1, :].clone())
+                    trajectory["effects"].append({
+                        "temperature": effects.temperature,
+                        "repetition_penalty": effects.repetition_penalty,
+                        "top_k": effects.top_k,
+                        "top_p": effects.top_p,
+                    })
+                    if trajectory_mode == "full":
+                        trajectory["observations"].append(observation.clone())
+                        trajectory["logits_history"].append(logits[0, -1, :].clone())
+                        trajectory["hidden_states"].append(hidden_states[0, -1, :].clone())
 
                 generated_tokens = torch.cat([generated_tokens, next_token_id])
 

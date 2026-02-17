@@ -1792,5 +1792,116 @@ class TestGatingEnvironmentDynamicSampling(unittest.TestCase):
         )
 
 
+class TestTrajectoryModes(unittest.TestCase):
+    """Tests for lightweight/full/none trajectory modes in generate_with_gating."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+        }
+        cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
+        cls.model.eval()
+        cls.modulator = GatingModulator(cls.rl_config)
+        cls.policy = FixedGatingPolicy(0.5, 0.5, 0.5, torch.device("cpu"))
+
+    def _generate(self, trajectory_mode="lightweight", max_new_tokens=5, **kwargs):
+        prompt_ids = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long)
+        return self.model.generate_with_gating(
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            gating_policy=self.policy,
+            modulator=self.modulator,
+            trajectory_mode=trajectory_mode,
+            **kwargs,
+        )
+
+    def test_lightweight_trajectory_contains_actions_effects_tokens(self):
+        """Lightweight mode has 'actions', 'effects', and 'tokens' keys."""
+        _, trajectory = self._generate(trajectory_mode="lightweight")
+        self.assertIsNotNone(trajectory)
+        self.assertIn("actions", trajectory)
+        self.assertIn("effects", trajectory)
+        self.assertIn("tokens", trajectory)
+
+    def test_lightweight_trajectory_excludes_heavy_fields(self):
+        """Lightweight mode does NOT include observations, logits_history, hidden_states."""
+        _, trajectory = self._generate(trajectory_mode="lightweight")
+        self.assertNotIn("observations", trajectory)
+        self.assertNotIn("logits_history", trajectory)
+        self.assertNotIn("hidden_states", trajectory)
+
+    def test_lightweight_trajectory_effects_has_expected_fields(self):
+        """Each effect dict has temperature, repetition_penalty, top_k, top_p."""
+        _, trajectory = self._generate(trajectory_mode="lightweight")
+        for effect in trajectory["effects"]:
+            self.assertIn("temperature", effect)
+            self.assertIn("repetition_penalty", effect)
+            self.assertIn("top_k", effect)
+            self.assertIn("top_p", effect)
+            self.assertIsInstance(effect["temperature"], float)
+            self.assertIsInstance(effect["repetition_penalty"], float)
+            self.assertIsInstance(effect["top_k"], int)
+            self.assertIsInstance(effect["top_p"], float)
+
+    def test_lightweight_trajectory_lengths_match(self):
+        """len(actions) == len(effects) == len(tokens) == max_new_tokens."""
+        max_tokens = 7
+        _, trajectory = self._generate(trajectory_mode="lightweight", max_new_tokens=max_tokens)
+        self.assertEqual(len(trajectory["actions"]), max_tokens)
+        self.assertEqual(len(trajectory["effects"]), max_tokens)
+        self.assertEqual(len(trajectory["tokens"]), max_tokens)
+
+    def test_full_trajectory_still_includes_all_fields(self):
+        """Full mode includes observations, logits_history, hidden_states AND effects."""
+        _, trajectory = self._generate(trajectory_mode="full")
+        self.assertIsNotNone(trajectory)
+        self.assertIn("actions", trajectory)
+        self.assertIn("effects", trajectory)
+        self.assertIn("tokens", trajectory)
+        self.assertIn("observations", trajectory)
+        self.assertIn("logits_history", trajectory)
+        self.assertIn("hidden_states", trajectory)
+
+    def test_none_trajectory_mode_returns_none(self):
+        """trajectory_mode='none' returns None trajectory."""
+        _, trajectory = self._generate(trajectory_mode="none")
+        self.assertIsNone(trajectory)
+
+    def test_return_trajectory_true_maps_to_full(self):
+        """Backward compat: return_trajectory=True still works and includes all fields."""
+        prompt_ids = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long)
+        _, trajectory = self.model.generate_with_gating(
+            prompt_ids=prompt_ids,
+            max_new_tokens=5,
+            gating_policy=self.policy,
+            modulator=self.modulator,
+            return_trajectory=True,
+        )
+        self.assertIsNotNone(trajectory)
+        self.assertIn("observations", trajectory)
+        self.assertIn("logits_history", trajectory)
+        self.assertIn("hidden_states", trajectory)
+        self.assertIn("effects", trajectory)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

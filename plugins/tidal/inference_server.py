@@ -101,6 +101,26 @@ def _get_model(checkpoint_path: str) -> TransformerLM:
     return model
 
 
+def _serialize_trajectory(trajectory, tokenizer):
+    """Convert lightweight trajectory dict to JSON-serializable format."""
+    gate_signals = []
+    for action in trajectory["actions"]:
+        if hasattr(action, "tolist"):
+            gate_signals.append(action.tolist())
+        else:
+            gate_signals.append(list(action))
+
+    token_ids = trajectory["tokens"]
+    token_texts = [tokenizer.decode([tid]) for tid in token_ids]
+
+    return {
+        "gateSignals": gate_signals,
+        "effects": trajectory["effects"],
+        "tokenIds": token_ids,
+        "tokenTexts": token_texts,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -144,6 +164,8 @@ def generate():
     start = time.time()
 
     try:
+        trajectory = None
+
         if gating_mode == "learned" and rl_checkpoint and RL_AVAILABLE:
             config = _get_config()
             modulator = GatingModulator(config)
@@ -153,28 +175,28 @@ def generate():
             agent.load_state_dict(rl_state["agent_state_dict"])
             agent.eval()
 
-            generated_ids, _ = model.generate_with_gating(
+            generated_ids, trajectory = model.generate_with_gating(
                 prompt_ids=prompt_ids,
                 max_new_tokens=max_tokens,
                 gating_policy=agent,
                 modulator=modulator,
                 base_temperature=temperature,
                 top_k=top_k,
-                return_trajectory=False,
+                trajectory_mode="lightweight",
             )
         elif gating_mode == "fixed" and RL_AVAILABLE:
             config = _get_config()
             modulator = GatingModulator(config)
             policy = FixedGatingPolicy(device=DEVICE)
 
-            generated_ids, _ = model.generate_with_gating(
+            generated_ids, trajectory = model.generate_with_gating(
                 prompt_ids=prompt_ids,
                 max_new_tokens=max_tokens,
                 gating_policy=policy,
                 modulator=modulator,
                 base_temperature=temperature,
                 top_k=top_k,
-                return_trajectory=False,
+                trajectory_mode="lightweight",
             )
         else:
             generated_ids = model.generate(
@@ -191,11 +213,16 @@ def generate():
     elapsed_ms = int((time.time() - start) * 1000)
     text = tokenizer.decode(generated_ids)
 
-    return jsonify({
+    result = {
         "text": text,
         "tokensGenerated": len(generated_ids) - len(prompt_ids),
         "elapsedMs": elapsed_ms,
-    })
+    }
+
+    if trajectory is not None:
+        result["trajectory"] = _serialize_trajectory(trajectory, tokenizer)
+
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------------------

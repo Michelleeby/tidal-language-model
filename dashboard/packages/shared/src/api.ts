@@ -70,10 +70,25 @@ export interface GenerateRequest {
   rlCheckpoint?: string;
 }
 
+export interface GateEffectsStep {
+  temperature: number;
+  repetition_penalty: number;
+  top_k: number;
+  top_p: number;
+}
+
+export interface GenerationTrajectory {
+  gateSignals: [number, number, number][];
+  effects: GateEffectsStep[];
+  tokenIds: number[];
+  tokenTexts: string[];
+}
+
 export interface GenerateResponse {
   text: string;
   tokensGenerated: number;
   elapsedMs: number;
+  trajectory?: GenerationTrajectory;
 }
 
 /** GET /api/plugins/:name/configs/:filename */
