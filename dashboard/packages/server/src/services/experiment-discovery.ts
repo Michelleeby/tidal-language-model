@@ -97,6 +97,7 @@ export class ExperimentDiscovery {
         entries.some((f) => f.startsWith("rl_checkpoint"));
       const hasEvaluation = entries.includes("evaluation_results.json");
       const hasAblation = entries.includes("ablation_results.json");
+      const hasGpuInstance = entries.includes("gpu_instance.json");
       const checkpoints = entries.filter((f) => f.endsWith(".pth"));
 
       // Read status -- try disk first, then Redis
@@ -124,6 +125,7 @@ export class ExperimentDiscovery {
         hasRLMetrics,
         hasEvaluation,
         hasAblation,
+        hasGpuInstance,
         status,
         checkpoints,
       };
@@ -159,6 +161,7 @@ export class ExperimentDiscovery {
         hasRLMetrics: false,
         hasEvaluation: false,
         hasAblation: false,
+        hasGpuInstance: false,
         status,
         checkpoints: [],
       };

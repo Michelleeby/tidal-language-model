@@ -9,6 +9,7 @@ import {
   handleGetCheckpoints,
   handleGetEvaluation,
   handleGetAblation,
+  handleGetGpuInstance,
 } from "../tools/experiment-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -281,6 +282,43 @@ describe("handleGetAblation", () => {
 
     const parsed = JSON.parse(result.content[0].text as string);
     assert.equal(parsed.results, null);
+    assert.equal(result.isError, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleGetGpuInstance
+// ---------------------------------------------------------------------------
+
+describe("handleGetGpuInstance", () => {
+  it("returns GPU instance metadata", async () => {
+    const data = {
+      expId: "exp-1",
+      instance: {
+        instanceId: 31562809,
+        offerId: 500,
+        gpuName: "RTX A6000",
+        costPerHour: 0.65,
+        capturedAt: 1700000000000,
+      },
+    };
+    const result = await handleGetGpuInstance(okClient(data), {
+      expId: "exp-1",
+    });
+
+    const parsed = JSON.parse(result.content[0].text as string);
+    assert.equal(parsed.instance.instanceId, 31562809);
+    assert.equal(parsed.instance.gpuName, "RTX A6000");
+  });
+
+  it("handles null instance gracefully", async () => {
+    const data = { expId: "exp-1", instance: null };
+    const result = await handleGetGpuInstance(okClient(data), {
+      expId: "exp-1",
+    });
+
+    const parsed = JSON.parse(result.content[0].text as string);
+    assert.equal(parsed.instance, null);
     assert.equal(result.isError, undefined);
   });
 });

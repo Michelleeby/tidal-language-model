@@ -20,6 +20,7 @@ import rlMetricsRoutes from "./routes/rl-metrics.js";
 import statusRoutes from "./routes/status.js";
 import checkpointsRoutes from "./routes/checkpoints.js";
 import evaluationRoutes from "./routes/evaluation.js";
+import gpuInstanceRoutes from "./routes/gpu-instance.js";
 import generateRoutes from "./routes/generate.js";
 import sseRoutes from "./routes/sse.js";
 import jobRoutes from "./routes/jobs.js";
@@ -113,6 +114,7 @@ async function main() {
   await fastify.register(statusRoutes);
   await fastify.register(checkpointsRoutes);
   await fastify.register(evaluationRoutes);
+  await fastify.register(gpuInstanceRoutes);
   await fastify.register(generateRoutes);
   await fastify.register(sseRoutes);
   await fastify.register(jobRoutes);

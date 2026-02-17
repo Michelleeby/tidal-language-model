@@ -228,6 +228,21 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       }
 
       sseManager.broadcastJobUpdate(updated);
+
+      // Persist GPU instance metadata if available
+      if (updated.providerMeta && Object.keys(updated.providerMeta).length > 0) {
+        try {
+          const expDir = path.join(experimentsDir, experimentId);
+          await fsp.mkdir(expDir, { recursive: true });
+          await fsp.writeFile(
+            path.join(expDir, "gpu_instance.json"),
+            JSON.stringify(updated.providerMeta, null, 2),
+          );
+        } catch (err) {
+          fastify.log.error({ experimentId, err }, "Failed to write gpu_instance.json");
+        }
+      }
+
       return reply.send({ ok: true, experimentId });
     },
   );

@@ -10,6 +10,7 @@ import type {
   CheckpointsResponse,
   EvaluationResponse,
   AblationResponse,
+  GpuInstanceResponse,
 } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,16 @@ export async function handleGetAblation(
   return res.ok ? jsonResult(res.data) : errorResult(res.error);
 }
 
+export async function handleGetGpuInstance(
+  client: TidalApiClient,
+  params: { expId: string },
+): Promise<CallToolResult> {
+  const res = await client.get<GpuInstanceResponse>(
+    `/api/experiments/${params.expId}/gpu-instance`,
+  );
+  return res.ok ? jsonResult(res.data) : errorResult(res.error);
+}
+
 // ---------------------------------------------------------------------------
 // Registration — wires handlers into McpServer
 // ---------------------------------------------------------------------------
@@ -153,4 +164,12 @@ export function registerExperimentTools(
       expId: z.string().describe("Experiment ID"),
     },
   }, async (params) => handleGetAblation(client, params));
+
+  server.registerTool("get_gpu_instance", {
+    description:
+      "Get Vast.ai GPU instance hardware metadata (CPU, GPU, disk, network, cost) for an experiment",
+    inputSchema: {
+      expId: z.string().describe("Experiment ID"),
+    },
+  }, async (params) => handleGetGpuInstance(client, params));
 }

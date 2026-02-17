@@ -8,6 +8,8 @@ import type {
   CheckpointInfo,
 } from "./metrics.js";
 
+export type { GpuInstanceResponse } from "./gpu-instance.js";
+
 /** GET /api/experiments */
 export interface ExperimentsResponse {
   experiments: ExperimentSummary[];

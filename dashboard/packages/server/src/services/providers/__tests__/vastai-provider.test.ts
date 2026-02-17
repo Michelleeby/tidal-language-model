@@ -56,6 +56,24 @@ interface FakeOffer {
   dph_total: number;
   rentable: boolean;
   num_gpus: number;
+  host_id?: number;
+  machine_id?: number;
+  gpu_mem_bw?: number;
+  total_flops?: number;
+  dlperf?: number;
+  dlperf_per_dphtotal?: number;
+  cpu_name?: string;
+  cpu_cores?: number;
+  cpu_cores_effective?: number;
+  cpu_ram?: number;
+  disk_name?: string;
+  disk_bw?: number;
+  disk_space?: number;
+  inet_down?: number;
+  inet_up?: number;
+  mobo_name?: string;
+  cuda_max_good?: number;
+  reliability2?: number;
 }
 
 function makeOffer(id: number, dph = 0.5): FakeOffer {
@@ -66,6 +84,35 @@ function makeOffer(id: number, dph = 0.5): FakeOffer {
     dph_total: dph,
     rentable: true,
     num_gpus: 1,
+  };
+}
+
+function makeRichOffer(id: number, dph = 0.5): FakeOffer {
+  return {
+    id,
+    gpu_name: "RTX A6000",
+    gpu_ram: 48000,
+    dph_total: dph,
+    rentable: true,
+    num_gpus: 1,
+    host_id: 349988,
+    machine_id: 47281,
+    gpu_mem_bw: 651.4,
+    total_flops: 36.1,
+    dlperf: 28.5,
+    dlperf_per_dphtotal: 57.0,
+    cpu_name: "AMD EPYC 7343 16-Core",
+    cpu_cores: 32,
+    cpu_cores_effective: 16,
+    cpu_ram: 64300,
+    disk_name: "SanDisk Extreme 1TB",
+    disk_bw: 3673,
+    disk_space: 20,
+    inet_down: 846.3,
+    inet_up: 834.0,
+    mobo_name: "H12SSL-i",
+    cuda_max_good: 13.0,
+    reliability2: 0.99,
   };
 }
 
@@ -264,5 +311,79 @@ describe("VastAIProvider.provision()", () => {
 
     assert.equal(result.success, false);
     assert.ok(result.error?.includes("No suitable"));
+  });
+
+  it("provision returns rich metadata fields", async () => {
+    const offers = [makeRichOffer(500, 0.65)];
+    restoreFetch = installFakeFetch({
+      offers,
+      createResponses: new Map([
+        [500, { ok: true, status: 200, body: { new_contract: 31562809 } }],
+      ]),
+    });
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    const meta = result.meta!;
+    assert.equal(meta.instanceId, 31562809);
+    assert.equal(meta.offerId, 500);
+    assert.equal(meta.gpuName, "RTX A6000");
+    assert.equal(meta.costPerHour, 0.65);
+    assert.equal(meta.hostId, 349988);
+    assert.equal(meta.machineId, 47281);
+    assert.equal(meta.numGpus, 1);
+    assert.equal(meta.gpuRamMb, 48000);
+    assert.equal(meta.gpuMemBwGbps, 651.4);
+    assert.equal(meta.totalFlops, 36.1);
+    assert.equal(meta.dlPerf, 28.5);
+    assert.equal(meta.dlPerfPerDphTotal, 57.0);
+    assert.equal(meta.cpuName, "AMD EPYC 7343 16-Core");
+    assert.equal(meta.cpuCores, 32);
+    assert.equal(meta.cpuCoresEffective, 16);
+    assert.equal(meta.cpuRamMb, 64300);
+    assert.equal(meta.diskName, "SanDisk Extreme 1TB");
+    assert.equal(meta.diskBwMbps, 3673);
+    assert.equal(meta.diskSpaceGb, 20);
+    assert.equal(meta.inetDownMbps, 846.3);
+    assert.equal(meta.inetUpMbps, 834.0);
+    assert.equal(meta.moboName, "H12SSL-i");
+    assert.equal(meta.cudaMaxGood, 13.0);
+    assert.equal(meta.reliability, 0.99);
+    assert.equal(typeof meta.capturedAt, "number");
+  });
+
+  it("provision returns graceful nulls for missing optional fields", async () => {
+    // makeOffer() only has the minimal fields — all hardware fields absent
+    const offers = [makeOffer(600)];
+    restoreFetch = installFakeFetch({
+      offers,
+      createResponses: new Map([
+        [600, { ok: true, status: 200, body: { new_contract: 7777 } }],
+      ]),
+    });
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    const meta = result.meta!;
+    // Core fields present
+    assert.equal(meta.instanceId, 7777);
+    assert.equal(meta.offerId, 600);
+    assert.equal(meta.gpuName, "RTX 4090");
+    assert.equal(meta.costPerHour, 0.5);
+    // Optional fields gracefully null
+    assert.equal(meta.hostId, null);
+    assert.equal(meta.machineId, null);
+    assert.equal(meta.cpuName, null);
+    assert.equal(meta.diskName, null);
+    assert.equal(meta.moboName, null);
+    assert.equal(meta.gpuMemBwGbps, null);
+    assert.equal(meta.dlPerf, null);
+    assert.equal(meta.cudaMaxGood, null);
+    assert.equal(meta.reliability, null);
+    assert.equal(typeof meta.capturedAt, "number");
   });
 });

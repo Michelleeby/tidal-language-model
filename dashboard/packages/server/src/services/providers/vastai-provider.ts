@@ -36,6 +36,24 @@ interface VastOffer {
   dph_total: number;
   rentable: boolean;
   num_gpus: number;
+  host_id?: number;
+  machine_id?: number;
+  gpu_mem_bw?: number;
+  total_flops?: number;
+  dlperf?: number;
+  dlperf_per_dphtotal?: number;
+  cpu_name?: string;
+  cpu_cores?: number;
+  cpu_cores_effective?: number;
+  cpu_ram?: number;
+  disk_name?: string;
+  disk_bw?: number;
+  disk_space?: number;
+  inet_down?: number;
+  inet_up?: number;
+  mobo_name?: string;
+  cuda_max_good?: number;
+  reliability2?: number;
 }
 
 export class VastAIProvider implements ComputeProvider {
@@ -97,12 +115,7 @@ export class VastAIProvider implements ComputeProvider {
           const instanceId = await this.createInstance(offer.id, onStartScript);
           return {
             success: true,
-            meta: {
-              instanceId,
-              offerId: offer.id,
-              gpuName: offer.gpu_name,
-              costPerHour: offer.dph_total,
-            },
+            meta: this.buildProviderMeta(offer, instanceId),
           };
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
@@ -226,6 +239,36 @@ export class VastAIProvider implements ComputeProvider {
 
   private isRetryableOfferError(err: Error): boolean {
     return err.message.includes("no_such_ask");
+  }
+
+  private buildProviderMeta(offer: VastOffer, instanceId: number): Record<string, unknown> {
+    return {
+      instanceId,
+      offerId: offer.id,
+      hostId: offer.host_id ?? null,
+      machineId: offer.machine_id ?? null,
+      gpuName: offer.gpu_name,
+      numGpus: offer.num_gpus,
+      gpuRamMb: offer.gpu_ram ?? null,
+      gpuMemBwGbps: offer.gpu_mem_bw ?? null,
+      totalFlops: offer.total_flops ?? null,
+      dlPerf: offer.dlperf ?? null,
+      dlPerfPerDphTotal: offer.dlperf_per_dphtotal ?? null,
+      cpuName: offer.cpu_name ?? null,
+      cpuCores: offer.cpu_cores ?? null,
+      cpuCoresEffective: offer.cpu_cores_effective ?? null,
+      cpuRamMb: offer.cpu_ram ?? null,
+      diskName: offer.disk_name ?? null,
+      diskBwMbps: offer.disk_bw ?? null,
+      diskSpaceGb: offer.disk_space ?? null,
+      inetDownMbps: offer.inet_down ?? null,
+      inetUpMbps: offer.inet_up ?? null,
+      moboName: offer.mobo_name ?? null,
+      cudaMaxGood: offer.cuda_max_good ?? null,
+      reliability: offer.reliability2 ?? null,
+      costPerHour: offer.dph_total,
+      capturedAt: Date.now(),
+    };
   }
 
   private buildOnStartScript(jobId: string, job: TrainingJob): string {

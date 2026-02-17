@@ -74,6 +74,7 @@ export interface ExperimentSummary {
   hasRLMetrics: boolean;
   hasEvaluation: boolean;
   hasAblation: boolean;
+  hasGpuInstance: boolean;
   status: TrainingStatus | null;
   checkpoints: string[];
 }
