@@ -329,7 +329,9 @@ class Trainer:
 
             max_foundational_epochs = self.config["NUM_EPOCHS"]
             num_batches = len(train_dataset) // self.config["BATCH_SIZE"]
-            total_foundational_steps = max_foundational_epochs * num_batches
+            desired_batch_size = self.config.get("DESIRED_BATCH_SIZE", self.config["BATCH_SIZE"])
+            accumulation_steps = desired_batch_size // self.config["BATCH_SIZE"]
+            total_foundational_steps = max_foundational_epochs * num_batches // accumulation_steps
 
             self._setup_model(vocab_size, total_foundational_steps)
 
