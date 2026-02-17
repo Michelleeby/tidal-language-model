@@ -81,7 +81,7 @@ class GatingModulator(nn.Module):
 
     def compute_repetition_penalty(self, stability: float) -> float:
         penalty_multiplier = self.stability_penalty_min + stability * (self.stability_penalty_max - self.stability_penalty_min)
-        return self.base_repetition_penalty * penalty_multiplier / self.base_repetition_penalty
+        return self.base_repetition_penalty * penalty_multiplier
 
     def compute_top_k(self, focus: float) -> int:
         """Map focus signal to top-k. High focus = low top-k (sharper)."""

@@ -50,15 +50,28 @@ class TestGatingModulator(unittest.TestCase):
 
     def test_repetition_penalty_modulation(self):
         penalty_low = self.modulator.compute_repetition_penalty(0.0)
-        self.assertAlmostEqual(penalty_low, 1.0, places=4)
+        self.assertAlmostEqual(penalty_low, 1.2, places=4)
 
         penalty_high = self.modulator.compute_repetition_penalty(1.0)
-        self.assertAlmostEqual(penalty_high, 3.5, places=4)
+        self.assertAlmostEqual(penalty_high, 4.2, places=4)
 
         penalty_mid = self.modulator.compute_repetition_penalty(0.5)
-        self.assertAlmostEqual(penalty_mid, 2.25, places=4)
+        self.assertAlmostEqual(penalty_mid, 2.7, places=4)
 
         self.assertGreater(penalty_high, penalty_low)
+
+    def test_base_repetition_penalty_scales_output(self):
+        """base_repetition_penalty config value must scale the output."""
+        # With base_repetition_penalty=1.2, stability=0.0 should give 1.2 (not 1.0)
+        penalty = self.modulator.compute_repetition_penalty(0.0)
+        self.assertAlmostEqual(penalty, 1.2, places=4)
+
+        # Different base_repetition_penalty should produce a different result
+        config_alt = dict(self.config, RL_BASE_REPETITION_PENALTY=2.0)
+        modulator_alt = GatingModulator(config_alt)
+        penalty_alt = modulator_alt.compute_repetition_penalty(0.0)
+        self.assertAlmostEqual(penalty_alt, 2.0, places=4)
+        self.assertNotAlmostEqual(penalty, penalty_alt, places=2)
 
     def test_top_k_modulation(self):
         """focus=0 -> k=100 (wide), focus=1 -> k=5 (sharp)."""
@@ -822,6 +835,94 @@ class TestEnvStepRewardNormalization(unittest.TestCase):
             else:
                 # Positional: compute_step_reward(logits, tokens, new_token, normalize)
                 self.assertFalse(call_kwargs.args[3])
+
+
+class TestEnvStepPassesModifiedLogits(unittest.TestCase):
+    """Tests that env.step() passes modified logits (not raw) to compute_step_reward."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.0,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.rl_config = {
+            "RL_BASE_TEMPERATURE": 1.0,
+            "RL_BASE_REPETITION_PENALTY": 1.2,
+            "RL_CREATIVITY_TEMP_MIN": 0.3,
+            "RL_CREATIVITY_TEMP_MAX": 2.0,
+            "RL_STABILITY_PENALTY_MIN": 1.0,
+            "RL_STABILITY_PENALTY_MAX": 3.5,
+            "RL_FOCUS_TOP_K_MIN": 5,
+            "RL_FOCUS_TOP_K_MAX": 100,
+            "RL_CREATIVITY_TOP_P_MIN": 0.7,
+            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.4,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.3,
+            "RL_REWARD_REPETITION_WEIGHT": 0.2,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.1,
+            "RL_PERPLEXITY_CLIP": 100.0,
+            "RL_MAX_EPISODE_LENGTH": 10,
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 3,
+        }
+        cls.config = {**cls.model_config, **cls.rl_config}
+        cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
+        cls.model.eval()
+
+    def test_reward_receives_modified_logits(self):
+        """step() must pass temperature-scaled logits to compute_step_reward, not raw."""
+        modulator = GatingModulator(self.config)
+        reward_computer = RewardComputer(self.config, 100)
+        prompts = [[1, 2, 3, 4, 5]]
+        env = GatingEnvironment(
+            model=self.model,
+            modulator=modulator,
+            reward_computer=reward_computer,
+            prompt_tokens=prompts,
+            config=self.config,
+            device=torch.device("cpu"),
+        )
+        env.reset()
+
+        # creativity=0.8 → temperature ~1.66, so logits will be scaled
+        action = torch.tensor([0.8, 0.5, 0.5])
+
+        captured_logits = []
+
+        original_compute = reward_computer.compute_step_reward
+
+        def capturing_compute(logits, *args, **kwargs):
+            captured_logits.append(logits.clone())
+            return original_compute(logits, *args, **kwargs)
+
+        with patch.object(
+            reward_computer, "compute_step_reward", side_effect=capturing_compute,
+        ):
+            env.step(action)
+
+        self.assertEqual(len(captured_logits), 1)
+
+        # Get raw logits from a fresh forward pass for comparison
+        context = torch.tensor(
+            env.generated_tokens[:-1][-self.model.max_context_length:],
+            dtype=torch.long,
+        )
+        with torch.no_grad():
+            raw_logits, _ = self.model.forward_with_hidden(context.unsqueeze(0))
+        raw_last = raw_logits[0, -1, :]
+
+        # The logits passed to reward should differ from raw (temperature-scaled)
+        self.assertFalse(
+            torch.allclose(captured_logits[0], raw_last, atol=1e-4),
+            "Reward was computed from raw logits — should use modified logits "
+            "(after repetition penalty + temperature scaling)",
+        )
 
 
 class TestPPOTrainerUsesEMA(unittest.TestCase):

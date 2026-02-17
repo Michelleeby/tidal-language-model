@@ -175,7 +175,7 @@ class GatingEnvironment:
         sampling_entropy = -(top_k_probs_norm * torch.log(top_k_probs_norm + 1e-10)).sum().item()
 
         reward, reward_components = self.reward_computer.compute_step_reward(
-            logits[0, -1, :], self.generated_tokens, new_token,
+            next_token_logits, self.generated_tokens, new_token,
             normalize=False, sampling_entropy=sampling_entropy,
         )
 
