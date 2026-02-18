@@ -31,16 +31,16 @@ class TestInferenceServerTrajectory(unittest.TestCase):
             "VOCAB_SIZE": 100,
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.3,
-            "RL_CREATIVITY_TEMP_MAX": 2.0,
-            "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 3.5,
-            "RL_FOCUS_TOP_K_MIN": 5,
-            "RL_FOCUS_TOP_K_MAX": 100,
-            "RL_CREATIVITY_TOP_P_MIN": 0.7,
-            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_MODULATION_TEMP_MIN": 0.3,
+            "RL_MODULATION_TEMP_MAX": 2.0,
+            "RL_MODULATION_PENALTY_MIN": 1.0,
+            "RL_MODULATION_PENALTY_MAX": 3.5,
+            "RL_MODULATION_TOP_K_MIN": 5,
+            "RL_MODULATION_TOP_K_MAX": 100,
+            "RL_MODULATION_TOP_P_MIN": 0.7,
+            "RL_MODULATION_TOP_P_MAX": 1.0,
             "RL_OBSERVATION_DIM": 64,
-            "RL_ACTION_DIM": 3,
+            "RL_ACTION_DIM": 1,
             "RL_HIDDEN_DIM": 128,
         }
         cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
@@ -90,7 +90,7 @@ class TestInferenceServerTrajectory(unittest.TestCase):
     @patch("plugins.tidal.inference_server._get_model")
     @patch("plugins.tidal.inference_server._get_tokenizer")
     def test_trajectory_has_expected_shape(self, mock_tokenizer, mock_model, mock_config, _):
-        """Trajectory has gateSignals (list of 3-float arrays), effects, tokenTexts."""
+        """Trajectory has gateSignals (list of 1-float arrays), effects, tokenTexts."""
         mock_config.return_value = self.model_config
         mock_model.return_value = self.model
 
@@ -111,11 +111,11 @@ class TestInferenceServerTrajectory(unittest.TestCase):
         data = json.loads(resp.data)
         traj = data["trajectory"]
 
-        # gateSignals is a list of 3-element arrays
+        # gateSignals is a list of 1-element arrays (single modulation gate)
         self.assertIn("gateSignals", traj)
         self.assertEqual(len(traj["gateSignals"]), 5)
         for sig in traj["gateSignals"]:
-            self.assertEqual(len(sig), 3)
+            self.assertEqual(len(sig), 1)
             for v in sig:
                 self.assertIsInstance(v, float)
 
@@ -196,7 +196,7 @@ class TestInferenceServerTrajectory(unittest.TestCase):
 
 
 class TestFixedModeCustomGateValues(unittest.TestCase):
-    """Tests that fixed mode passes custom creativity/focus/stability values."""
+    """Tests that fixed mode passes custom modulation value."""
 
     @classmethod
     def setUpClass(cls):
@@ -211,16 +211,16 @@ class TestFixedModeCustomGateValues(unittest.TestCase):
             "VOCAB_SIZE": 100,
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.3,
-            "RL_CREATIVITY_TEMP_MAX": 2.0,
-            "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 3.5,
-            "RL_FOCUS_TOP_K_MIN": 5,
-            "RL_FOCUS_TOP_K_MAX": 100,
-            "RL_CREATIVITY_TOP_P_MIN": 0.7,
-            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_MODULATION_TEMP_MIN": 0.3,
+            "RL_MODULATION_TEMP_MAX": 2.0,
+            "RL_MODULATION_PENALTY_MIN": 1.0,
+            "RL_MODULATION_PENALTY_MAX": 3.5,
+            "RL_MODULATION_TOP_K_MIN": 5,
+            "RL_MODULATION_TOP_K_MAX": 100,
+            "RL_MODULATION_TOP_P_MIN": 0.7,
+            "RL_MODULATION_TOP_P_MAX": 1.0,
             "RL_OBSERVATION_DIM": 64,
-            "RL_ACTION_DIM": 3,
+            "RL_ACTION_DIM": 1,
             "RL_HIDDEN_DIM": 128,
         }
         cls.model = TransformerLM(vocab_size=100, config=cls.model_config)
@@ -234,8 +234,8 @@ class TestFixedModeCustomGateValues(unittest.TestCase):
     @patch("plugins.tidal.inference_server._get_config")
     @patch("plugins.tidal.inference_server._get_model")
     @patch("plugins.tidal.inference_server._get_tokenizer")
-    def test_fixed_mode_accepts_custom_gate_values(self, mock_tokenizer, mock_model, mock_config, _):
-        """POST /generate with creativity=0.9, focus=0.1, stability=0.8 → trajectory uses those values."""
+    def test_fixed_mode_accepts_custom_modulation(self, mock_tokenizer, mock_model, mock_config, _):
+        """POST /generate with modulation=0.7 → trajectory uses that value."""
         mock_config.return_value = self.model_config
         mock_model.return_value = self.model
 
@@ -251,19 +251,15 @@ class TestFixedModeCustomGateValues(unittest.TestCase):
             "prompt": "hello",
             "maxTokens": 5,
             "gatingMode": "fixed",
-            "creativity": 0.9,
-            "focus": 0.1,
-            "stability": 0.8,
+            "modulation": 0.7,
         })
 
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         traj = data["trajectory"]
-        # All gate signals should reflect the custom values
+        # All gate signals should reflect the custom modulation value
         for sig in traj["gateSignals"]:
-            self.assertAlmostEqual(sig[0], 0.9, places=4)
-            self.assertAlmostEqual(sig[1], 0.1, places=4)
-            self.assertAlmostEqual(sig[2], 0.8, places=4)
+            self.assertAlmostEqual(sig[0], 0.7, places=4)
 
     @patch("plugins.tidal.inference_server.os.path.exists", return_value=True)
     @patch("plugins.tidal.inference_server._get_config")
@@ -316,16 +312,16 @@ class TestAnalyzeTrajectoriesEndpoint(unittest.TestCase):
             "VOCAB_SIZE": 100,
             "RL_BASE_TEMPERATURE": 1.0,
             "RL_BASE_REPETITION_PENALTY": 1.2,
-            "RL_CREATIVITY_TEMP_MIN": 0.3,
-            "RL_CREATIVITY_TEMP_MAX": 2.0,
-            "RL_STABILITY_PENALTY_MIN": 1.0,
-            "RL_STABILITY_PENALTY_MAX": 3.5,
-            "RL_FOCUS_TOP_K_MIN": 5,
-            "RL_FOCUS_TOP_K_MAX": 100,
-            "RL_CREATIVITY_TOP_P_MIN": 0.7,
-            "RL_CREATIVITY_TOP_P_MAX": 1.0,
+            "RL_MODULATION_TEMP_MIN": 0.3,
+            "RL_MODULATION_TEMP_MAX": 2.0,
+            "RL_MODULATION_PENALTY_MIN": 1.0,
+            "RL_MODULATION_PENALTY_MAX": 3.5,
+            "RL_MODULATION_TOP_K_MIN": 5,
+            "RL_MODULATION_TOP_K_MAX": 100,
+            "RL_MODULATION_TOP_P_MIN": 0.7,
+            "RL_MODULATION_TOP_P_MAX": 1.0,
             "RL_OBSERVATION_DIM": 64,
-            "RL_ACTION_DIM": 3,
+            "RL_ACTION_DIM": 1,
             "RL_HIDDEN_DIM": 128,
         }
         cls.model = TransformerLM(vocab_size=100, config=cls.model_config)

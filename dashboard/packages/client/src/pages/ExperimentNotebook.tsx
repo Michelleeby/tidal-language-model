@@ -338,12 +338,10 @@ export default function ExperimentNotebook() {
                   actions={
                     <ChartExportButton
                       data={{
-                        headers: ["step", "creativity", "focus", "stability"],
-                        rows: (rlHistory!.gate_creativity ?? []).map((_, i) => [
+                        headers: ["step", "modulation"],
+                        rows: (rlHistory!.gate_modulation ?? []).map((_, i) => [
                           i,
-                          rlHistory!.gate_creativity?.[i] ?? 0,
-                          rlHistory!.gate_focus?.[i] ?? 0,
-                          rlHistory!.gate_stability?.[i] ?? 0,
+                          rlHistory!.gate_modulation?.[i] ?? 0,
                         ]),
                       }}
                       filename="rl_gate_signals"

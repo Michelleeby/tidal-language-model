@@ -6,8 +6,8 @@ import { useCheckpoints } from "../../../hooks/useMetrics.js";
 import { useTrajectoryAnalysis } from "../../../hooks/useTrajectoryAnalysis.js";
 import type { SweepAnalysis, AnalyzeRequest } from "@tidal/shared";
 
-const SIGNAL_NAMES = ["creativity", "focus", "stability"] as const;
-const SIGNAL_COLORS = ["#f472b6", "#60a5fa", "#34d399"] as const;
+const SIGNAL_NAMES = ["modulation"] as const;
+const SIGNAL_COLORS = ["#a78bfa"] as const;
 const TEXT_PROPS = ["wordCount", "uniqueTokenRatio", "charCount"] as const;
 const PROP_LABELS: Record<string, string> = {
   wordCount: "Words",
@@ -282,7 +282,7 @@ export const SweepBlock = createReactBlockSpec(
             </div>
           ) : analysis.isPending ? (
             <div className="text-gray-500 text-sm py-8 text-center">
-              Running 15-config extreme-value sweep...
+              Running 3-config extreme-value sweep...
             </div>
           ) : sweep ? (
             <div className="space-y-4">

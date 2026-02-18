@@ -21,7 +21,7 @@ import statistics
 # Signal names in order (matches 3D gate vector indices)
 # ---------------------------------------------------------------------------
 
-SIGNAL_NAMES = ("creativity", "focus", "stability")
+SIGNAL_NAMES = ("modulation",)
 
 
 # ---------------------------------------------------------------------------
@@ -226,16 +226,8 @@ def analyze_single(trajectory):
         windowed[name] = windows
         signal_evolution[name] = [_signal_stats(w) for w in windows]
 
-    # --- Cross-signal correlations ---
-    pairs = [
-        ("creativity", "focus"),
-        ("creativity", "stability"),
-        ("focus", "stability"),
-    ]
+    # --- Cross-signal correlations (N/A with single gate) ---
     cross = {}
-    for a, b in pairs:
-        key = f"{a}_{b}"
-        cross[key] = _pearson(series[a], series[b])
 
     # --- Phase detection (Welch t-test on adjacent windows) ---
     phases = []
@@ -372,25 +364,11 @@ def analyze_batch(prompts, bootstrap=False):
 # ---------------------------------------------------------------------------
 
 def get_sweep_grid():
-    """Return 15 standard gate signal configurations for extreme-value analysis.
+    """Return 3 standard gate signal configurations for extreme-value analysis.
 
-    8 corners of [0,1]^3 + 6 axis-isolated extremes + 1 neutral baseline.
+    Conservative (0.0), neutral (0.5), and exploratory (1.0).
     """
-    # 8 corners
-    corners = [
-        [float(c), float(f), float(s)]
-        for c in (0.0, 1.0) for f in (0.0, 1.0) for s in (0.0, 1.0)
-    ]
-    # 6 axis-isolated (vary one dimension, hold others at 0.5)
-    axis = [
-        [0.0, 0.5, 0.5], [1.0, 0.5, 0.5],  # creativity axis
-        [0.5, 0.0, 0.5], [0.5, 1.0, 0.5],  # focus axis
-        [0.5, 0.5, 0.0], [0.5, 0.5, 1.0],  # stability axis
-    ]
-    # 1 neutral baseline
-    neutral = [[0.5, 0.5, 0.5]]
-
-    return corners + axis + neutral
+    return [[0.0], [0.5], [1.0]]
 
 
 # ---------------------------------------------------------------------------
@@ -414,12 +392,10 @@ def analyze_sweep(sweep_data):
             "textProperties": _text_properties(data["text"]),
         }
 
-    # --- Interpretability map: marginal effect of each dimension ---
+    # --- Interpretability map: marginal effect of modulation ---
     imap = {}
     axis_pairs = {
-        "creativity": ("0.0_0.5_0.5", "1.0_0.5_0.5"),
-        "focus": ("0.5_0.0_0.5", "0.5_1.0_0.5"),
-        "stability": ("0.5_0.5_0.0", "0.5_0.5_1.0"),
+        "modulation": ("0.0", "1.0"),
     }
     for name, (low_key, high_key) in axis_pairs.items():
         low_data = comparisons.get(low_key, {})

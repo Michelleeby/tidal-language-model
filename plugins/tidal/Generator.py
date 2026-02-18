@@ -89,11 +89,9 @@ def run_generation(args):
             print("Using random gating policy")
             gating_policy = RandomGatingPolicy(device)
         elif args.gating_mode == "fixed":
-            print(f"Using fixed gating policy: creativity={args.creativity}, focus={args.focus}, stability={args.stability}")
+            print(f"Using fixed gating policy: modulation={args.modulation}")
             gating_policy = FixedGatingPolicy(
-                creativity=args.creativity,
-                focus=args.focus,
-                stability=args.stability,
+                modulation=args.modulation,
                 device=device,
             )
         else:
@@ -123,7 +121,7 @@ def run_generation(args):
             print("\n--- Gating Trajectory ---")
             for i, action in enumerate(trajectory["actions"]):
                 if i < 10 or i >= len(trajectory["actions"]) - 5:
-                    print(f"  Step {i}: creativity={action[0]:.3f}, focus={action[1]:.3f}, stability={action[2]:.3f}")
+                    print(f"  Step {i}: modulation={action[0]:.3f}")
                 elif i == 10:
                     print("  ...")
 
@@ -171,12 +169,8 @@ if __name__ == "__main__":
     parser.add_argument("--gating-mode", type=str, default="learned",
                         choices=["learned", "random", "fixed"],
                         help="Gating control mode: learned (RL agent), random, or fixed.")
-    parser.add_argument("--creativity", type=float, default=0.5,
-                        help="Fixed creativity gate level (0-1). Used with --gating-mode fixed.")
-    parser.add_argument("--focus", type=float, default=0.5,
-                        help="Fixed focus gate level (0-1). Used with --gating-mode fixed.")
-    parser.add_argument("--stability", type=float, default=0.5,
-                        help="Fixed stability gate level (0-1). Used with --gating-mode fixed.")
+    parser.add_argument("--modulation", type=float, default=0.5,
+                        help="Fixed modulation gate level (0-1). Used with --gating-mode fixed.")
     parser.add_argument("--verbose", action="store_true",
                         help="Print detailed gating trajectory during generation.")
 

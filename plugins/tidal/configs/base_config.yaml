@@ -19,6 +19,7 @@ NUM_ATTENTION_HEADS: 8
 FFN_HIDDEN_DIM: 1024
 DROPOUT: 0.1
 MAX_CONTEXT_LENGTH: 256
+GATE_DIM: 1  # Single modulation gate (conservative-to-exploratory axis)
 
 # Training Loop
 PATIENCE: 5

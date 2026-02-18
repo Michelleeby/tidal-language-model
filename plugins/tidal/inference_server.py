@@ -148,9 +148,7 @@ def generate():
     top_k = int(data.get("topK", 50))
     gating_mode = data.get("gatingMode", "none")
     rl_checkpoint = data.get("rlCheckpoint")
-    creativity = float(data.get("creativity", 0.5))
-    focus = float(data.get("focus", 0.5))
-    stability = float(data.get("stability", 0.5))
+    modulation = float(data.get("modulation", 0.5))
 
     tokenizer = _get_tokenizer()
     encoded = tokenizer.encode(prompt)
@@ -192,7 +190,7 @@ def generate():
             config = _get_config()
             modulator = GatingModulator(config)
             policy = FixedGatingPolicy(
-                creativity=creativity, focus=focus, stability=stability, device=DEVICE,
+                modulation=modulation, device=DEVICE,
             )
 
             generated_ids, trajectory = model.generate_with_gating(
@@ -283,7 +281,7 @@ def analyze_trajectories():
         logger.exception("Failed to load model")
         return jsonify({"error": f"Failed to load model: {e}"}), 500
 
-    def _run_generation(prompt_text, c=0.5, f=0.5, s=0.5):
+    def _run_generation(prompt_text, m=0.5):
         """Run a single generation and return (text, serialized_trajectory)."""
         encoded = tokenizer.encode(prompt_text)
         if not encoded:
@@ -315,7 +313,7 @@ def analyze_trajectories():
         elif RL_AVAILABLE:
             modulator = GatingModulator(config)
             policy = FixedGatingPolicy(
-                creativity=c, focus=f, stability=s, device=DEVICE,
+                modulation=m, device=DEVICE,
             )
             gen_ids, traj = model.generate_with_gating(
                 prompt_ids=prompt_ids, max_new_tokens=max_tokens,
@@ -356,8 +354,8 @@ def analyze_trajectories():
             sweep_texts = {}
             first_prompt = prompts[0]
             for cfg in get_sweep_grid():
-                key = f"{cfg[0]:.1f}_{cfg[1]:.1f}_{cfg[2]:.1f}"
-                text, traj = _run_generation(first_prompt, c=cfg[0], f=cfg[1], s=cfg[2])
+                key = f"{cfg[0]:.1f}"
+                text, traj = _run_generation(first_prompt, m=cfg[0])
                 if traj is not None:
                     sweep_data[key] = {"trajectory": traj, "text": text}
                     sweep_texts[key] = text

@@ -4,7 +4,7 @@ GatingEnvironment.py
 Gym-style environment for RL gate signal control of the TransformerLM.
 Wraps the language model and provides a standard RL interface with:
 - Observation space: 64D vector with token statistics, hidden states, context
-- Action space: 3D continuous [creativity, focus, stability] in [0, 1]
+- Action space: 1D continuous [modulation] in [0, 1]
 - Rewards: Multi-component reward from RewardComputer
 
 Supports both inference-time (generation) and training-time (backprop through model)
@@ -28,7 +28,7 @@ class EnvConfig:
     prompt_min_length: int = 3
     prompt_max_length: int = 10
     observation_dim: int = 64
-    action_dim: int = 3
+    action_dim: int = 1
     top_k: int = 40
     base_temperature: float = 1.0
 
@@ -45,10 +45,10 @@ class GatingEnvironment:
     Observation Space (64D):
         - Token statistics (10D): repetition ratio, entropy, n-gram diversity
         - Hidden state summary (48D): mean/std pooling from final layer
-        - Context (6D): step progress, base temperature, previous gate signals
+        - Context (6D): step progress, base temperature, previous modulation + padding
 
-    Action Space (3D continuous):
-        - [creativity, focus, stability] each in [0, 1]
+    Action Space (1D continuous):
+        - [modulation] in [0, 1] on conservative-to-exploratory axis
 
     Reward:
         Multi-component reward from RewardComputer (perplexity, diversity,
@@ -88,7 +88,7 @@ class GatingEnvironment:
             prompt_min_length=config.get("RL_PROMPT_MIN_LENGTH", 3),
             prompt_max_length=config.get("RL_PROMPT_MAX_LENGTH", 10),
             observation_dim=config.get("RL_OBSERVATION_DIM", 64),
-            action_dim=config.get("RL_ACTION_DIM", 3),
+            action_dim=config.get("RL_ACTION_DIM", 1),
             top_k=config.get("RL_TOP_K", 40),
             base_temperature=config.get("RL_BASE_TEMPERATURE", 1.0),
         )
@@ -97,7 +97,7 @@ class GatingEnvironment:
         self.generated_tokens: List[int] = []
         self.step_count: int = 0
         self.done: bool = False
-        self.prev_action = torch.zeros(3, device=self.device)
+        self.prev_action = torch.zeros(1, device=self.device)
 
         self.model.eval()
 
@@ -124,7 +124,7 @@ class GatingEnvironment:
 
         self.step_count = 0
         self.done = False
-        self.prev_action = torch.zeros(3, device=self.device)
+        self.prev_action = torch.zeros(1, device=self.device)
 
         observation = self._get_observation()
         return observation
@@ -201,9 +201,7 @@ class GatingEnvironment:
         info = {
             "reward_components": reward_components,
             "gate_signals": {
-                "creativity": float(action[0]),
-                "focus": float(action[1]),
-                "stability": float(action[2]),
+                "modulation": float(action[0]),
             },
             "effects": {
                 "temperature": effects.temperature,
@@ -259,8 +257,8 @@ class GatingEnvironment:
             self.step_count, self.env_config.max_episode_length,
         )
 
-        # Inject previous action into context features
-        observation[-4:-1] = self.prev_action
+        # Inject previous action into context features (single modulation gate)
+        observation[-4] = self.prev_action[0]
 
         return observation
 
@@ -271,8 +269,7 @@ class GatingEnvironment:
     def render(self, idx_to_vocab: Dict[int, str] = None) -> str:
         state_str = f"Step: {self.step_count}/{self.env_config.max_episode_length}\n"
         state_str += f"Tokens generated: {len(self.generated_tokens) - len(self.current_prompt)}\n"
-        state_str += f"Previous gate signals: creativity={self.prev_action[0]:.3f}, "
-        state_str += f"focus={self.prev_action[1]:.3f}, stability={self.prev_action[2]:.3f}\n"
+        state_str += f"Previous gate signal: modulation={self.prev_action[0]:.3f}\n"
 
         if idx_to_vocab:
             state_str += f"Text: {self.get_generated_text(idx_to_vocab)}\n"

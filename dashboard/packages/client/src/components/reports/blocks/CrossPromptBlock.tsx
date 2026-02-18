@@ -8,8 +8,8 @@ import { gatingModeOptions } from "./TrajectoryChartBlock.js";
 import type { BatchAnalysis, AnalyzeRequest } from "@tidal/shared";
 import { CURATED_PROMPTS } from "@tidal/shared";
 
-const SIGNAL_NAMES = ["creativity", "focus", "stability"] as const;
-const SIGNAL_COLORS = ["#f472b6", "#60a5fa", "#34d399"] as const;
+const SIGNAL_NAMES = ["modulation"] as const;
+const SIGNAL_COLORS = ["#a78bfa"] as const;
 
 // ---------------------------------------------------------------------------
 // Pure data extraction functions (exported for testing)
@@ -28,46 +28,6 @@ export function extractHeatmapData(batch: BatchAnalysis): {
     signals.map((s) => summaries[p]?.signalStats?.[s]?.mean ?? 0),
   );
   return { prompts, signals, values };
-}
-
-/** Extract 3x3 correlation matrix averaged across all prompts. */
-export function extractCorrelationMatrix(
-  perPromptSummaries: Record<string, any>,
-): {
-  labels: string[];
-  matrix: number[][];
-} {
-  const labels = [...SIGNAL_NAMES];
-  const prompts = Object.keys(perPromptSummaries);
-
-  // Build lookup: pairKey → average correlation
-  const pairKeys = [
-    "creativity_focus",
-    "creativity_stability",
-    "focus_stability",
-  ] as const;
-
-  const avgCorr: Record<string, number> = {};
-  for (const pk of pairKeys) {
-    if (prompts.length === 0) {
-      avgCorr[pk] = 0;
-    } else {
-      let sum = 0;
-      for (const p of prompts) {
-        sum += perPromptSummaries[p]?.crossSignalCorrelations?.[pk] ?? 0;
-      }
-      avgCorr[pk] = sum / prompts.length;
-    }
-  }
-
-  // Fill 3x3 symmetric matrix with 1.0 on diagonal
-  const matrix: number[][] = [
-    [1.0, avgCorr["creativity_focus"], avgCorr["creativity_stability"]],
-    [avgCorr["creativity_focus"], 1.0, avgCorr["focus_stability"]],
-    [avgCorr["creativity_stability"], avgCorr["focus_stability"], 1.0],
-  ];
-
-  return { labels, matrix };
 }
 
 /** Extract variance summary per signal. */
@@ -156,68 +116,6 @@ function renderHeatmap(
   }
 }
 
-const CORR_SIZE = 200;
-
-function renderCorrelation(
-  canvas: HTMLCanvasElement | null,
-  data: ReturnType<typeof extractCorrelationMatrix>,
-) {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = CORR_SIZE * dpr;
-  canvas.height = CORR_SIZE * dpr;
-  canvas.style.width = `${CORR_SIZE}px`;
-  canvas.style.height = `${CORR_SIZE}px`;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, CORR_SIZE, CORR_SIZE);
-
-  const labelW = 60;
-  const headerH = 20;
-  const cellSize = (CORR_SIZE - labelW) / 3;
-
-  // Column headers
-  ctx.font = "10px monospace";
-  ctx.textAlign = "center";
-  for (let j = 0; j < 3; j++) {
-    ctx.fillStyle = SIGNAL_COLORS[j];
-    ctx.fillText(
-      data.labels[j].slice(0, 4),
-      labelW + j * cellSize + cellSize / 2,
-      headerH - 4,
-    );
-  }
-
-  // Row labels + cells
-  for (let i = 0; i < 3; i++) {
-    const y = headerH + i * cellSize;
-    ctx.fillStyle = SIGNAL_COLORS[i];
-    ctx.font = "10px monospace";
-    ctx.textAlign = "right";
-    ctx.fillText(data.labels[i].slice(0, 4), labelW - 6, y + cellSize / 2 + 3);
-
-    for (let j = 0; j < 3; j++) {
-      const v = data.matrix[i][j]; // [-1, 1]
-      const x = labelW + j * cellSize;
-
-      // Diverging color: blue(-1) → gray(0) → red(+1)
-      if (v >= 0) {
-        ctx.fillStyle = `rgba(239, 68, 68, ${v * 0.8})`;
-      } else {
-        ctx.fillStyle = `rgba(59, 130, 246, ${-v * 0.8})`;
-      }
-      ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-
-      ctx.fillStyle = Math.abs(v) > 0.5 ? "#f9fafb" : "#9ca3af";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(v.toFixed(2), x + cellSize / 2, y + cellSize / 2 + 3);
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Block component
 // ---------------------------------------------------------------------------
@@ -248,7 +146,6 @@ export const CrossPromptBlock = createReactBlockSpec(
         "";
 
       const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
-      const corrCanvasRef = useRef<HTMLCanvasElement>(null);
 
       const handleAnalyze = () => {
         if (!checkpoint) return;
@@ -261,16 +158,12 @@ export const CrossPromptBlock = createReactBlockSpec(
         analysis.mutate(body);
       };
 
-      // Re-render canvases whenever analysis data changes or canvas mounts
+      // Re-render canvas whenever analysis data changes
       const batch = analysis.data?.batchAnalysis;
       useEffect(() => {
         if (!batch) return;
         const heatmap = extractHeatmapData(batch);
         renderHeatmap(heatmapCanvasRef.current, heatmap);
-        const corr = extractCorrelationMatrix(
-          batch.perPromptSummaries as Record<string, any>,
-        );
-        renderCorrelation(corrCanvasRef.current, corr);
       }, [batch]);
 
       const modes = gatingModeOptions();
@@ -344,18 +237,6 @@ export const CrossPromptBlock = createReactBlockSpec(
                   height={HEATMAP_H}
                   className="w-full rounded bg-gray-950"
                   style={{ height: HEATMAP_H }}
-                />
-              </div>
-              <div>
-                <div className="text-xs text-gray-400 mb-1 font-mono">
-                  Cross-Signal Correlation
-                </div>
-                <canvas
-                  ref={corrCanvasRef}
-                  width={CORR_SIZE}
-                  height={CORR_SIZE}
-                  className="rounded bg-gray-950"
-                  style={{ height: CORR_SIZE, width: CORR_SIZE }}
                 />
               </div>
               {varianceSummary.length > 0 && (

@@ -70,9 +70,7 @@ export interface GenerateRequest {
   topK?: number;
   gatingMode?: "none" | "random" | "fixed" | "learned";
   rlCheckpoint?: string;
-  creativity?: number;
-  focus?: number;
-  stability?: number;
+  modulation?: number;
 }
 
 export interface GateEffectsStep {
@@ -83,7 +81,7 @@ export interface GateEffectsStep {
 }
 
 export interface GenerationTrajectory {
-  gateSignals: [number, number, number][];
+  gateSignals: number[][];
   effects: GateEffectsStep[];
   tokenIds: number[];
   tokenTexts: string[];

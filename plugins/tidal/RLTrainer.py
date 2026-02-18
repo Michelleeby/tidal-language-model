@@ -94,7 +94,7 @@ class RolloutBuffer:
     ``clear()`` resets the write position without reallocating.
     """
 
-    def __init__(self, capacity: int, obs_dim: int = 64, action_dim: int = 3):
+    def __init__(self, capacity: int, obs_dim: int = 64, action_dim: int = 1):
         self.capacity = capacity
         self.observations = torch.zeros(capacity, obs_dim)
         self.actions = torch.zeros(capacity, action_dim)
@@ -195,7 +195,7 @@ class PPOTrainer:
         ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
         self.episode_rewards = ExponentialMovingAverage(alpha=ema_alpha)
         obs_dim = config.get("RL_OBSERVATION_DIM", 64)
-        action_dim = config.get("RL_ACTION_DIM", 3)
+        action_dim = config.get("RL_ACTION_DIM", 1)
         self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim)
 
         # Persist episode counters across rollout boundaries so episodes
@@ -222,8 +222,8 @@ class PPOTrainer:
         rollout_rewards = []
         rollout_values = []
 
-        gate_signals_sum = {"creativity": 0.0, "focus": 0.0, "stability": 0.0}
-        reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "focus": 0.0, "repetition": 0.0, "coherence": 0.0}
+        gate_signals_sum = {"modulation": 0.0}
+        reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "sampling": 0.0, "repetition": 0.0, "coherence": 0.0}
 
         for step in range(num_steps):
             with torch.no_grad():
@@ -276,12 +276,10 @@ class PPOTrainer:
             "mean_reward": np.mean(rollout_rewards),
             "mean_value": np.mean(rollout_values),
             "std_reward": np.std(rollout_rewards),
-            "mean_gate_creativity": gate_signals_sum["creativity"] / num_steps,
-            "mean_gate_focus": gate_signals_sum["focus"] / num_steps,
-            "mean_gate_stability": gate_signals_sum["stability"] / num_steps,
+            "mean_gate_modulation": gate_signals_sum["modulation"] / num_steps,
             "mean_reward_perplexity": reward_components_sum["perplexity"] / num_steps,
             "mean_reward_diversity": reward_components_sum["diversity"] / num_steps,
-            "mean_reward_focus": reward_components_sum["focus"] / num_steps,
+            "mean_reward_sampling": reward_components_sum["sampling"] / num_steps,
             "mean_reward_repetition": reward_components_sum["repetition"] / num_steps,
             "mean_reward_coherence": reward_components_sum["coherence"] / num_steps,
         }
@@ -393,13 +391,11 @@ class PPOTrainer:
             "value_loss": [],
             "entropy": [],
             "entropy_coef": [],
-            "gate_creativity": [],
-            "gate_focus": [],
-            "gate_stability": [],
+            "gate_modulation": [],
             "explained_variance": [],
             "reward_perplexity": [],
             "reward_diversity": [],
-            "reward_focus": [],
+            "reward_sampling": [],
             "reward_repetition": [],
             "reward_coherence": [],
         }
@@ -440,13 +436,11 @@ class PPOTrainer:
             history["value_loss"].append(update_stats["value_loss"])
             history["entropy"].append(update_stats["entropy"])
             history["entropy_coef"].append(current_entropy_coef)
-            history["gate_creativity"].append(rollout_stats.get("mean_gate_creativity", 0.0))
-            history["gate_focus"].append(rollout_stats.get("mean_gate_focus", 0.0))
-            history["gate_stability"].append(rollout_stats.get("mean_gate_stability", 0.0))
+            history["gate_modulation"].append(rollout_stats.get("mean_gate_modulation", 0.0))
             history["explained_variance"].append(explained_var)
             history["reward_perplexity"].append(rollout_stats.get("mean_reward_perplexity", 0.0))
             history["reward_diversity"].append(rollout_stats.get("mean_reward_diversity", 0.0))
-            history["reward_focus"].append(rollout_stats.get("mean_reward_focus", 0.0))
+            history["reward_sampling"].append(rollout_stats.get("mean_reward_sampling", 0.0))
             history["reward_repetition"].append(rollout_stats.get("mean_reward_repetition", 0.0))
             history["reward_coherence"].append(rollout_stats.get("mean_reward_coherence", 0.0))
 
@@ -456,13 +450,11 @@ class PPOTrainer:
             self.writer.add_scalar("RL/entropy", update_stats["entropy"], self.global_step)
             self.writer.add_scalar("RL/entropy_coef", current_entropy_coef, self.global_step)
             self.writer.add_scalar("RL/learning_rate", self.optimizer.param_groups[0]["lr"], self.global_step)
-            self.writer.add_scalar("RL/gate_creativity", rollout_stats.get("mean_gate_creativity", 0.0), self.global_step)
-            self.writer.add_scalar("RL/gate_focus", rollout_stats.get("mean_gate_focus", 0.0), self.global_step)
-            self.writer.add_scalar("RL/gate_stability", rollout_stats.get("mean_gate_stability", 0.0), self.global_step)
+            self.writer.add_scalar("RL/gate_modulation", rollout_stats.get("mean_gate_modulation", 0.0), self.global_step)
             self.writer.add_scalar("RL/explained_variance", explained_var, self.global_step)
             self.writer.add_scalar("RL/reward_perplexity", rollout_stats.get("mean_reward_perplexity", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_diversity", rollout_stats.get("mean_reward_diversity", 0.0), self.global_step)
-            self.writer.add_scalar("RL/reward_focus", rollout_stats.get("mean_reward_focus", 0.0), self.global_step)
+            self.writer.add_scalar("RL/reward_sampling", rollout_stats.get("mean_reward_sampling", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_repetition", rollout_stats.get("mean_reward_repetition", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_coherence", rollout_stats.get("mean_reward_coherence", 0.0), self.global_step)
 
