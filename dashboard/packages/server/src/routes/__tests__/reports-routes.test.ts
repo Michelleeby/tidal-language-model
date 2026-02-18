@@ -480,7 +480,7 @@ describe("POST /api/reports/generate", () => {
     assert.ok(report.id);
     assert.ok(report.blocks.length > 0);
     // Verify experimentId appears in block props
-    const chartBlock = report.blocks.find((b: Record<string, unknown>) => b.type === "chart");
+    const chartBlock = report.blocks.find((b: Record<string, unknown>) => b.type === "experimentChart");
     assert.ok(chartBlock);
     assert.equal((chartBlock as { props: { experimentId: string } }).props.experimentId, "exp-123");
     await app.close();

@@ -80,6 +80,9 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
         userId,
       );
       const updated = fastify.db.updateReport(report.id, { blocks });
+      if (!updated) {
+        return reply.status(500).send({ error: "Failed to persist report blocks" });
+      }
 
       return reply.status(201).send({ report: updated });
     },
