@@ -116,14 +116,14 @@ class TinyStoriesDataset(Dataset):
                 return_attention_mask=False,
             )
             for ids in encoded["input_ids"]:
-                arr = np.array(ids, dtype=np.int64)
+                arr = np.array(ids, dtype=np.uint16)
                 token_chunks.append(arr)
                 total += len(arr)
             if start % 50000 == 0:
                 logger.info(f"  Tokenized {start + len(batch_texts):,}/{num_examples:,} examples ({total:,} tokens)")
 
         logger.info(f"Total tokens: {total:,}. Concatenating...")
-        all_ids = np.empty(total, dtype=np.int64)
+        all_ids = np.empty(total, dtype=np.uint16)
         offset = 0
         for arr in token_chunks:
             n = len(arr)
@@ -145,6 +145,6 @@ class TinyStoriesDataset(Dataset):
 
     def __getitem__(self, idx: int):
         chunk = self.chunks[idx]
-        input_ids = chunk[:-1]    # (max_length,)
-        target_ids = chunk[1:]    # (max_length,)
+        input_ids = chunk[:-1].long()    # (max_length,)  uint16 → long for nn.Embedding
+        target_ids = chunk[1:].long()    # (max_length,)
         return input_ids, target_ids

@@ -4,6 +4,7 @@ import torch
 
 import tempfile
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.TransformerLM import (
     TransformerLM, GatedTransformerBlock, DynamicGate,
     get_model_state_dict, load_model_state_dict,
@@ -12,7 +13,7 @@ from plugins.tidal.TransformerLM import (
 from plugins.tidal.Trainer import Trainer
 
 
-class TestTransformerLM(unittest.TestCase):
+class TestTransformerLM(TimedTestCase):
     """Unit tests for the TransformerLM class."""
 
     @classmethod
@@ -151,7 +152,7 @@ class TestTransformerLM(unittest.TestCase):
         self.assertIsNotNone(attn_gate_grad)
 
 
-class TestDynamicGate(unittest.TestCase):
+class TestDynamicGate(TimedTestCase):
     """Tests for the DynamicGate module."""
 
     def test_neutral_initialization(self):
@@ -176,7 +177,7 @@ class TestDynamicGate(unittest.TestCase):
         self.assertEqual(output.shape, (4, 1, 64))
 
 
-class TestGatedTransformerBlock(unittest.TestCase):
+class TestGatedTransformerBlock(TimedTestCase):
     """Tests for the GatedTransformerBlock."""
 
     def test_forward_without_gating(self):
@@ -193,7 +194,7 @@ class TestGatedTransformerBlock(unittest.TestCase):
         self.assertEqual(out.shape, (2, 10, 64))
 
 
-class TestTrainerLogThread(unittest.TestCase):
+class TestTrainerLogThread(TimedTestCase):
     """Tests for Trainer log thread behavior."""
 
     def test_log_thread_is_not_daemon(self):
@@ -217,7 +218,7 @@ class TestTrainerLogThread(unittest.TestCase):
             trainer._flush_logs()
 
 
-class TestGatedTransformerBlockKVCache(unittest.TestCase):
+class TestGatedTransformerBlockKVCache(TimedTestCase):
     """Tests for GatedTransformerBlock with manual Q/K/V projections and KV cache."""
 
     def setUp(self):
@@ -314,7 +315,7 @@ class TestGatedTransformerBlockKVCache(unittest.TestCase):
         self.assertEqual(k2.shape[2], 8)  # 5 + 3
 
 
-class TestRoPE(unittest.TestCase):
+class TestRoPE(TimedTestCase):
     """Tests for Rotary Positional Embedding helper functions."""
 
     def test_precompute_rope_frequencies_shape(self):
@@ -376,7 +377,7 @@ class TestRoPE(unittest.TestCase):
         self.assertFalse(torch.allclose(dot_dist1, dot_dist3, atol=1e-3))
 
 
-class TestTransformerLMRoPE(unittest.TestCase):
+class TestTransformerLMRoPE(TimedTestCase):
     """Tests for RoPE integration in TransformerLM."""
 
     @classmethod
@@ -420,7 +421,7 @@ class TestTransformerLMRoPE(unittest.TestCase):
         self.assertIsInstance(viz_data, dict)
 
 
-class TestTransformerLMKVCache(unittest.TestCase):
+class TestTransformerLMKVCache(TimedTestCase):
     """Tests for KV cache in TransformerLM."""
 
     @classmethod
@@ -488,7 +489,7 @@ class TestTransformerLMKVCache(unittest.TestCase):
             self.assertTrue(0 <= tid < self.vocab_size)
 
 
-class TestTorchCompileForward(unittest.TestCase):
+class TestTorchCompileForward(TimedTestCase):
     """Tests for torch.compile compatibility with forward pass."""
 
     @classmethod
@@ -536,7 +537,7 @@ class TestTorchCompileForward(unittest.TestCase):
         self.assertGreater(loss.item(), 0)
 
 
-class TestModelStateDictHelpers(unittest.TestCase):
+class TestModelStateDictHelpers(TimedTestCase):
     """Tests for get_model_state_dict / load_model_state_dict helpers."""
 
     @classmethod
@@ -593,6 +594,114 @@ class TestModelStateDictHelpers(unittest.TestCase):
 
         sd2 = get_model_state_dict(model2)
         self.assertEqual(set(saved_sd.keys()), set(sd2.keys()))
+
+
+class TestCheckpointShapeContract(TimedTestCase):
+    """Shape-contract tests that verify model state_dict shapes match expectations.
+
+    These tests prevent the exact class of bugs that caused the [32, 3] vs [32, 1]
+    gate dimension mismatch production failure.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = {
+            "EMBED_DIM": 64,
+            "NUM_TRANSFORMER_BLOCKS": 2,
+            "NUM_ATTENTION_HEADS": 4,
+            "FFN_HIDDEN_DIM": 128,
+            "DROPOUT": 0.1,
+            "MAX_CONTEXT_LENGTH": 32,
+            "DEVICE": "cpu",
+        }
+        cls.vocab_size = 100
+
+    def setUp(self):
+        super().setUp()
+        self.model = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+
+    def test_gate_weight_shapes(self):
+        """Every DynamicGate first-linear weight must be [hidden, GATE_DIM=1]."""
+        gate_dim = GatedTransformerBlock.GATE_DIM
+        sd = self.model.state_dict()
+        for key, tensor in sd.items():
+            if ".attn_gate.net.0.weight" in key or ".ffn_gate.net.0.weight" in key:
+                self.assertEqual(
+                    tensor.shape[1], gate_dim,
+                    f"{key} has input dim {tensor.shape[1]}, expected {gate_dim}",
+                )
+
+    def test_state_dict_roundtrip(self):
+        """Save state_dict, load into fresh model — no errors, all keys match."""
+        sd = self.model.state_dict()
+
+        model2 = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+        model2.load_state_dict(sd)
+
+        sd2 = model2.state_dict()
+        self.assertEqual(set(sd.keys()), set(sd2.keys()))
+        for key in sd:
+            self.assertTrue(
+                torch.equal(sd[key], sd2[key]),
+                f"Mismatch in {key} after roundtrip",
+            )
+
+    def test_old_3gate_checkpoint_fails_clearly(self):
+        """A synthetic 3-gate state_dict must fail with 'size mismatch'."""
+        sd = self.model.state_dict()
+
+        # Replace gate input weights with old 3-gate format
+        for key in list(sd.keys()):
+            if ".attn_gate.net.0.weight" in key or ".ffn_gate.net.0.weight" in key:
+                hidden_dim = sd[key].shape[0]
+                sd[key] = torch.randn(hidden_dim, 3)  # old 3-gate format
+            elif ".attn_gate.net.0.bias" in key or ".ffn_gate.net.0.bias" in key:
+                pass  # bias shape is [hidden_dim], unchanged
+
+        model2 = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+        with self.assertRaises(RuntimeError) as ctx:
+            model2.load_state_dict(sd, strict=True)
+        self.assertIn("size mismatch", str(ctx.exception))
+
+    def test_checkpoint_format_detection(self):
+        """Both raw state_dict and wrapped dict formats load correctly."""
+        sd = self.model.state_dict()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Format 1: raw state_dict (what Trainer saves)
+            raw_path = os.path.join(tmpdir, "raw.pth")
+            torch.save(sd, raw_path)
+
+            loaded_raw = torch.load(raw_path, map_location="cpu", weights_only=True)
+            model_raw = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+            model_raw.load_state_dict(loaded_raw)
+
+            # Format 2: wrapped dict (what some tools save)
+            wrapped_path = os.path.join(tmpdir, "wrapped.pth")
+            torch.save({"model_state_dict": sd, "epoch": 1}, wrapped_path)
+
+            loaded_wrapped = torch.load(wrapped_path, map_location="cpu", weights_only=True)
+            if "model_state_dict" in loaded_wrapped:
+                loaded_wrapped = loaded_wrapped["model_state_dict"]
+            model_wrapped = TransformerLM(vocab_size=self.vocab_size, config=self.config)
+            model_wrapped.load_state_dict(loaded_wrapped)
+
+            # Both should produce identical state dicts
+            sd_raw = model_raw.state_dict()
+            sd_wrapped = model_wrapped.state_dict()
+            self.assertEqual(set(sd_raw.keys()), set(sd_wrapped.keys()))
+
+    def test_gate_dim_matches_class_constant(self):
+        """GATE_DIM class constant is 1, and model gates use it."""
+        self.assertEqual(GatedTransformerBlock.GATE_DIM, 1)
+
+        for block in self.model.transformer_blocks:
+            if isinstance(block, GatedTransformerBlock):
+                # First linear layer input dim should match GATE_DIM
+                attn_in_features = block.attn_gate.net[0].in_features
+                ffn_in_features = block.ffn_gate.net[0].in_features
+                self.assertEqual(attn_in_features, GatedTransformerBlock.GATE_DIM)
+                self.assertEqual(ffn_in_features, GatedTransformerBlock.GATE_DIM)
 
 
 if __name__ == "__main__":

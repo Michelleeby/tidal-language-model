@@ -77,6 +77,11 @@ class TestTinyStoriesDataset(unittest.TestCase):
         self.assertEqual(input_ids.dtype, torch.long)
         self.assertEqual(target_ids.dtype, torch.long)
 
+    def test_chunks_stored_as_uint16(self):
+        """Internal chunk storage should use uint16 to minimise cache size."""
+        # uint16 max (65535) comfortably fits GPT-2 vocab (50257)
+        self.assertEqual(self.dataset.chunks.dtype, torch.uint16)
+
     def test_token_ids_in_vocab_range(self):
         input_ids, target_ids = self.dataset[0]
         self.assertTrue(torch.all(input_ids >= 0))
