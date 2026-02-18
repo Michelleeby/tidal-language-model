@@ -14,12 +14,18 @@ import "@blocknote/mantine/style.css";
 
 import { ExperimentChartBlock } from "./blocks/ExperimentChartBlock.js";
 import { MetricsTableBlock } from "./blocks/MetricsTableBlock.js";
+import { TrajectoryChartBlock } from "./blocks/TrajectoryChartBlock.js";
+import { CrossPromptBlock } from "./blocks/CrossPromptBlock.js";
+import { SweepBlock } from "./blocks/SweepBlock.js";
 
 const schema = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
     experimentChart: ExperimentChartBlock(),
     metricsTable: MetricsTableBlock(),
+    trajectoryChart: TrajectoryChartBlock(),
+    crossPromptAnalysis: CrossPromptBlock(),
+    sweepAnalysis: SweepBlock(),
   },
 });
 
@@ -110,6 +116,51 @@ export default function BlockEditor({ initialBlocks, onChange }: BlockEditorProp
           },
           aliases: ["metrics", "summary", "stats"] as string[],
           key: "metrics_table",
+        },
+        {
+          title: "Gate Trajectory",
+          subtext: "Insert a single-prompt gate signal trajectory chart",
+          group: "Trajectory Analysis",
+          onItemClick: () => {
+            const current = editor.getTextCursorPosition().block;
+            (editor as any).insertBlocks(
+              [{ type: "trajectoryChart", props: { experimentId: "", gatingMode: "fixed", prompt: "Once upon a time," } }],
+              current,
+              "after",
+            );
+          },
+          aliases: ["trajectory", "gate", "signals"] as string[],
+          key: "trajectory_chart",
+        },
+        {
+          title: "Cross-Prompt Analysis",
+          subtext: "Compare gating strategies across multiple prompts",
+          group: "Trajectory Analysis",
+          onItemClick: () => {
+            const current = editor.getTextCursorPosition().block;
+            (editor as any).insertBlocks(
+              [{ type: "crossPromptAnalysis", props: { experimentId: "", gatingMode: "fixed" } }],
+              current,
+              "after",
+            );
+          },
+          aliases: ["cross-prompt", "heatmap", "comparison"] as string[],
+          key: "cross_prompt_analysis",
+        },
+        {
+          title: "Gate Sweep",
+          subtext: "Run extreme-value sweep to map gate signal effects",
+          group: "Trajectory Analysis",
+          onItemClick: () => {
+            const current = editor.getTextCursorPosition().block;
+            (editor as any).insertBlocks(
+              [{ type: "sweepAnalysis", props: { experimentId: "", prompt: "Once upon a time," } }],
+              current,
+              "after",
+            );
+          },
+          aliases: ["sweep", "extreme", "interpretability"] as string[],
+          key: "sweep_analysis",
         },
       ];
 

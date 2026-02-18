@@ -11,6 +11,7 @@ import unittest
 from plugins.tidal.TrajectoryAnalyzer import (
     _signal_stats,
     _split_windows,
+    bootstrap_ci,
     analyze_single,
     analyze_batch,
     get_sweep_grid,
@@ -418,6 +419,129 @@ class TestSweepAnalysis(unittest.TestCase):
             self.assertIn("lowConfig", imap[name])
             self.assertIn("highConfig", imap[name])
             self.assertIn("effect", imap[name])
+
+
+class TestBootstrapCI(unittest.TestCase):
+    """Tests for bootstrap_ci helper function."""
+
+    def test_returns_expected_keys(self):
+        """bootstrap_ci returns dict with mean, ci_low, ci_high."""
+        result = bootstrap_ci([1.0, 2.0, 3.0, 4.0, 5.0], seed=42)
+        for key in ("mean", "ci_low", "ci_high"):
+            self.assertIn(key, result)
+            self.assertIsInstance(result[key], float)
+
+    def test_empty_list_returns_zeros(self):
+        """Empty input returns all zeros."""
+        result = bootstrap_ci([])
+        self.assertEqual(result["mean"], 0.0)
+        self.assertEqual(result["ci_low"], 0.0)
+        self.assertEqual(result["ci_high"], 0.0)
+
+    def test_single_value_degenerate(self):
+        """Single value: mean equals value, CI collapses to that value."""
+        result = bootstrap_ci([3.14])
+        self.assertAlmostEqual(result["mean"], 3.14)
+        self.assertAlmostEqual(result["ci_low"], 3.14)
+        self.assertAlmostEqual(result["ci_high"], 3.14)
+
+    def test_ci_contains_known_mean(self):
+        """For a known distribution, the true mean should be within the CI."""
+        import random as _rng
+        _rng.seed(99)
+        values = [_rng.gauss(5.0, 1.0) for _ in range(200)]
+        result = bootstrap_ci(values, seed=42, n_bootstrap=2000)
+        self.assertLessEqual(result["ci_low"], 5.0)
+        self.assertGreaterEqual(result["ci_high"], 5.0)
+
+    def test_seed_reproducibility(self):
+        """Same seed produces identical results."""
+        values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        r1 = bootstrap_ci(values, seed=123)
+        r2 = bootstrap_ci(values, seed=123)
+        self.assertEqual(r1, r2)
+
+    def test_ci_low_leq_mean_leq_ci_high(self):
+        """CI bounds are ordered: ci_low <= mean <= ci_high."""
+        values = [1.0, 3.0, 5.0, 7.0, 9.0, 2.0, 4.0]
+        result = bootstrap_ci(values, seed=42)
+        self.assertLessEqual(result["ci_low"], result["mean"])
+        self.assertLessEqual(result["mean"], result["ci_high"])
+
+    def test_percentile_indices_use_n_minus_1(self):
+        """Percentile indices should use p*(n-1) convention, matching _quantile."""
+        # With n_bootstrap=100 and confidence=0.95:
+        # alpha/2 = 0.025, lo = floor(0.025 * 99) = 2
+        # 1-alpha/2 = 0.975, hi = floor(0.975 * 99) = 97 (not 97.5→97)
+        # Generate a known sorted sequence as bootstrap means by using a
+        # deterministic set and verifying the exact CI values.
+        values = list(range(1, 101))  # [1..100], mean = 50.5
+        result = bootstrap_ci(values, seed=0, n_bootstrap=100)
+        # The bootstrap means (sorted) with seed=0 and n=100 are deterministic.
+        # Verify bounds are selected with (n-1) convention by checking
+        # that CI bounds differ between n and n-1 indexing.
+        result2 = bootstrap_ci(values, seed=0, n_bootstrap=100)
+        self.assertEqual(result, result2)  # deterministic
+        # The key invariant: with n_bootstrap=100,
+        # lo_idx should be floor(0.025*99)=2, hi_idx should be floor(0.975*99)=96
+        # NOT lo_idx=floor(0.025*100)=2, hi_idx=floor(0.975*100)=97
+        # We can verify this by checking ci_high is the 96th element (0-indexed)
+        # of the sorted bootstrap means, not the 97th.
+        import random as _rng
+        rng = _rng.Random(0)
+        n = len(values)
+        boot_means = []
+        for _ in range(100):
+            sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
+            from statistics import mean
+            boot_means.append(mean(sample))
+        boot_means.sort()
+        # With (n-1) convention: hi_idx = floor(0.975 * 99) = 96
+        self.assertAlmostEqual(result["ci_high"], boot_means[96])
+        self.assertAlmostEqual(result["ci_low"], boot_means[2])
+
+
+class TestBatchAnalysisWithBootstrap(unittest.TestCase):
+    """Tests for analyze_batch with bootstrap parameter."""
+
+    def setUp(self):
+        self.traj_a = _make_trajectory(
+            50,
+            creativity_fn=lambda t: 0.8,
+            focus_fn=lambda t: 0.2,
+            stability_fn=lambda t: 0.5,
+        )
+        self.traj_b = _make_trajectory(
+            50,
+            creativity_fn=lambda t: 0.2,
+            focus_fn=lambda t: 0.8,
+            stability_fn=lambda t: 0.9,
+        )
+        self.prompts = {
+            "Once upon a time": [self.traj_a],
+            "The scientist observed": [self.traj_b],
+        }
+
+    def test_bootstrap_false_omits_ci_keys(self):
+        """bootstrap=False (default) produces no CI keys."""
+        result = analyze_batch(self.prompts)
+        for name in ("creativity", "focus", "stability"):
+            self.assertNotIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
+            self.assertNotIn("globalMean_ci", result["strategyCharacterization"][name])
+
+    def test_bootstrap_true_adds_ci_keys(self):
+        """bootstrap=True adds betweenPromptVar_ci and globalMean_ci."""
+        result = analyze_batch(self.prompts, bootstrap=True)
+        for name in ("creativity", "focus", "stability"):
+            self.assertIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
+            ci = result["crossPromptVariance"][name]["betweenPromptVar_ci"]
+            for key in ("mean", "ci_low", "ci_high"):
+                self.assertIn(key, ci)
+
+            self.assertIn("globalMean_ci", result["strategyCharacterization"][name])
+            ci2 = result["strategyCharacterization"][name]["globalMean_ci"]
+            for key in ("mean", "ci_low", "ci_high"):
+                self.assertIn(key, ci2)
 
 
 if __name__ == "__main__":
