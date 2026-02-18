@@ -132,6 +132,7 @@ export class Database {
       `),
       getUserById: this.db.prepare("SELECT * FROM users WHERE id = ?"),
       getUserByGithubId: this.db.prepare("SELECT * FROM users WHERE github_id = ?"),
+      getUserByGithubLogin: this.db.prepare("SELECT * FROM users WHERE github_login = ?"),
       listUsers: this.db.prepare("SELECT * FROM users ORDER BY last_login_at DESC"),
 
       createReport: this.db.prepare(`
@@ -187,6 +188,11 @@ export class Database {
 
   getUserByGithubId(githubId: number): User | null {
     const row = this.stmts.getUserByGithubId.get(githubId) as UserRow | undefined;
+    return row ? userRowToUser(row) : null;
+  }
+
+  getUserByGithubLogin(login: string): User | null {
+    const row = this.stmts.getUserByGithubLogin.get(login) as UserRow | undefined;
     return row ? userRowToUser(row) : null;
   }
 

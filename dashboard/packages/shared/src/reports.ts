@@ -48,3 +48,18 @@ export interface UpdateReportRequest {
 export interface DeleteReportResponse {
   deleted: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Generate report (block-pattern based)
+// ---------------------------------------------------------------------------
+
+export interface GenerateReportRequest {
+  pattern: string;
+  experimentId: string;
+  title?: string;
+  githubLogin?: string;
+}
+
+export interface GenerateReportResponse {
+  report: Report;
+}

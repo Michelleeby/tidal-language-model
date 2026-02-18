@@ -232,6 +232,36 @@ describe("Database.getUserByGithubId()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getUserByGithubLogin
+// ---------------------------------------------------------------------------
+
+describe("Database.getUserByGithubLogin()", () => {
+  it("finds a user by github login", async () => {
+    const dir = await freshTmpDir();
+    const db = createDb(dir);
+
+    db.upsertUser({ githubId: 555, githubLogin: "octocat", githubAvatarUrl: null });
+
+    const found = db.getUserByGithubLogin("octocat");
+    assert.ok(found);
+    assert.equal(found!.githubLogin, "octocat");
+    assert.equal(found!.githubId, 555);
+
+    db.close();
+  });
+
+  it("returns null for unknown login", async () => {
+    const dir = await freshTmpDir();
+    const db = createDb(dir);
+
+    const found = db.getUserByGithubLogin("nonexistent");
+    assert.equal(found, null);
+
+    db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Report operations
 // ---------------------------------------------------------------------------
 
