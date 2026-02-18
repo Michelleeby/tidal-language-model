@@ -9,6 +9,8 @@ import math
 import unittest
 
 from plugins.tidal.TrajectoryAnalyzer import (
+    _signal_stats,
+    _split_windows,
     analyze_single,
     analyze_batch,
     get_sweep_grid,
@@ -182,6 +184,74 @@ class TestSingleTrajectoryAnalysis(unittest.TestCase):
         empty = {"gateSignals": [], "effects": [], "tokenIds": [], "tokenTexts": []}
         with self.assertRaises(ValueError):
             analyze_single(empty)
+
+
+class TestSignalStatsEdgeCases(unittest.TestCase):
+    """Tests for _signal_stats and _split_windows with small/empty inputs."""
+
+    def test_signal_stats_empty_list_returns_zeroed_dict(self):
+        """_signal_stats([]) must return a valid stats dict, not crash."""
+        result = _signal_stats([])
+        for key in ("mean", "std", "min", "max", "q25", "q50", "q75"):
+            self.assertIn(key, result)
+            self.assertEqual(result[key], 0.0)
+
+    def test_signal_stats_single_value(self):
+        """_signal_stats([v]) should return that value for all positional stats."""
+        result = _signal_stats([0.7])
+        self.assertAlmostEqual(result["mean"], 0.7)
+        self.assertAlmostEqual(result["min"], 0.7)
+        self.assertAlmostEqual(result["max"], 0.7)
+        self.assertEqual(result["std"], 0.0)
+
+    def test_split_windows_fewer_than_n(self):
+        """_split_windows with fewer elements than windows produces empty sublists."""
+        windows = _split_windows([0.1, 0.2], 4)
+        self.assertEqual(len(windows), 4)
+        # Some windows will be empty
+        empty_count = sum(1 for w in windows if len(w) == 0)
+        self.assertGreater(empty_count, 0)
+
+    def test_analyze_single_one_step_no_crash(self):
+        """analyze_single must not crash on a 1-step trajectory."""
+        traj = _make_trajectory(
+            1,
+            creativity_fn=lambda t: 0.5,
+            focus_fn=lambda t: 0.5,
+            stability_fn=lambda t: 0.5,
+        )
+        result = analyze_single(traj)
+        self.assertIn("signalStats", result)
+        self.assertIn("signalEvolution", result)
+        # Evolution has 4 windows; some will be zeroed
+        for name in ("creativity", "focus", "stability"):
+            self.assertEqual(len(result["signalEvolution"][name]), 4)
+
+    def test_analyze_single_two_steps_no_crash(self):
+        """analyze_single must not crash on a 2-step trajectory."""
+        traj = _make_trajectory(
+            2,
+            creativity_fn=lambda t: 0.3,
+            focus_fn=lambda t: 0.6,
+            stability_fn=lambda t: 0.9,
+        )
+        result = analyze_single(traj)
+        self.assertIn("signalStats", result)
+        self.assertIn("signalEvolution", result)
+
+    def test_analyze_single_three_steps_no_crash(self):
+        """analyze_single must not crash on a 3-step trajectory."""
+        traj = _make_trajectory(
+            3,
+            creativity_fn=lambda t: t,
+            focus_fn=lambda t: 0.5,
+            stability_fn=lambda t: 1.0 - t,
+        )
+        result = analyze_single(traj)
+        self.assertIn("signalStats", result)
+        # Phases and correlations should still have valid structure
+        self.assertIsInstance(result["phases"], list)
+        self.assertIsInstance(result["crossSignalCorrelations"], dict)
 
 
 class TestBatchAnalysis(unittest.TestCase):

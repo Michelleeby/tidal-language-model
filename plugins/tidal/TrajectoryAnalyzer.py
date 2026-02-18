@@ -85,7 +85,14 @@ def _welch_t(a, b):
 # ---------------------------------------------------------------------------
 
 def _signal_stats(values):
-    """Compute descriptive statistics for a list of floats."""
+    """Compute descriptive statistics for a list of floats.
+
+    Returns a zeroed-out stats dict when *values* is empty (e.g. when
+    ``_split_windows`` produces an empty window for short trajectories).
+    """
+    if not values:
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0,
+                "q25": 0.0, "q50": 0.0, "q75": 0.0}
     s = sorted(values)
     return {
         "mean": float(statistics.mean(values)),
