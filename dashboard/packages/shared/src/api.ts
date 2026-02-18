@@ -144,6 +144,40 @@ export interface AnalyzeResponse {
   sweepTexts?: Record<string, string>;
 }
 
+/**
+ * Curated TinyStories prompts across 7 narrative categories.
+ * Shared so both MCP tools and client report blocks use the same set.
+ */
+export const CURATED_PROMPTS: string[] = [
+  // Fairy tale (3)
+  "Once upon a time, in a land far away,",
+  "There was a tiny dragon who could not breathe fire.",
+  "The princess did not want to be rescued.",
+  // Character intro (3)
+  "Lily was a little girl who loved to paint.",
+  "Tom was a boy who never stopped asking questions.",
+  "The old woman at the end of the street had a secret.",
+  // Action (3)
+  "The rabbit ran as fast as it could through the forest.",
+  "Suddenly, a loud noise came from the kitchen.",
+  "The boat rocked back and forth on the stormy sea.",
+  // Emotional (3)
+  "Sam felt sad because his best friend moved away.",
+  "The little bird was afraid to fly for the first time.",
+  "Mia was so happy she could not stop smiling.",
+  // Discovery (3)
+  "Behind the old bookshelf, there was a hidden door.",
+  "The children found a strange map in the attic.",
+  "Inside the box was something nobody expected.",
+  // Everyday (3)
+  "It was a sunny morning and the birds were singing.",
+  "Mom said it was time to go to the store.",
+  "The dog waited by the door every afternoon.",
+  // Dialogue (2)
+  "\"Can you help me?\" asked the small kitten.",
+  "\"I have an idea,\" said Ben with a big smile.",
+];
+
 /** GET /api/plugins/:name/configs/:filename */
 export interface ConfigFileResponse {
   filename: string;

@@ -8,6 +8,8 @@ import type {
   AblationResponse,
   GenerateRequest,
   GenerateResponse,
+  AnalyzeRequest,
+  AnalyzeResponse,
   CreateJobRequest,
   CreateJobResponse,
   JobsListResponse,
@@ -77,6 +79,13 @@ export const api = {
 
   generate: (body: GenerateRequest) =>
     fetchJson<GenerateResponse>(`${BASE}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  analyzeTrajectories: (body: AnalyzeRequest) =>
+    fetchJson<AnalyzeResponse>(`${BASE}/analyze-trajectories`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

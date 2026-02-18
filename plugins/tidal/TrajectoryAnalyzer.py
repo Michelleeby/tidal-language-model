@@ -12,6 +12,7 @@ Functions:
 """
 
 import math
+import random
 import statistics
 
 
@@ -141,6 +142,50 @@ def _text_properties(text):
 
 
 # ---------------------------------------------------------------------------
+# Public: bootstrap confidence interval
+# ---------------------------------------------------------------------------
+
+def bootstrap_ci(values, confidence=0.95, n_bootstrap=1000, seed=None):
+    """Compute a bootstrap confidence interval for the mean of *values*.
+
+    Args:
+        values: list of floats.
+        confidence: confidence level (default 0.95 → 95% CI).
+        n_bootstrap: number of bootstrap resamples.
+        seed: optional RNG seed for reproducibility.
+
+    Returns:
+        dict with keys ``mean``, ``ci_low``, ``ci_high``.
+        Returns all zeros for empty input.
+    """
+    if not values:
+        return {"mean": 0.0, "ci_low": 0.0, "ci_high": 0.0}
+
+    n = len(values)
+    observed_mean = statistics.mean(values)
+
+    if n == 1:
+        return {"mean": float(values[0]), "ci_low": float(values[0]), "ci_high": float(values[0])}
+
+    rng = random.Random(seed)
+    boot_means = []
+    for _ in range(n_bootstrap):
+        sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
+        boot_means.append(statistics.mean(sample))
+
+    boot_means.sort()
+    alpha = 1.0 - confidence
+    lo_idx = max(0, int(math.floor((alpha / 2) * n_bootstrap)))
+    hi_idx = min(n_bootstrap - 1, int(math.floor((1.0 - alpha / 2) * n_bootstrap)))
+
+    return {
+        "mean": float(observed_mean),
+        "ci_low": float(boot_means[lo_idx]),
+        "ci_high": float(boot_means[hi_idx]),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public: analyze_single
 # ---------------------------------------------------------------------------
 
@@ -240,11 +285,13 @@ def analyze_single(trajectory):
 # Public: analyze_batch
 # ---------------------------------------------------------------------------
 
-def analyze_batch(prompts):
+def analyze_batch(prompts, bootstrap=False):
     """Analyse trajectories across multiple prompts.
 
     Args:
         prompts: dict mapping prompt text → list of trajectories.
+        bootstrap: if True, add bootstrap 95% CI for between-prompt variance
+            and global mean per signal.
 
     Returns:
         dict with perPromptSummaries, crossPromptVariance, strategyCharacterization.
@@ -292,19 +339,25 @@ def analyze_batch(prompts):
             within_vars.append(std ** 2)
         within_var = statistics.mean(within_vars) if within_vars else 0.0
 
-        cross_variance[name] = {
+        entry = {
             "betweenPromptVar": float(between_var),
             "withinPromptVar": float(within_var),
         }
+        if bootstrap:
+            entry["betweenPromptVar_ci"] = bootstrap_ci(between_means)
+        cross_variance[name] = entry
 
     # --- Strategy characterisation ---
     strategy = {}
     for name in SIGNAL_NAMES:
         all_means = per_prompt_means[name]
-        strategy[name] = {
+        entry = {
             "globalMean": float(statistics.mean(all_means)),
             "globalStd": float(statistics.pstdev(all_means)) if len(all_means) > 1 else 0.0,
         }
+        if bootstrap:
+            entry["globalMean_ci"] = bootstrap_ci(all_means)
+        strategy[name] = entry
 
     return {
         "perPromptSummaries": per_prompt,

@@ -55,6 +55,30 @@ export function exportToMarkdown(title: string, blocks: ReportBlock[]): string {
           "",
         );
         break;
+      case "trajectoryChart": {
+        const tProps = block.props as any;
+        lines.push(
+          `> **Gate Trajectory**: Experiment \`${tProps.experimentId || "none"}\` — mode: ${tProps.gatingMode || "fixed"}, prompt: "${tProps.prompt || ""}"`,
+          "",
+        );
+        break;
+      }
+      case "crossPromptAnalysis": {
+        const cpProps = block.props as any;
+        lines.push(
+          `> **Cross-Prompt Analysis**: Experiment \`${cpProps.experimentId || "none"}\` — mode: ${cpProps.gatingMode || "fixed"}`,
+          "",
+        );
+        break;
+      }
+      case "sweepAnalysis": {
+        const swProps = block.props as any;
+        lines.push(
+          `> **Gate Sweep**: Experiment \`${swProps.experimentId || "none"}\` — prompt: "${swProps.prompt || ""}"`,
+          "",
+        );
+        break;
+      }
       default:
         if (text) lines.push(text, "");
         else lines.push("");
@@ -117,6 +141,27 @@ export function exportToHTML(title: string, blocks: ReportBlock[]): string {
           `<div class="metrics-placeholder"><strong>Metrics Table</strong>: Experiment <code>${esc((block.props as any).experimentId || "none")}</code></div>`,
         );
         break;
+      case "trajectoryChart": {
+        const htProps = block.props as any;
+        bodyParts.push(
+          `<div class="chart-placeholder"><strong>Gate Trajectory</strong>: Experiment <code>${esc(htProps.experimentId || "none")}</code> &mdash; mode: ${esc(htProps.gatingMode || "fixed")}, prompt: &ldquo;${esc(htProps.prompt || "")}&rdquo;</div>`,
+        );
+        break;
+      }
+      case "crossPromptAnalysis": {
+        const hcpProps = block.props as any;
+        bodyParts.push(
+          `<div class="chart-placeholder"><strong>Cross-Prompt Analysis</strong>: Experiment <code>${esc(hcpProps.experimentId || "none")}</code> &mdash; mode: ${esc(hcpProps.gatingMode || "fixed")}</div>`,
+        );
+        break;
+      }
+      case "sweepAnalysis": {
+        const hswProps = block.props as any;
+        bodyParts.push(
+          `<div class="chart-placeholder"><strong>Gate Sweep</strong>: Experiment <code>${esc(hswProps.experimentId || "none")}</code> &mdash; prompt: &ldquo;${esc(hswProps.prompt || "")}&rdquo;</div>`,
+        );
+        break;
+      }
       default:
         if (text) bodyParts.push(`<p>${text}</p>`);
         break;

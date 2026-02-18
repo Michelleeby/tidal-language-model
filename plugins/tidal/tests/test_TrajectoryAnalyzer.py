@@ -11,6 +11,7 @@ import unittest
 from plugins.tidal.TrajectoryAnalyzer import (
     _signal_stats,
     _split_windows,
+    bootstrap_ci,
     analyze_single,
     analyze_batch,
     get_sweep_grid,
@@ -418,6 +419,97 @@ class TestSweepAnalysis(unittest.TestCase):
             self.assertIn("lowConfig", imap[name])
             self.assertIn("highConfig", imap[name])
             self.assertIn("effect", imap[name])
+
+
+class TestBootstrapCI(unittest.TestCase):
+    """Tests for bootstrap_ci helper function."""
+
+    def test_returns_expected_keys(self):
+        """bootstrap_ci returns dict with mean, ci_low, ci_high."""
+        result = bootstrap_ci([1.0, 2.0, 3.0, 4.0, 5.0], seed=42)
+        for key in ("mean", "ci_low", "ci_high"):
+            self.assertIn(key, result)
+            self.assertIsInstance(result[key], float)
+
+    def test_empty_list_returns_zeros(self):
+        """Empty input returns all zeros."""
+        result = bootstrap_ci([])
+        self.assertEqual(result["mean"], 0.0)
+        self.assertEqual(result["ci_low"], 0.0)
+        self.assertEqual(result["ci_high"], 0.0)
+
+    def test_single_value_degenerate(self):
+        """Single value: mean equals value, CI collapses to that value."""
+        result = bootstrap_ci([3.14])
+        self.assertAlmostEqual(result["mean"], 3.14)
+        self.assertAlmostEqual(result["ci_low"], 3.14)
+        self.assertAlmostEqual(result["ci_high"], 3.14)
+
+    def test_ci_contains_known_mean(self):
+        """For a known distribution, the true mean should be within the CI."""
+        import random as _rng
+        _rng.seed(99)
+        values = [_rng.gauss(5.0, 1.0) for _ in range(200)]
+        result = bootstrap_ci(values, seed=42, n_bootstrap=2000)
+        self.assertLessEqual(result["ci_low"], 5.0)
+        self.assertGreaterEqual(result["ci_high"], 5.0)
+
+    def test_seed_reproducibility(self):
+        """Same seed produces identical results."""
+        values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        r1 = bootstrap_ci(values, seed=123)
+        r2 = bootstrap_ci(values, seed=123)
+        self.assertEqual(r1, r2)
+
+    def test_ci_low_leq_mean_leq_ci_high(self):
+        """CI bounds are ordered: ci_low <= mean <= ci_high."""
+        values = [1.0, 3.0, 5.0, 7.0, 9.0, 2.0, 4.0]
+        result = bootstrap_ci(values, seed=42)
+        self.assertLessEqual(result["ci_low"], result["mean"])
+        self.assertLessEqual(result["mean"], result["ci_high"])
+
+
+class TestBatchAnalysisWithBootstrap(unittest.TestCase):
+    """Tests for analyze_batch with bootstrap parameter."""
+
+    def setUp(self):
+        self.traj_a = _make_trajectory(
+            50,
+            creativity_fn=lambda t: 0.8,
+            focus_fn=lambda t: 0.2,
+            stability_fn=lambda t: 0.5,
+        )
+        self.traj_b = _make_trajectory(
+            50,
+            creativity_fn=lambda t: 0.2,
+            focus_fn=lambda t: 0.8,
+            stability_fn=lambda t: 0.9,
+        )
+        self.prompts = {
+            "Once upon a time": [self.traj_a],
+            "The scientist observed": [self.traj_b],
+        }
+
+    def test_bootstrap_false_omits_ci_keys(self):
+        """bootstrap=False (default) produces no CI keys."""
+        result = analyze_batch(self.prompts)
+        for name in ("creativity", "focus", "stability"):
+            self.assertNotIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
+            self.assertNotIn("globalMean_ci", result["strategyCharacterization"][name])
+
+    def test_bootstrap_true_adds_ci_keys(self):
+        """bootstrap=True adds betweenPromptVar_ci and globalMean_ci."""
+        result = analyze_batch(self.prompts, bootstrap=True)
+        for name in ("creativity", "focus", "stability"):
+            self.assertIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
+            ci = result["crossPromptVariance"][name]["betweenPromptVar_ci"]
+            for key in ("mean", "ci_low", "ci_high"):
+                self.assertIn(key, ci)
+
+            self.assertIn("globalMean_ci", result["strategyCharacterization"][name])
+            ci2 = result["strategyCharacterization"][name]["globalMean_ci"]
+            for key in ("mean", "ci_low", "ci_high"):
+                self.assertIn(key, ci2)
 
 
 if __name__ == "__main__":
