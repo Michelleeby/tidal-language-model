@@ -468,6 +468,38 @@ class TestBootstrapCI(unittest.TestCase):
         self.assertLessEqual(result["ci_low"], result["mean"])
         self.assertLessEqual(result["mean"], result["ci_high"])
 
+    def test_percentile_indices_use_n_minus_1(self):
+        """Percentile indices should use p*(n-1) convention, matching _quantile."""
+        # With n_bootstrap=100 and confidence=0.95:
+        # alpha/2 = 0.025, lo = floor(0.025 * 99) = 2
+        # 1-alpha/2 = 0.975, hi = floor(0.975 * 99) = 97 (not 97.5→97)
+        # Generate a known sorted sequence as bootstrap means by using a
+        # deterministic set and verifying the exact CI values.
+        values = list(range(1, 101))  # [1..100], mean = 50.5
+        result = bootstrap_ci(values, seed=0, n_bootstrap=100)
+        # The bootstrap means (sorted) with seed=0 and n=100 are deterministic.
+        # Verify bounds are selected with (n-1) convention by checking
+        # that CI bounds differ between n and n-1 indexing.
+        result2 = bootstrap_ci(values, seed=0, n_bootstrap=100)
+        self.assertEqual(result, result2)  # deterministic
+        # The key invariant: with n_bootstrap=100,
+        # lo_idx should be floor(0.025*99)=2, hi_idx should be floor(0.975*99)=96
+        # NOT lo_idx=floor(0.025*100)=2, hi_idx=floor(0.975*100)=97
+        # We can verify this by checking ci_high is the 96th element (0-indexed)
+        # of the sorted bootstrap means, not the 97th.
+        import random as _rng
+        rng = _rng.Random(0)
+        n = len(values)
+        boot_means = []
+        for _ in range(100):
+            sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
+            from statistics import mean
+            boot_means.append(mean(sample))
+        boot_means.sort()
+        # With (n-1) convention: hi_idx = floor(0.975 * 99) = 96
+        self.assertAlmostEqual(result["ci_high"], boot_means[96])
+        self.assertAlmostEqual(result["ci_low"], boot_means[2])
+
 
 class TestBatchAnalysisWithBootstrap(unittest.TestCase):
     """Tests for analyze_batch with bootstrap parameter."""

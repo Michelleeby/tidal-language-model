@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { createReactBlockSpec } from "@blocknote/react";
 import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
@@ -216,17 +216,17 @@ export const SweepBlock = createReactBlockSpec(
           gatingMode: "fixed",
           includeExtremeValues: true,
         };
-        analysis.mutate(body, {
-          onSuccess: (data) => {
-            if (data.sweepAnalysis) {
-              const panelData = extractSweepPanelData(data.sweepAnalysis);
-              renderSweepPanel(canvasRef.current, panelData);
-            }
-          },
-        });
+        analysis.mutate(body);
       };
 
       const sweep = analysis.data?.sweepAnalysis;
+
+      // Re-render canvas whenever sweep data changes or canvas mounts
+      useEffect(() => {
+        if (!sweep) return;
+        const panelData = extractSweepPanelData(sweep);
+        renderSweepPanel(canvasRef.current, panelData);
+      }, [sweep]);
       const summaryLines = sweep
         ? extractInterpretabilitySummary(sweep.interpretabilityMap)
         : [];

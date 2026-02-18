@@ -2,9 +2,10 @@
 TrajectoryAnalyzer.py
 
 Pure-Python analysis of gate signal trajectories from RL-gated generation.
-No torch dependency — uses only stdlib (math, statistics).
+No torch dependency — uses only stdlib (math, random, statistics).
 
 Functions:
+    bootstrap_ci(values)        → bootstrap confidence interval for the mean
     analyze_single(trajectory)  → per-trajectory statistics and phase detection
     analyze_batch(prompts)      → cross-prompt comparison and strategy characterisation
     get_sweep_grid()            → 15 standard extreme-value configs
@@ -175,8 +176,8 @@ def bootstrap_ci(values, confidence=0.95, n_bootstrap=1000, seed=None):
 
     boot_means.sort()
     alpha = 1.0 - confidence
-    lo_idx = max(0, int(math.floor((alpha / 2) * n_bootstrap)))
-    hi_idx = min(n_bootstrap - 1, int(math.floor((1.0 - alpha / 2) * n_bootstrap)))
+    lo_idx = max(0, int(math.floor((alpha / 2) * (n_bootstrap - 1))))
+    hi_idx = min(n_bootstrap - 1, int(math.floor((1.0 - alpha / 2) * (n_bootstrap - 1))))
 
     return {
         "mean": float(observed_mean),

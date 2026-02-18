@@ -273,6 +273,7 @@ def analyze_trajectories():
     rl_checkpoint = data.get("rlCheckpoint")
     samples_per_prompt = int(data.get("samplesPerPrompt", 1))
     include_extreme_values = data.get("includeExtremeValues", False)
+    bootstrap = data.get("bootstrap", False)
 
     tokenizer = _get_tokenizer()
 
@@ -342,7 +343,7 @@ def analyze_trajectories():
             prompt_trajectories[prompt_text] = samples
             all_trajectories[prompt_text] = samples
 
-        batch_analysis = analyze_batch(prompt_trajectories)
+        batch_analysis = analyze_batch(prompt_trajectories, bootstrap=bootstrap)
 
         result = {
             "batchAnalysis": batch_analysis,

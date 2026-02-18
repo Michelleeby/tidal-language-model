@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { createReactBlockSpec } from "@blocknote/react";
 import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
@@ -258,20 +258,22 @@ export const CrossPromptBlock = createReactBlockSpec(
           maxTokens: 50,
           gatingMode: gatingMode as AnalyzeRequest["gatingMode"],
         };
-        analysis.mutate(body, {
-          onSuccess: (data) => {
-            const heatmap = extractHeatmapData(data.batchAnalysis);
-            renderHeatmap(heatmapCanvasRef.current, heatmap);
-            const corr = extractCorrelationMatrix(
-              data.batchAnalysis.perPromptSummaries as Record<string, any>,
-            );
-            renderCorrelation(corrCanvasRef.current, corr);
-          },
-        });
+        analysis.mutate(body);
       };
 
-      const modes = gatingModeOptions();
+      // Re-render canvases whenever analysis data changes or canvas mounts
       const batch = analysis.data?.batchAnalysis;
+      useEffect(() => {
+        if (!batch) return;
+        const heatmap = extractHeatmapData(batch);
+        renderHeatmap(heatmapCanvasRef.current, heatmap);
+        const corr = extractCorrelationMatrix(
+          batch.perPromptSummaries as Record<string, any>,
+        );
+        renderCorrelation(corrCanvasRef.current, corr);
+      }, [batch]);
+
+      const modes = gatingModeOptions();
       const varianceSummary = batch
         ? extractVarianceSummary(batch.crossPromptVariance)
         : [];

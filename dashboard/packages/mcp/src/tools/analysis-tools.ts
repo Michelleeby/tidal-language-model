@@ -2,19 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TidalApiClient } from "../http-client.js";
 import { jsonResult, errorResult, type CallToolResult } from "../tool-result.js";
-import type { AnalyzeResponse } from "@tidal/shared";
-
-// ---------------------------------------------------------------------------
-// Default prompts — diverse TinyStories-style openings
-// ---------------------------------------------------------------------------
-
-const DEFAULT_PROMPTS = [
-  "Once upon a time, there was a little girl who",
-  "The scientist looked through the microscope and",
-  "In the deep forest, a small rabbit",
-  "The old wizard opened his book and",
-  "On a sunny morning, the children went to",
-];
+import { CURATED_PROMPTS, type AnalyzeResponse } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -34,7 +22,7 @@ export async function handleAnalyzeTrajectories(
 ): Promise<CallToolResult> {
   const body = {
     checkpoint: params.checkpoint,
-    prompts: params.prompts ?? DEFAULT_PROMPTS,
+    prompts: params.prompts ?? CURATED_PROMPTS,
     maxTokens: params.maxTokens ?? 50,
     samplesPerPrompt: params.samplesPerPrompt ?? 1,
     gatingMode: params.gatingMode ?? "fixed",
@@ -65,7 +53,7 @@ export function registerAnalysisTools(
         .array(z.string())
         .optional()
         .describe(
-          "Prompts to generate from (default: 5 diverse TinyStories openings)",
+          "Prompts to generate from (default: 20 curated TinyStories prompts)",
         ),
       maxTokens: z
         .number()

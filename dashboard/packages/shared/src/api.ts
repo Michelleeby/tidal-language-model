@@ -107,6 +107,7 @@ export interface AnalyzeRequest {
   gatingMode?: "random" | "fixed" | "learned";
   rlCheckpoint?: string;
   includeExtremeValues?: boolean;
+  bootstrap?: boolean;
 }
 
 export interface SignalStats {
