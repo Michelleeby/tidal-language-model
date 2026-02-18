@@ -1,6 +1,9 @@
 import { login } from "../hooks/useAuth.js";
 
 export default function LoginPage() {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get("error");
+
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="bg-gray-900 border border-gray-700 rounded-lg p-8 w-full max-w-sm shadow-xl text-center">
@@ -10,6 +13,11 @@ export default function LoginPage() {
         <p className="text-sm text-gray-400 mb-6">
           Sign in to access experiments, reports, and training controls.
         </p>
+        {error === "not_authorized" && (
+          <div className="mb-4 px-4 py-3 rounded bg-red-900/50 border border-red-700 text-red-200 text-sm">
+            Your GitHub account is not authorized to access this dashboard.
+          </div>
+        )}
         <button
           onClick={login}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded bg-gray-800 border border-gray-600 text-gray-100 hover:bg-gray-700 hover:border-gray-500 transition-colors"

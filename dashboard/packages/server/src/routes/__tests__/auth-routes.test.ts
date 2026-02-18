@@ -165,6 +165,130 @@ describe("GET /api/auth/github/callback", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Whitelist gate in callback
+// ---------------------------------------------------------------------------
+
+describe("GitHub callback whitelist gate", () => {
+  const originalFetch = global.fetch;
+
+  function mockGitHubFetch() {
+    global.fetch = (async (url: string | URL | Request) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+
+      if (urlStr.includes("login/oauth/access_token")) {
+        return new Response(JSON.stringify({ access_token: "gho_test123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (urlStr.includes("api.github.com/user")) {
+        return new Response(
+          JSON.stringify({
+            id: 42,
+            login: "octocat",
+            avatar_url: "https://example.com/avatar.png",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return originalFetch(url as RequestInfo, undefined);
+    }) as typeof global.fetch;
+  }
+
+  function restoreFetch() {
+    global.fetch = originalFetch;
+  }
+
+  it("non-whitelisted user is redirected to /login?error=not_authorized", async () => {
+    const { app, db } = await buildApp();
+    mockGitHubFetch();
+
+    try {
+      // No users on whitelist — "octocat" is NOT allowed
+      const resp = await app.inject({
+        method: "GET",
+        url: "/api/auth/github/callback?code=testcode&state=teststate",
+        cookies: { oauth_state: "teststate" },
+      });
+
+      assert.equal(resp.statusCode, 302);
+      assert.equal(resp.headers.location, "/login?error=not_authorized");
+
+      // No session cookie should be set
+      const sessionCookie = resp.cookies.find(
+        (c: { name: string }) => c.name === "tidal_session",
+      );
+      assert.ok(!sessionCookie || !sessionCookie.value);
+
+      // No user row should exist
+      const user = db.getUserByGithubId(42);
+      assert.equal(user, null);
+    } finally {
+      restoreFetch();
+      await app.close();
+    }
+  });
+
+  it("whitelisted user completes login normally", async () => {
+    const { app, db } = await buildApp();
+    mockGitHubFetch();
+
+    try {
+      // Add octocat to whitelist
+      db.addAllowedUser("octocat", null);
+
+      const resp = await app.inject({
+        method: "GET",
+        url: "/api/auth/github/callback?code=testcode&state=teststate",
+        cookies: { oauth_state: "teststate" },
+      });
+
+      assert.equal(resp.statusCode, 302);
+      assert.equal(resp.headers.location, "/");
+
+      // Session cookie should be set
+      const sessionCookie = resp.cookies.find(
+        (c: { name: string }) => c.name === "tidal_session",
+      );
+      assert.ok(sessionCookie);
+      assert.ok(sessionCookie.value);
+
+      // User row should exist
+      const user = db.getUserByGithubId(42);
+      assert.ok(user);
+      assert.equal(user!.githubLogin, "octocat");
+    } finally {
+      restoreFetch();
+      await app.close();
+    }
+  });
+
+  it("whitelist check is case-insensitive", async () => {
+    const { app, db } = await buildApp();
+    mockGitHubFetch();
+
+    try {
+      // Add with different case — GitHub returns "octocat"
+      db.addAllowedUser("OctoCat", null);
+
+      const resp = await app.inject({
+        method: "GET",
+        url: "/api/auth/github/callback?code=testcode&state=teststate",
+        cookies: { oauth_state: "teststate" },
+      });
+
+      assert.equal(resp.statusCode, 302);
+      assert.equal(resp.headers.location, "/");
+    } finally {
+      restoreFetch();
+      await app.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/auth/me
 // ---------------------------------------------------------------------------
 

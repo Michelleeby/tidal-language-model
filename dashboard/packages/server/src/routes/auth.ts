@@ -116,6 +116,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       avatar_url: string;
     };
 
+    // Whitelist gate — deny users not on the allowed list
+    if (!fastify.db.isUserAllowed(ghUser.login)) {
+      fastify.log.warn("GitHub user %s denied: not on whitelist", ghUser.login);
+      return reply.redirect("/login?error=not_authorized");
+    }
+
     // Upsert user in database (store token server-side for GitHub API calls)
     const user = fastify.db.upsertUser({
       githubId: ghUser.id,
