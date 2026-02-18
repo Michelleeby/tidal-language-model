@@ -3,7 +3,7 @@ import { accessSync } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { ServerConfig } from "../config.js";
-import type { GenerateRequest, GenerateResponse, PluginManifest } from "@tidal/shared";
+import type { GenerateRequest, GenerateResponse, AnalyzeRequest, AnalyzeResponse, PluginManifest } from "@tidal/shared";
 
 /**
  * Convert a manifest glob pattern to a RegExp for matching filenames.
@@ -150,6 +150,9 @@ export class GenerationBridge {
         topK: req.topK ?? 50,
         gatingMode: req.gatingMode ?? "none",
         rlCheckpoint: rlCheckpoint,
+        creativity: req.creativity,
+        focus: req.focus,
+        stability: req.stability,
       }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -211,6 +214,31 @@ export class GenerationBridge {
       tokensGenerated: text.trim().split(/\s+/).length,
       elapsedMs: Date.now() - start,
     };
+  }
+
+  async analyzeTrajectories(req: AnalyzeRequest): Promise<AnalyzeResponse> {
+    if (!this.inferenceUrl) {
+      throw new Error(
+        "Trajectory analysis requires the inference sidecar (INFERENCE_URL). " +
+        "Subprocess mode is not supported for batch analysis.",
+      );
+    }
+
+    const res = await fetch(`${this.inferenceUrl}/analyze-trajectories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: AbortSignal.timeout(300_000),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(
+        (body as { error?: string }).error ?? `Inference sidecar returned ${res.status}`,
+      );
+    }
+
+    return (await res.json()) as AnalyzeResponse;
   }
 
   private runPython(args: string[]): Promise<string> {

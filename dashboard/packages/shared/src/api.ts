@@ -70,6 +70,9 @@ export interface GenerateRequest {
   topK?: number;
   gatingMode?: "none" | "random" | "fixed" | "learned";
   rlCheckpoint?: string;
+  creativity?: number;
+  focus?: number;
+  stability?: number;
 }
 
 export interface GateEffectsStep {
@@ -91,6 +94,54 @@ export interface GenerateResponse {
   tokensGenerated: number;
   elapsedMs: number;
   trajectory?: GenerationTrajectory;
+}
+
+/** POST /api/analyze-trajectories */
+export interface AnalyzeRequest {
+  checkpoint: string;
+  prompts: string[];
+  maxTokens?: number;
+  temperature?: number;
+  topK?: number;
+  samplesPerPrompt?: number;
+  gatingMode?: "random" | "fixed" | "learned";
+  rlCheckpoint?: string;
+  includeExtremeValues?: boolean;
+}
+
+export interface SignalStats {
+  mean: number;
+  std: number;
+  min: number;
+  max: number;
+  q25: number;
+  q50: number;
+  q75: number;
+}
+
+export interface BatchAnalysis {
+  perPromptSummaries: Record<string, unknown>;
+  crossPromptVariance: Record<string, { betweenPromptVar: number; withinPromptVar: number }>;
+  strategyCharacterization: Record<string, { globalMean: number; globalStd: number }>;
+}
+
+export interface SweepAnalysis {
+  configComparisons: Record<string, {
+    signalStats: Record<string, SignalStats>;
+    textProperties: { wordCount: number; uniqueTokenRatio: number; charCount: number };
+  }>;
+  interpretabilityMap: Record<string, {
+    lowConfig: string;
+    highConfig: string;
+    effect: Record<string, { low: number; high: number; delta: number }>;
+  }>;
+}
+
+export interface AnalyzeResponse {
+  batchAnalysis: BatchAnalysis;
+  trajectories: Record<string, GenerationTrajectory[]>;
+  sweepAnalysis?: SweepAnalysis;
+  sweepTexts?: Record<string, string>;
 }
 
 /** GET /api/plugins/:name/configs/:filename */
