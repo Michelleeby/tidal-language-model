@@ -6,8 +6,9 @@ container alongside the dashboard. Reuses TransformerLM and Generator
 logic directly rather than spawning subprocesses.
 
 Endpoints:
-    POST /generate  — run text generation
-    GET  /health    — liveness check
+    POST /generate               — run text generation
+    POST /analyze-trajectories   — batch trajectory analysis
+    GET  /health                 — liveness check
 
 Environment variables:
     CONFIG_PATH  — path to base_config.yaml (default: configs/base_config.yaml)
@@ -30,7 +31,7 @@ from plugins.tidal.DataPipeline import get_tokenizer
 # RL components (optional)
 try:
     from plugins.tidal.GatingPolicyAgent import create_agent
-    from plugins.tidal.GatingModulator import GatingModulator, FixedGatingPolicy
+    from plugins.tidal.GatingModulator import GatingModulator, FixedGatingPolicy, RandomGatingPolicy
     RL_AVAILABLE = True
 except ImportError:
     RL_AVAILABLE = False
@@ -147,6 +148,9 @@ def generate():
     top_k = int(data.get("topK", 50))
     gating_mode = data.get("gatingMode", "none")
     rl_checkpoint = data.get("rlCheckpoint")
+    creativity = float(data.get("creativity", 0.5))
+    focus = float(data.get("focus", 0.5))
+    stability = float(data.get("stability", 0.5))
 
     tokenizer = _get_tokenizer()
     encoded = tokenizer.encode(prompt)
@@ -187,7 +191,23 @@ def generate():
         elif gating_mode == "fixed" and RL_AVAILABLE:
             config = _get_config()
             modulator = GatingModulator(config)
-            policy = FixedGatingPolicy(device=DEVICE)
+            policy = FixedGatingPolicy(
+                creativity=creativity, focus=focus, stability=stability, device=DEVICE,
+            )
+
+            generated_ids, trajectory = model.generate_with_gating(
+                prompt_ids=prompt_ids,
+                max_new_tokens=max_tokens,
+                gating_policy=policy,
+                modulator=modulator,
+                base_temperature=temperature,
+                top_k=top_k,
+                trajectory_mode="lightweight",
+            )
+        elif gating_mode == "random" and RL_AVAILABLE:
+            config = _get_config()
+            modulator = GatingModulator(config)
+            policy = RandomGatingPolicy(device=DEVICE)
 
             generated_ids, trajectory = model.generate_with_gating(
                 prompt_ids=prompt_ids,
@@ -221,6 +241,132 @@ def generate():
 
     if trajectory is not None:
         result["trajectory"] = _serialize_trajectory(trajectory, tokenizer)
+
+    return jsonify(result)
+
+
+@app.route("/analyze-trajectories", methods=["POST"])
+def analyze_trajectories():
+    from plugins.tidal.TrajectoryAnalyzer import (
+        analyze_batch,
+        analyze_sweep,
+        get_sweep_grid,
+    )
+
+    data = request.get_json(force=True)
+
+    checkpoint = data.get("checkpoint")
+    if not checkpoint:
+        return jsonify({"error": "checkpoint is required"}), 400
+
+    prompts = data.get("prompts")
+    if not prompts:
+        return jsonify({"error": "prompts is required and must be non-empty"}), 400
+
+    if not os.path.exists(checkpoint):
+        return jsonify({"error": f"Checkpoint not found: {checkpoint}"}), 404
+
+    max_tokens = int(data.get("maxTokens", 50))
+    temperature = float(data.get("temperature", 0.8))
+    top_k = int(data.get("topK", 50))
+    gating_mode = data.get("gatingMode", "fixed")
+    rl_checkpoint = data.get("rlCheckpoint")
+    samples_per_prompt = int(data.get("samplesPerPrompt", 1))
+    include_extreme_values = data.get("includeExtremeValues", False)
+
+    tokenizer = _get_tokenizer()
+
+    try:
+        model = _get_model(checkpoint)
+    except Exception as e:
+        logger.exception("Failed to load model")
+        return jsonify({"error": f"Failed to load model: {e}"}), 500
+
+    def _run_generation(prompt_text, c=0.5, f=0.5, s=0.5):
+        """Run a single generation and return (text, serialized_trajectory)."""
+        encoded = tokenizer.encode(prompt_text)
+        if not encoded:
+            return None, None
+        prompt_ids = torch.tensor(encoded, dtype=torch.long)
+        config = _get_config()
+
+        if gating_mode == "learned" and rl_checkpoint and RL_AVAILABLE:
+            modulator = GatingModulator(config)
+            agent = create_agent(config, DEVICE)
+            rl_state = torch.load(rl_checkpoint, map_location=DEVICE)
+            agent.load_state_dict(rl_state["agent_state_dict"])
+            agent.eval()
+            gen_ids, traj = model.generate_with_gating(
+                prompt_ids=prompt_ids, max_new_tokens=max_tokens,
+                gating_policy=agent, modulator=modulator,
+                base_temperature=temperature, top_k=top_k,
+                trajectory_mode="lightweight",
+            )
+        elif gating_mode == "random" and RL_AVAILABLE:
+            modulator = GatingModulator(config)
+            policy = RandomGatingPolicy(device=DEVICE)
+            gen_ids, traj = model.generate_with_gating(
+                prompt_ids=prompt_ids, max_new_tokens=max_tokens,
+                gating_policy=policy, modulator=modulator,
+                base_temperature=temperature, top_k=top_k,
+                trajectory_mode="lightweight",
+            )
+        elif RL_AVAILABLE:
+            modulator = GatingModulator(config)
+            policy = FixedGatingPolicy(
+                creativity=c, focus=f, stability=s, device=DEVICE,
+            )
+            gen_ids, traj = model.generate_with_gating(
+                prompt_ids=prompt_ids, max_new_tokens=max_tokens,
+                gating_policy=policy, modulator=modulator,
+                base_temperature=temperature, top_k=top_k,
+                trajectory_mode="lightweight",
+            )
+        else:
+            return None, None
+
+        text = tokenizer.decode(gen_ids)
+        serialized = _serialize_trajectory(traj, tokenizer)
+        return text, serialized
+
+    try:
+        # --- Batch generation across prompts ---
+        prompt_trajectories = {}
+        all_trajectories = {}
+        for prompt_text in prompts:
+            samples = []
+            for _ in range(samples_per_prompt):
+                text, traj = _run_generation(prompt_text)
+                if traj is not None:
+                    samples.append(traj)
+            prompt_trajectories[prompt_text] = samples
+            all_trajectories[prompt_text] = samples
+
+        batch_analysis = analyze_batch(prompt_trajectories)
+
+        result = {
+            "batchAnalysis": batch_analysis,
+            "trajectories": all_trajectories,
+        }
+
+        # --- Optional sweep analysis ---
+        if include_extreme_values:
+            sweep_data = {}
+            sweep_texts = {}
+            first_prompt = prompts[0]
+            for cfg in get_sweep_grid():
+                key = f"{cfg[0]:.1f}_{cfg[1]:.1f}_{cfg[2]:.1f}"
+                text, traj = _run_generation(first_prompt, c=cfg[0], f=cfg[1], s=cfg[2])
+                if traj is not None:
+                    sweep_data[key] = {"trajectory": traj, "text": text}
+                    sweep_texts[key] = text
+
+            result["sweepAnalysis"] = analyze_sweep(sweep_data)
+            result["sweepTexts"] = sweep_texts
+
+    except Exception as e:
+        logger.exception("Analysis failed")
+        return jsonify({"error": f"Analysis failed: {e}"}), 500
 
     return jsonify(result)
 

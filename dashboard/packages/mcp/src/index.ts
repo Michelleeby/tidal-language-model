@@ -12,6 +12,7 @@ import { registerExperimentTools } from "./tools/experiment-tools.js";
 import { registerPluginTools } from "./tools/plugin-tools.js";
 import { registerJobTools } from "./tools/job-tools.js";
 import { registerGenerationTools } from "./tools/generation-tools.js";
+import { registerAnalysisTools } from "./tools/analysis-tools.js";
 
 const BASE_URL = process.env.TIDAL_API_URL ?? "http://localhost:4400";
 const TOKEN = process.env.TIDAL_API_TOKEN;
@@ -28,6 +29,7 @@ registerExperimentTools(server, client);
 registerPluginTools(server, client);
 registerJobTools(server, client);
 registerGenerationTools(server, client);
+registerAnalysisTools(server, client);
 
 // Connect via stdio
 const transport = new StdioServerTransport();

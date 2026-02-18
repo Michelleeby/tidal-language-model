@@ -29,6 +29,7 @@ import configsRoutes from "./routes/configs.js";
 import reportsRoutes from "./routes/reports.js";
 import authRoutes from "./routes/auth.js";
 import modelSourceRoutes from "./routes/model-source.js";
+import analyzeRoutes from "./routes/analyze.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -117,6 +118,7 @@ async function main() {
   await fastify.register(configsRoutes);
   await fastify.register(reportsRoutes);
   await fastify.register(modelSourceRoutes);
+  await fastify.register(analyzeRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(
