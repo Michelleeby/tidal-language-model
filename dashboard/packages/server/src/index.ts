@@ -30,6 +30,7 @@ import reportsRoutes from "./routes/reports.js";
 import authRoutes from "./routes/auth.js";
 import modelSourceRoutes from "./routes/model-source.js";
 import analyzeRoutes from "./routes/analyze.js";
+import adminRoutes from "./routes/admin.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -88,6 +89,20 @@ async function main() {
   await fastify.register(rateLimitPlugin);
   await fastify.register(provisioningPlugin);
 
+  // Seed admin user into whitelist (idempotent)
+  if (config.githubAdminUser) {
+    fastify.db.addAllowedUser(config.githubAdminUser, null);
+    fastify.log.info("Whitelist: seeded admin user %s", config.githubAdminUser);
+  } else if (
+    fastify.db.countAllowedUsers() === 0 &&
+    config.githubClientId &&
+    config.githubClientSecret
+  ) {
+    fastify.log.warn(
+      "Whitelist is empty and GITHUB_ADMIN_USER is not set — no one can log in via GitHub OAuth",
+    );
+  }
+
   // Migrate legacy JSON reports into SQLite (idempotent, runs before routes)
   const reportsDir = path.join(config.projectRoot, "reports");
   const migrationResult = await migrateLegacyReports(
@@ -119,6 +134,7 @@ async function main() {
   await fastify.register(reportsRoutes);
   await fastify.register(modelSourceRoutes);
   await fastify.register(analyzeRoutes);
+  await fastify.register(adminRoutes);
 
   // Serve built client in production
   const clientDist = path.resolve(

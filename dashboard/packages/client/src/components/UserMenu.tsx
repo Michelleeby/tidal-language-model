@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuthStore, logout } from "../hooks/useAuth.js";
+import AllowedUsersPanel from "./AllowedUsersPanel.js";
 
 export default function UserMenu() {
   const user = useAuthStore((s) => s.user);
   const [open, setOpen] = useState(false);
+  const [showAccessPanel, setShowAccessPanel] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,6 +47,15 @@ export default function UserMenu() {
             </p>
           </div>
           <button
+            onClick={() => {
+              setOpen(false);
+              setShowAccessPanel(true);
+            }}
+            className="w-full text-left px-4 py-2 text-sm text-gray-400 hover:text-gray-100 hover:bg-gray-800 transition-colors"
+          >
+            Manage Access
+          </button>
+          <button
             onClick={async () => {
               setOpen(false);
               await logout();
@@ -54,6 +65,10 @@ export default function UserMenu() {
             Sign out
           </button>
         </div>
+      )}
+
+      {showAccessPanel && (
+        <AllowedUsersPanel onClose={() => setShowAccessPanel(false)} />
       )}
     </div>
   );

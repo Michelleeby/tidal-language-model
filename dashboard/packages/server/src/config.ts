@@ -63,6 +63,14 @@ export function validateConfig(config: ServerConfig): ConfigWarning[] {
     }
   }
 
+  if (config.githubClientId && config.githubClientSecret && !config.githubAdminUser) {
+    issues.push({
+      level: "warn",
+      message:
+        "GitHub OAuth is configured but GITHUB_ADMIN_USER is not set — no one will be able to log in until the whitelist is populated",
+    });
+  }
+
   return issues;
 }
 
@@ -87,6 +95,7 @@ export interface ServerConfig {
   digitaloceanSshKey: string | null;
   repoUrl: string | null;
   dashboardUrl: string | null;
+  githubAdminUser: string | null;
 }
 
 export function loadConfig(): ServerConfig {
@@ -128,5 +137,6 @@ export function loadConfig(): ServerConfig {
       (process.env.TIDAL_DROPLET_IP
         ? `http://${process.env.TIDAL_DROPLET_IP}`
         : null),
+    githubAdminUser: process.env.GITHUB_ADMIN_USER ?? null,
   };
 }

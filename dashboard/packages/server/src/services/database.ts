@@ -5,6 +5,7 @@ import type {
   ReportSummary,
   BlockContent,
   User,
+  AllowedUser,
 } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,13 @@ interface UserRow {
   github_access_token: string | null;
   created_at: number;
   last_login_at: number;
+}
+
+interface AllowedUserRow {
+  id: string;
+  github_login: string;
+  added_by: string | null;
+  created_at: number;
 }
 
 interface ReportRow {
@@ -43,6 +51,15 @@ function userRowToUser(row: UserRow): User {
     githubAccessToken: row.github_access_token,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
+  };
+}
+
+function allowedUserRowToAllowedUser(row: AllowedUserRow): AllowedUser {
+  return {
+    id: row.id,
+    githubLogin: row.github_login,
+    addedBy: row.added_by,
+    createdAt: row.created_at,
   };
 }
 
@@ -106,6 +123,12 @@ export class Database {
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS allowed_users (
+        id TEXT PRIMARY KEY,
+        github_login TEXT UNIQUE NOT NULL COLLATE NOCASE,
+        added_by TEXT,
+        created_at INTEGER NOT NULL
+      );
     `);
 
     // Migrations for existing databases
@@ -151,6 +174,23 @@ export class Database {
         INSERT OR IGNORE INTO reports (id, user_id, title, blocks, created_at, updated_at)
         VALUES (@id, NULL, @title, @blocks, @createdAt, @updatedAt)
       `),
+
+      addAllowedUser: this.db.prepare(`
+        INSERT OR IGNORE INTO allowed_users (id, github_login, added_by, created_at)
+        VALUES (@id, @githubLogin, @addedBy, @now)
+      `),
+      removeAllowedUser: this.db.prepare(
+        "DELETE FROM allowed_users WHERE github_login = ? COLLATE NOCASE",
+      ),
+      getAllowedUser: this.db.prepare(
+        "SELECT * FROM allowed_users WHERE github_login = ? COLLATE NOCASE",
+      ),
+      listAllowedUsers: this.db.prepare(
+        "SELECT * FROM allowed_users ORDER BY created_at ASC",
+      ),
+      countAllowedUsers: this.db.prepare(
+        "SELECT COUNT(*) AS cnt FROM allowed_users",
+      ),
     };
   }
 
@@ -267,6 +307,48 @@ export class Database {
   deleteReport(id: string): boolean {
     const result = this.stmts.deleteReport.run(id);
     return result.changes > 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // Allowed users (whitelist)
+  // -------------------------------------------------------------------------
+
+  addAllowedUser(githubLogin: string, addedBy: string | null): AllowedUser | null {
+    const now = Date.now();
+    const id = nanoid();
+
+    const result = this.stmts.addAllowedUser.run({
+      id,
+      githubLogin,
+      addedBy,
+      now,
+    });
+
+    if (result.changes === 0) return null; // duplicate
+
+    return allowedUserRowToAllowedUser(
+      this.stmts.getAllowedUser.get(githubLogin) as AllowedUserRow,
+    );
+  }
+
+  removeAllowedUser(githubLogin: string): boolean {
+    const result = this.stmts.removeAllowedUser.run(githubLogin);
+    return result.changes > 0;
+  }
+
+  isUserAllowed(githubLogin: string): boolean {
+    const row = this.stmts.getAllowedUser.get(githubLogin) as AllowedUserRow | undefined;
+    return !!row;
+  }
+
+  listAllowedUsers(): AllowedUser[] {
+    const rows = this.stmts.listAllowedUsers.all() as AllowedUserRow[];
+    return rows.map(allowedUserRowToAllowedUser);
+  }
+
+  countAllowedUsers(): number {
+    const row = this.stmts.countAllowedUsers.get() as { cnt: number };
+    return row.cnt;
   }
 
   // -------------------------------------------------------------------------
