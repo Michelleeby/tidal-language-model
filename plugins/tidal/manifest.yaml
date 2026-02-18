@@ -8,7 +8,8 @@ displayName: Tidal Gated Transformer LM
 version: 1.0.0
 description: >
   A gated transformer language model (~30.7M params) trained on TinyStories
-  with PPO-based RL gating control for creativity, focus, and stability.
+  with PPO-based RL gating control via a single modulation gate on a
+  conservative-to-exploratory axis.
 
 # ── Training phases ──────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ metrics:
       - policy_loss
       - value_loss
       - entropy
-      - reward_focus
+      - reward_sampling
       - explained_variance
 
 # ── Redis keys (used by worker_agent, job store, SSE) ────────────────

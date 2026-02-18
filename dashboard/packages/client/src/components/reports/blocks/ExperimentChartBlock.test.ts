@@ -84,13 +84,11 @@ describe("extractRLValues", () => {
     policy_loss: [0.5, 0.3, 0.1],
     value_loss: [1.2, 0.8, 0.4],
     entropy: [0.9, 0.7, 0.5],
-    gate_creativity: [0.6, 0.7, 0.8],
-    gate_focus: [0.5, 0.55, 0.6],
-    gate_stability: [0.9, 0.85, 0.8],
+    gate_modulation: [0.6, 0.7, 0.8],
     reward_perplexity: [0.3, 0.4, 0.5],
     reward_diversity: [0.2, 0.25, 0.3],
     reward_repetition: [-0.1, -0.05, 0.0],
-    reward_focus: [0.15, 0.2, 0.25],
+    reward_sampling: [0.15, 0.2, 0.25],
     reward_coherence: [0.4, 0.45, 0.5],
     explained_variance: [0.1, 0.3, 0.5],
   };
@@ -99,16 +97,8 @@ describe("extractRLValues", () => {
     expect(extractRLValues(history, "episode_rewards")).toEqual([1.0, 2.5, 3.0]);
   });
 
-  it("extracts gate_creativity", () => {
-    expect(extractRLValues(history, "gate_creativity")).toEqual([0.6, 0.7, 0.8]);
-  });
-
-  it("extracts gate_focus", () => {
-    expect(extractRLValues(history, "gate_focus")).toEqual([0.5, 0.55, 0.6]);
-  });
-
-  it("extracts gate_stability", () => {
-    expect(extractRLValues(history, "gate_stability")).toEqual([0.9, 0.85, 0.8]);
+  it("extracts gate_modulation", () => {
+    expect(extractRLValues(history, "gate_modulation")).toEqual([0.6, 0.7, 0.8]);
   });
 
   it("extracts reward_perplexity", () => {
@@ -123,8 +113,8 @@ describe("extractRLValues", () => {
     expect(extractRLValues(history, "reward_repetition")).toEqual([-0.1, -0.05, 0.0]);
   });
 
-  it("extracts reward_focus", () => {
-    expect(extractRLValues(history, "reward_focus")).toEqual([0.15, 0.2, 0.25]);
+  it("extracts reward_sampling", () => {
+    expect(extractRLValues(history, "reward_sampling")).toEqual([0.15, 0.2, 0.25]);
   });
 
   it("extracts reward_coherence", () => {
@@ -280,12 +270,10 @@ describe("metricOptionsForMode", () => {
       { value: "policy_loss", label: "Policy Loss" },
       { value: "value_loss", label: "Value Loss" },
       { value: "entropy", label: "Entropy" },
-      { value: "gate_creativity", label: "Gate: Creativity" },
-      { value: "gate_focus", label: "Gate: Focus" },
-      { value: "gate_stability", label: "Gate: Stability" },
+      { value: "gate_modulation", label: "Gate: Modulation" },
       { value: "reward_perplexity", label: "Reward: Perplexity" },
       { value: "reward_diversity", label: "Reward: Diversity" },
-      { value: "reward_focus", label: "Reward: Focus" },
+      { value: "reward_sampling", label: "Reward: Sampling" },
       { value: "reward_repetition", label: "Reward: Repetition" },
       { value: "reward_coherence", label: "Reward: Coherence" },
       { value: "explained_variance", label: "Explained Variance" },

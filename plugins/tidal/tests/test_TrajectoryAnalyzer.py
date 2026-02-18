@@ -3,6 +3,8 @@ test_TrajectoryAnalyzer.py
 
 Unit tests for the TrajectoryAnalyzer module — pure-Python analysis
 of gate signal trajectories from RL-gated generation.
+
+Updated for single modulation gate (conservative-to-exploratory axis).
 """
 
 import math
@@ -19,26 +21,27 @@ from plugins.tidal.TrajectoryAnalyzer import (
 )
 
 
-def _make_trajectory(n_steps, creativity_fn, focus_fn, stability_fn, token_fn=None):
-    """Build a synthetic trajectory dict matching the lightweight format."""
+def _make_trajectory(n_steps, modulation_fn, token_fn=None):
+    """Build a synthetic trajectory dict matching the lightweight format.
+
+    Single modulation gate: each action is a 1-element list [modulation].
+    """
     actions = []
     tokens = []
     token_texts = []
     effects = []
     for i in range(n_steps):
         t = i / max(n_steps - 1, 1)  # normalised [0, 1]
-        c = creativity_fn(t)
-        f = focus_fn(t)
-        s = stability_fn(t)
-        actions.append([c, f, s])
+        m = modulation_fn(t)
+        actions.append([m])
         tid = token_fn(t) if token_fn else i
         tokens.append(tid)
         token_texts.append(f"tok_{tid}")
         effects.append({
-            "temperature": 0.3 + c * 1.7,
-            "repetition_penalty": 1.0 + s * 2.5,
-            "top_k": int(5 + f * 95),
-            "top_p": 0.7 + c * 0.3,
+            "temperature": 0.3 + m * 1.7,
+            "repetition_penalty": 1.0 + m * 2.5,
+            "top_k": int(5 + m * 95),
+            "top_p": 0.7 + m * 0.3,
         })
     return {
         "gateSignals": actions,
@@ -52,13 +55,11 @@ class TestSingleTrajectoryAnalysis(unittest.TestCase):
     """Tests for analyze_single on synthetic trajectories with known stats."""
 
     def setUp(self):
-        # Linear ramp creativity [0 → 1], constant focus 0.5, inverse stability [1 → 0]
+        # Linear ramp modulation [0 → 1]
         self.n = 100
         self.traj = _make_trajectory(
             self.n,
-            creativity_fn=lambda t: t,          # 0→1 linear
-            focus_fn=lambda t: 0.5,             # constant
-            stability_fn=lambda t: 1.0 - t,     # 1→0 linear
+            modulation_fn=lambda t: t,  # 0→1 linear
         )
         self.result = analyze_single(self.traj)
 
@@ -70,112 +71,79 @@ class TestSingleTrajectoryAnalysis(unittest.TestCase):
         self.assertEqual(set(self.result.keys()), expected)
 
     def test_signal_stats_structure(self):
-        """Each signal has mean, std, min, max, q25, q50, q75."""
-        for name in ("creativity", "focus", "stability"):
-            stats = self.result["signalStats"][name]
-            for key in ("mean", "std", "min", "max", "q25", "q50", "q75"):
-                self.assertIn(key, stats, f"Missing {key} in {name}")
-                self.assertIsInstance(stats[key], float)
+        """The single modulation signal has mean, std, min, max, q25, q50, q75."""
+        stats = self.result["signalStats"]["modulation"]
+        for key in ("mean", "std", "min", "max", "q25", "q50", "q75"):
+            self.assertIn(key, stats, f"Missing {key} in modulation")
+            self.assertIsInstance(stats[key], float)
 
-    def test_creativity_stats(self):
+    def test_modulation_stats(self):
         """Linear ramp 0→1: mean≈0.5, min≈0, max≈1."""
-        stats = self.result["signalStats"]["creativity"]
+        stats = self.result["signalStats"]["modulation"]
         self.assertAlmostEqual(stats["mean"], 0.5, places=1)
         self.assertAlmostEqual(stats["min"], 0.0, places=2)
         self.assertAlmostEqual(stats["max"], 1.0, places=2)
         self.assertAlmostEqual(stats["q50"], 0.5, places=1)
 
-    def test_focus_stats_constant(self):
-        """Constant 0.5: std=0, q25=q50=q75=0.5."""
-        stats = self.result["signalStats"]["focus"]
-        self.assertAlmostEqual(stats["mean"], 0.5, places=5)
-        self.assertAlmostEqual(stats["std"], 0.0, places=5)
-        self.assertAlmostEqual(stats["q25"], 0.5, places=5)
-        self.assertAlmostEqual(stats["q75"], 0.5, places=5)
-
-    def test_stability_stats(self):
-        """Inverse ramp 1→0: mean≈0.5, min≈0, max≈1."""
-        stats = self.result["signalStats"]["stability"]
-        self.assertAlmostEqual(stats["mean"], 0.5, places=1)
-        self.assertAlmostEqual(stats["min"], 0.0, places=2)
-        self.assertAlmostEqual(stats["max"], 1.0, places=2)
-
     def test_signal_evolution_quartile_windows(self):
         """Evolution splits into 4 quartile windows."""
         evo = self.result["signalEvolution"]
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn(name, evo)
-            self.assertEqual(len(evo[name]), 4)
+        self.assertIn("modulation", evo)
+        self.assertEqual(len(evo["modulation"]), 4)
 
-    def test_creativity_evolution_ascending(self):
-        """Creativity mean should increase across quartile windows."""
-        evo = self.result["signalEvolution"]["creativity"]
+    def test_modulation_evolution_ascending(self):
+        """Modulation mean should increase across quartile windows."""
+        evo = self.result["signalEvolution"]["modulation"]
         means = [w["mean"] for w in evo]
         for i in range(len(means) - 1):
             self.assertLess(means[i], means[i + 1])
 
-    def test_stability_evolution_descending(self):
-        """Stability mean should decrease across quartile windows."""
-        evo = self.result["signalEvolution"]["stability"]
-        means = [w["mean"] for w in evo]
-        for i in range(len(means) - 1):
-            self.assertGreater(means[i], means[i + 1])
-
-    def test_focus_evolution_flat(self):
-        """Focus is constant — all quartile means should be 0.5."""
-        evo = self.result["signalEvolution"]["focus"]
-        for w in evo:
-            self.assertAlmostEqual(w["mean"], 0.5, places=2)
-
-    def test_cross_signal_correlations(self):
-        """creativity vs constant focus ≈ 0, creativity vs inverse stability ≈ -1."""
+    def test_cross_signal_correlations_empty(self):
+        """With a single gate, cross-signal correlations should be empty."""
         corr = self.result["crossSignalCorrelations"]
-        # creativity vs focus: r ≈ 0 (one is constant → correlation undefined/0)
-        self.assertAlmostEqual(corr["creativity_focus"], 0.0, places=1)
-        # creativity vs stability: perfect inverse
-        self.assertAlmostEqual(corr["creativity_stability"], -1.0, places=2)
+        self.assertEqual(len(corr), 0)
 
     def test_phase_detection(self):
         """Phases are detected via Welch t-test on adjacent windows (|t|>2.0)."""
         phases = self.result["phases"]
         self.assertIsInstance(phases, list)
-        # creativity ramp should trigger at least one phase transition
-        creativity_phases = [p for p in phases if p["signal"] == "creativity"]
-        self.assertGreater(len(creativity_phases), 0)
-        for p in creativity_phases:
+        # modulation ramp should trigger at least one phase transition
+        modulation_phases = [p for p in phases if p["signal"] == "modulation"]
+        self.assertGreater(len(modulation_phases), 0)
+        for p in modulation_phases:
             self.assertIn("windowBoundary", p)
             self.assertIn("tStatistic", p)
             self.assertGreater(abs(p["tStatistic"]), 2.0)
 
-    def test_focus_no_phases(self):
-        """Constant focus should have no phase transitions."""
-        phases = self.result["phases"]
-        focus_phases = [p for p in phases if p["signal"] == "focus"]
-        self.assertEqual(len(focus_phases), 0)
+    def test_constant_modulation_no_phases(self):
+        """Constant modulation should have no phase transitions."""
+        traj = _make_trajectory(100, modulation_fn=lambda t: 0.5)
+        result = analyze_single(traj)
+        phases = result["phases"]
+        modulation_phases = [p for p in phases if p["signal"] == "modulation"]
+        self.assertEqual(len(modulation_phases), 0)
 
     def test_token_signal_alignment(self):
         """Top/bottom 10% of signal values → token indices."""
         alignment = self.result["tokenSignalAlignment"]
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn(name, alignment)
-            self.assertIn("highTokens", alignment[name])
-            self.assertIn("lowTokens", alignment[name])
-            # High tokens: top 10% of signal values
-            self.assertIsInstance(alignment[name]["highTokens"], list)
-            self.assertIsInstance(alignment[name]["lowTokens"], list)
-            self.assertGreater(len(alignment[name]["highTokens"]), 0)
-            self.assertGreater(len(alignment[name]["lowTokens"]), 0)
+        self.assertIn("modulation", alignment)
+        self.assertIn("highTokens", alignment["modulation"])
+        self.assertIn("lowTokens", alignment["modulation"])
+        self.assertIsInstance(alignment["modulation"]["highTokens"], list)
+        self.assertIsInstance(alignment["modulation"]["lowTokens"], list)
+        self.assertGreater(len(alignment["modulation"]["highTokens"]), 0)
+        self.assertGreater(len(alignment["modulation"]["lowTokens"]), 0)
 
-    def test_creativity_alignment_high_tokens_are_late(self):
+    def test_modulation_alignment_high_tokens_are_late(self):
         """For linear ramp, top 10% tokens should be from late positions."""
-        alignment = self.result["tokenSignalAlignment"]["creativity"]
+        alignment = self.result["tokenSignalAlignment"]["modulation"]
         threshold = int(self.n * 0.9)
         for idx in alignment["highTokens"]:
             self.assertGreaterEqual(idx["position"], threshold)
 
-    def test_creativity_alignment_low_tokens_are_early(self):
+    def test_modulation_alignment_low_tokens_are_early(self):
         """For linear ramp, bottom 10% tokens should be from early positions."""
-        alignment = self.result["tokenSignalAlignment"]["creativity"]
+        alignment = self.result["tokenSignalAlignment"]["modulation"]
         threshold = int(self.n * 0.1)
         for idx in alignment["lowTokens"]:
             self.assertLess(idx["position"], threshold)
@@ -215,39 +183,23 @@ class TestSignalStatsEdgeCases(unittest.TestCase):
 
     def test_analyze_single_one_step_no_crash(self):
         """analyze_single must not crash on a 1-step trajectory."""
-        traj = _make_trajectory(
-            1,
-            creativity_fn=lambda t: 0.5,
-            focus_fn=lambda t: 0.5,
-            stability_fn=lambda t: 0.5,
-        )
+        traj = _make_trajectory(1, modulation_fn=lambda t: 0.5)
         result = analyze_single(traj)
         self.assertIn("signalStats", result)
         self.assertIn("signalEvolution", result)
         # Evolution has 4 windows; some will be zeroed
-        for name in ("creativity", "focus", "stability"):
-            self.assertEqual(len(result["signalEvolution"][name]), 4)
+        self.assertEqual(len(result["signalEvolution"]["modulation"]), 4)
 
     def test_analyze_single_two_steps_no_crash(self):
         """analyze_single must not crash on a 2-step trajectory."""
-        traj = _make_trajectory(
-            2,
-            creativity_fn=lambda t: 0.3,
-            focus_fn=lambda t: 0.6,
-            stability_fn=lambda t: 0.9,
-        )
+        traj = _make_trajectory(2, modulation_fn=lambda t: 0.3)
         result = analyze_single(traj)
         self.assertIn("signalStats", result)
         self.assertIn("signalEvolution", result)
 
     def test_analyze_single_three_steps_no_crash(self):
         """analyze_single must not crash on a 3-step trajectory."""
-        traj = _make_trajectory(
-            3,
-            creativity_fn=lambda t: t,
-            focus_fn=lambda t: 0.5,
-            stability_fn=lambda t: 1.0 - t,
-        )
+        traj = _make_trajectory(3, modulation_fn=lambda t: t)
         result = analyze_single(traj)
         self.assertIn("signalStats", result)
         # Phases and correlations should still have valid structure
@@ -259,20 +211,10 @@ class TestBatchAnalysis(unittest.TestCase):
     """Tests for analyze_batch with two prompts having different signal profiles."""
 
     def setUp(self):
-        # Prompt A: high creativity (0.8), low focus (0.2), mid stability (0.5)
-        self.traj_a = _make_trajectory(
-            50,
-            creativity_fn=lambda t: 0.8,
-            focus_fn=lambda t: 0.2,
-            stability_fn=lambda t: 0.5,
-        )
-        # Prompt B: low creativity (0.2), high focus (0.8), high stability (0.9)
-        self.traj_b = _make_trajectory(
-            50,
-            creativity_fn=lambda t: 0.2,
-            focus_fn=lambda t: 0.8,
-            stability_fn=lambda t: 0.9,
-        )
+        # Prompt A: high modulation (0.8)
+        self.traj_a = _make_trajectory(50, modulation_fn=lambda t: 0.8)
+        # Prompt B: low modulation (0.2)
+        self.traj_b = _make_trajectory(50, modulation_fn=lambda t: 0.2)
         self.result = analyze_batch({
             "Once upon a time": [self.traj_a],
             "The scientist observed": [self.traj_b],
@@ -292,79 +234,62 @@ class TestBatchAnalysis(unittest.TestCase):
             self.assertIn("signalStats", summary)
 
     def test_cross_prompt_variance(self):
-        """Between-prompt variance should exist for each signal."""
+        """Between-prompt variance should exist for modulation signal."""
         variance = self.result["crossPromptVariance"]
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn(name, variance)
-            self.assertIn("betweenPromptVar", variance[name])
-            self.assertIn("withinPromptVar", variance[name])
+        self.assertIn("modulation", variance)
+        self.assertIn("betweenPromptVar", variance["modulation"])
+        self.assertIn("withinPromptVar", variance["modulation"])
 
     def test_between_variance_exceeds_within(self):
         """When prompts differ, between-prompt variance > within-prompt variance."""
         variance = self.result["crossPromptVariance"]
-        # Creativity: 0.8 vs 0.2 between, 0 within (constant per prompt)
+        # Modulation: 0.8 vs 0.2 between, 0 within (constant per prompt)
         self.assertGreater(
-            variance["creativity"]["betweenPromptVar"],
-            variance["creativity"]["withinPromptVar"],
+            variance["modulation"]["betweenPromptVar"],
+            variance["modulation"]["withinPromptVar"],
         )
 
     def test_strategy_characterization(self):
         """Strategy summary includes global means and stds."""
         strategy = self.result["strategyCharacterization"]
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn(name, strategy)
-            self.assertIn("globalMean", strategy[name])
-            self.assertIn("globalStd", strategy[name])
+        self.assertIn("modulation", strategy)
+        self.assertIn("globalMean", strategy["modulation"])
+        self.assertIn("globalStd", strategy["modulation"])
 
-    def test_strategy_global_mean_creativity(self):
-        """Global mean creativity across both prompts ≈ 0.5."""
+    def test_strategy_global_mean_modulation(self):
+        """Global mean modulation across both prompts ≈ 0.5."""
         strategy = self.result["strategyCharacterization"]
-        self.assertAlmostEqual(strategy["creativity"]["globalMean"], 0.5, places=1)
+        self.assertAlmostEqual(strategy["modulation"]["globalMean"], 0.5, places=1)
 
 
 class TestSweepAnalysis(unittest.TestCase):
-    """Tests for get_sweep_grid and analyze_sweep."""
+    """Tests for get_sweep_grid and analyze_sweep with single modulation gate."""
 
-    def test_sweep_grid_has_15_configs(self):
+    def test_sweep_grid_has_3_configs(self):
         grid = get_sweep_grid()
-        self.assertEqual(len(grid), 15)
+        self.assertEqual(len(grid), 3)
 
-    def test_sweep_grid_contains_corners(self):
-        """All 8 corners of [0,1]^3 should be present."""
+    def test_sweep_grid_contains_endpoints_and_midpoint(self):
+        """Grid should contain [0.0], [0.5], [1.0]."""
         grid = get_sweep_grid()
-        corners = [
-            [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0],
-            [1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0],
-        ]
-        for corner in corners:
-            self.assertIn(corner, grid, f"Missing corner {corner}")
+        self.assertIn([0.0], grid)
+        self.assertIn([0.5], grid)
+        self.assertIn([1.0], grid)
 
-    def test_sweep_grid_contains_axis_configs(self):
-        """6 axis-isolated configs: [x, 0.5, 0.5] etc."""
+    def test_sweep_grid_elements_are_1d(self):
+        """Each config should be a 1-element list."""
         grid = get_sweep_grid()
-        axis_configs = [
-            [0.0, 0.5, 0.5], [1.0, 0.5, 0.5],  # creativity axis
-            [0.5, 0.0, 0.5], [0.5, 1.0, 0.5],    # focus axis
-            [0.5, 0.5, 0.0], [0.5, 0.5, 1.0],    # stability axis
-        ]
-        for cfg in axis_configs:
-            self.assertIn(cfg, grid, f"Missing axis config {cfg}")
-
-    def test_sweep_grid_contains_neutral(self):
-        grid = get_sweep_grid()
-        self.assertIn([0.5, 0.5, 0.5], grid)
+        for cfg in grid:
+            self.assertEqual(len(cfg), 1)
 
     def test_analyze_sweep_returns_expected_keys(self):
         """Sweep analysis returns configComparisons and interpretabilityMap."""
-        # Build minimal sweep data
         sweep_data = {}
         for cfg in get_sweep_grid():
-            key = f"{cfg[0]:.1f}_{cfg[1]:.1f}_{cfg[2]:.1f}"
+            key = f"{cfg[0]:.1f}"
             traj = _make_trajectory(
                 20,
-                creativity_fn=lambda t, c=cfg[0]: c,
-                focus_fn=lambda t, f=cfg[1]: f,
-                stability_fn=lambda t, s=cfg[2]: s,
+                modulation_fn=lambda t, m=cfg[0]: m,
             )
             sweep_data[key] = {
                 "trajectory": traj,
@@ -378,12 +303,10 @@ class TestSweepAnalysis(unittest.TestCase):
         """Each config comparison has signal stats and text properties."""
         sweep_data = {}
         for cfg in get_sweep_grid():
-            key = f"{cfg[0]:.1f}_{cfg[1]:.1f}_{cfg[2]:.1f}"
+            key = f"{cfg[0]:.1f}"
             traj = _make_trajectory(
                 20,
-                creativity_fn=lambda t, c=cfg[0]: c,
-                focus_fn=lambda t, f=cfg[1]: f,
-                stability_fn=lambda t, s=cfg[2]: s,
+                modulation_fn=lambda t, m=cfg[0]: m,
             )
             sweep_data[key] = {
                 "trajectory": traj,
@@ -397,28 +320,25 @@ class TestSweepAnalysis(unittest.TestCase):
             self.assertIn("uniqueTokenRatio", comp["textProperties"])
 
     def test_interpretability_map_per_signal(self):
-        """Interpretability map shows marginal effect of each signal dimension."""
+        """Interpretability map shows marginal effect of the modulation signal."""
         sweep_data = {}
         for cfg in get_sweep_grid():
-            key = f"{cfg[0]:.1f}_{cfg[1]:.1f}_{cfg[2]:.1f}"
+            key = f"{cfg[0]:.1f}"
             # Use config values to produce different word counts
             word_count = int(10 + cfg[0] * 50)
             text = " ".join([f"word{i}" for i in range(word_count)])
             traj = _make_trajectory(
                 20,
-                creativity_fn=lambda t, c=cfg[0]: c,
-                focus_fn=lambda t, f=cfg[1]: f,
-                stability_fn=lambda t, s=cfg[2]: s,
+                modulation_fn=lambda t, m=cfg[0]: m,
             )
             sweep_data[key] = {"trajectory": traj, "text": text}
 
         result = analyze_sweep(sweep_data)
         imap = result["interpretabilityMap"]
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn(name, imap)
-            self.assertIn("lowConfig", imap[name])
-            self.assertIn("highConfig", imap[name])
-            self.assertIn("effect", imap[name])
+        self.assertIn("modulation", imap)
+        self.assertIn("lowConfig", imap["modulation"])
+        self.assertIn("highConfig", imap["modulation"])
+        self.assertIn("effect", imap["modulation"])
 
 
 class TestBootstrapCI(unittest.TestCase):
@@ -470,23 +390,10 @@ class TestBootstrapCI(unittest.TestCase):
 
     def test_percentile_indices_use_n_minus_1(self):
         """Percentile indices should use p*(n-1) convention, matching _quantile."""
-        # With n_bootstrap=100 and confidence=0.95:
-        # alpha/2 = 0.025, lo = floor(0.025 * 99) = 2
-        # 1-alpha/2 = 0.975, hi = floor(0.975 * 99) = 97 (not 97.5→97)
-        # Generate a known sorted sequence as bootstrap means by using a
-        # deterministic set and verifying the exact CI values.
         values = list(range(1, 101))  # [1..100], mean = 50.5
         result = bootstrap_ci(values, seed=0, n_bootstrap=100)
-        # The bootstrap means (sorted) with seed=0 and n=100 are deterministic.
-        # Verify bounds are selected with (n-1) convention by checking
-        # that CI bounds differ between n and n-1 indexing.
         result2 = bootstrap_ci(values, seed=0, n_bootstrap=100)
         self.assertEqual(result, result2)  # deterministic
-        # The key invariant: with n_bootstrap=100,
-        # lo_idx should be floor(0.025*99)=2, hi_idx should be floor(0.975*99)=96
-        # NOT lo_idx=floor(0.025*100)=2, hi_idx=floor(0.975*100)=97
-        # We can verify this by checking ci_high is the 96th element (0-indexed)
-        # of the sorted bootstrap means, not the 97th.
         import random as _rng
         rng = _rng.Random(0)
         n = len(values)
@@ -505,18 +412,8 @@ class TestBatchAnalysisWithBootstrap(unittest.TestCase):
     """Tests for analyze_batch with bootstrap parameter."""
 
     def setUp(self):
-        self.traj_a = _make_trajectory(
-            50,
-            creativity_fn=lambda t: 0.8,
-            focus_fn=lambda t: 0.2,
-            stability_fn=lambda t: 0.5,
-        )
-        self.traj_b = _make_trajectory(
-            50,
-            creativity_fn=lambda t: 0.2,
-            focus_fn=lambda t: 0.8,
-            stability_fn=lambda t: 0.9,
-        )
+        self.traj_a = _make_trajectory(50, modulation_fn=lambda t: 0.8)
+        self.traj_b = _make_trajectory(50, modulation_fn=lambda t: 0.2)
         self.prompts = {
             "Once upon a time": [self.traj_a],
             "The scientist observed": [self.traj_b],
@@ -525,23 +422,21 @@ class TestBatchAnalysisWithBootstrap(unittest.TestCase):
     def test_bootstrap_false_omits_ci_keys(self):
         """bootstrap=False (default) produces no CI keys."""
         result = analyze_batch(self.prompts)
-        for name in ("creativity", "focus", "stability"):
-            self.assertNotIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
-            self.assertNotIn("globalMean_ci", result["strategyCharacterization"][name])
+        self.assertNotIn("betweenPromptVar_ci", result["crossPromptVariance"]["modulation"])
+        self.assertNotIn("globalMean_ci", result["strategyCharacterization"]["modulation"])
 
     def test_bootstrap_true_adds_ci_keys(self):
         """bootstrap=True adds betweenPromptVar_ci and globalMean_ci."""
         result = analyze_batch(self.prompts, bootstrap=True)
-        for name in ("creativity", "focus", "stability"):
-            self.assertIn("betweenPromptVar_ci", result["crossPromptVariance"][name])
-            ci = result["crossPromptVariance"][name]["betweenPromptVar_ci"]
-            for key in ("mean", "ci_low", "ci_high"):
-                self.assertIn(key, ci)
+        self.assertIn("betweenPromptVar_ci", result["crossPromptVariance"]["modulation"])
+        ci = result["crossPromptVariance"]["modulation"]["betweenPromptVar_ci"]
+        for key in ("mean", "ci_low", "ci_high"):
+            self.assertIn(key, ci)
 
-            self.assertIn("globalMean_ci", result["strategyCharacterization"][name])
-            ci2 = result["strategyCharacterization"][name]["globalMean_ci"]
-            for key in ("mean", "ci_low", "ci_high"):
-                self.assertIn(key, ci2)
+        self.assertIn("globalMean_ci", result["strategyCharacterization"]["modulation"])
+        ci2 = result["strategyCharacterization"]["modulation"]["globalMean_ci"]
+        for key in ("mean", "ci_low", "ci_high"):
+            self.assertIn(key, ci2)
 
 
 if __name__ == "__main__":

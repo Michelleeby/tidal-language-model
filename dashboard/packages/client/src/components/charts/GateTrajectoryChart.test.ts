@@ -5,9 +5,7 @@ import type { GenerationTrajectory } from "@tidal/shared";
 const makeTraj = (len: number): GenerationTrajectory => ({
   gateSignals: Array.from({ length: len }, (_, i) => [
     0.1 * i,
-    0.2 * i,
-    0.3 * i,
-  ]) as [number, number, number][],
+  ]),
   effects: Array.from({ length: len }, (_, i) => ({
     temperature: 0.5 + 0.1 * i,
     repetition_penalty: 1.0 + 0.1 * i,
@@ -22,8 +20,8 @@ describe("buildTrajectoryChartData", () => {
   it("returns correct series count for signals mode", () => {
     const traj = makeTraj(5);
     const result = buildTrajectoryChartData(traj, "signals");
-    // steps + creativity + focus + stability = 4 arrays
-    expect(result).toHaveLength(4);
+    // steps + modulation = 2 arrays
+    expect(result).toHaveLength(2);
   });
 
   it("returns correct series count for effects mode", () => {
@@ -37,19 +35,15 @@ describe("buildTrajectoryChartData", () => {
     const traj = makeTraj(3);
     const result = buildTrajectoryChartData(traj, "signals");
     const steps = result[0];
-    const creativity = result[1];
-    const focus = result[2];
-    const stability = result[3];
+    const modulation = result[1];
 
     expect(Array.from(steps)).toEqual([0, 1, 2]);
-    expect(Array.from(creativity)).toEqual([0.0, 0.1, 0.2]);
-    expect(Array.from(focus)).toEqual([0.0, 0.2, 0.4]);
-    expect(Array.from(stability)).toEqual([0.0, 0.3, 0.6]);
+    expect(Array.from(modulation)).toEqual([0.0, 0.1, 0.2]);
   });
 
   it("returns empty arrays for null trajectory", () => {
     const result = buildTrajectoryChartData(null, "signals");
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(2);
     for (const arr of result) {
       expect(arr).toHaveLength(0);
     }

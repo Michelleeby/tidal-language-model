@@ -58,9 +58,9 @@ def apply_rope(
 
 class DynamicGate(nn.Module):
     """
-    Small MLP that converts 3D gate signals → per-dimension scaling factors.
+    Small MLP that converts gate signals → per-dimension scaling factors.
 
-    Maps [creativity, focus, stability] → sigmoid output of shape (embed_dim,).
+    Maps [modulation] → sigmoid output of shape (embed_dim,).
     Initialized so that sigmoid output ≈ 1.0 at start (neutral / no effect).
     """
 
@@ -79,7 +79,7 @@ class DynamicGate(nn.Module):
     def forward(self, gate_signals: Optional[torch.Tensor]) -> torch.Tensor:
         """
         Args:
-            gate_signals: (batch, 3) or None.
+            gate_signals: (batch, gate_dim) or None.
         Returns:
             scale: (batch, 1, embed_dim) — broadcastable over seq_len.
                    All-ones when gate_signals is None.
@@ -176,13 +176,13 @@ class TransformerBlock(nn.Module):
 class GatedTransformerBlock(nn.Module):
     """
     Transformer block with DynamicGate modules that scale attention and FFN outputs
-    based on 3D gate signals [creativity, focus, stability].
+    based on a single modulation gate signal on a conservative-to-exploratory axis.
 
     Uses manual Q/K/V projections with RoPE and optional KV cache.
     When gate_signals is None, gates produce unit scaling (no effect).
     """
 
-    GATE_DIM = 3
+    GATE_DIM = 1
 
     def __init__(self, embed_dim: int, num_heads: int, ffn_hidden_dim: int,
                  dropout: float = 0.1, max_seq_len: int = 512):
@@ -278,9 +278,9 @@ class TransformerLM(nn.Module):
         → 6 × GatedTransformerBlock(gate_signals)
         → LayerNorm → Output Projection → Logits
 
-    Gate signals (3D): [creativity, focus, stability]
+    Gate signals (1D): [modulation] on a conservative-to-exploratory axis.
         Provided by a PPO agent (GatingPolicyAgent).
-        Each block has DynamicGate modules that convert 3 signals → per-dim scaling.
+        Each block has DynamicGate modules that convert the signal → per-dim scaling.
         When gate_signals=None, gates produce unit scaling (no effect).
     """
 
@@ -354,7 +354,7 @@ class TransformerLM(nn.Module):
         Args:
             input_ids: Token IDs of shape (batch_size, seq_len)
             target_ids: Target token IDs for loss calculation (batch_size, seq_len)
-            gate_signals: Optional (batch_size, 3) tensor of [creativity, focus, stability]
+            gate_signals: Optional (batch_size, 1) tensor of [modulation]
             return_hidden_states: If True, include hidden states in viz_data
             use_cache: If True, return KV cache in viz_data for incremental decoding
             past_key_values: Cached KV pairs from previous forward pass
@@ -426,7 +426,7 @@ class TransformerLM(nn.Module):
 
         Args:
             input_ids: Token IDs of shape (batch_size, seq_len)
-            gate_signals: Optional (batch_size, 3) gate signals
+            gate_signals: Optional (batch_size, 1) gate signals
 
         Returns:
             logits: (batch_size, seq_len, vocab_size)
@@ -690,8 +690,8 @@ class TransformerLM(nn.Module):
         step_progress = step / max(max_steps, 1)
         context_features = torch.tensor([
             step_progress, 1.0,
-            0.5, 0.5, 0.5,  # Previous gate activations (placeholder, filled by env)
-            0.0,
+            0.5,  # Previous modulation gate activation (placeholder, filled by env)
+            0.0, 0.0, 0.0,
         ], device=device)
         obs_parts.append(context_features)
 

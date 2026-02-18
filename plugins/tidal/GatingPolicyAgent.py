@@ -3,16 +3,17 @@ GatingPolicyAgent.py
 
 Actor-Critic network for PPO-based gate signal control.
 
-The agent learns to control three gate signals [creativity, focus, stability]
-based on observations from the generation process. Uses a shared feature
-extractor with separate actor and critic heads.
+The agent learns to control a single modulation gate signal on a
+conservative-to-exploratory axis, based on observations from the
+generation process. Uses a shared feature extractor with separate
+actor and critic heads.
 
 Architecture:
-    Observation (64D) -> Shared MLP (128, 64) -> Actor Head -> Actions (3D)
+    Observation (64D) -> Shared MLP (128, 64) -> Actor Head -> Action (1D)
                                               -> Critic Head -> Value (1D)
 
-The actor outputs a Beta distribution over [0, 1] for each gate signal,
-which naturally bounds the actions to the valid range.
+The actor outputs a Beta distribution over [0, 1] for the modulation signal,
+which naturally bounds the action to the valid range.
 """
 
 import torch
@@ -25,10 +26,10 @@ import numpy as np
 
 class GatingPolicyAgent(nn.Module):
     """
-    Actor-Critic agent for gate signal control.
+    Actor-Critic agent for single modulation gate control.
 
     Uses a shared feature extractor followed by separate heads for:
-    - Actor: Outputs parameters for Beta distributions over [0, 1]
+    - Actor: Outputs parameters for a Beta distribution over [0, 1]
     - Critic: Outputs state value estimate
 
     The Beta distribution is used because it naturally supports bounded
@@ -41,7 +42,7 @@ class GatingPolicyAgent(nn.Module):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.obs_dim = config.get("RL_OBSERVATION_DIM", 64)
-        self.action_dim = config.get("RL_ACTION_DIM", 3)
+        self.action_dim = config.get("RL_ACTION_DIM", 1)
         self.hidden_dim = config.get("RL_HIDDEN_DIM", 128)
         self.beta_concentration_max = config.get("RL_BETA_CONCENTRATION_MAX", 15.0)
 
@@ -144,7 +145,7 @@ class GaussianGatingPolicyAgent(nn.Module):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.obs_dim = config.get("RL_OBSERVATION_DIM", 64)
-        self.action_dim = config.get("RL_ACTION_DIM", 3)
+        self.action_dim = config.get("RL_ACTION_DIM", 1)
         self.hidden_dim = config.get("RL_HIDDEN_DIM", 128)
 
         self.feature_extractor = nn.Sequential(

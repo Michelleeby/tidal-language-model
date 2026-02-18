@@ -18,9 +18,7 @@ export async function handleGenerateText(
     topK?: number;
     gatingMode?: string;
     rlCheckpoint?: string;
-    creativity?: number;
-    focus?: number;
-    stability?: number;
+    modulation?: number;
   },
 ): Promise<CallToolResult> {
   const res = await client.post<GenerateResponse>("/api/generate", params);
@@ -52,18 +50,10 @@ export function registerGenerationTools(
         .string()
         .optional()
         .describe("Path to RL agent checkpoint (required when gatingMode is 'learned')"),
-      creativity: z
+      modulation: z
         .number()
         .optional()
-        .describe("Creativity gate signal [0-1] for fixed gating mode (default: 0.5)"),
-      focus: z
-        .number()
-        .optional()
-        .describe("Focus gate signal [0-1] for fixed gating mode (default: 0.5)"),
-      stability: z
-        .number()
-        .optional()
-        .describe("Stability gate signal [0-1] for fixed gating mode (default: 0.5)"),
+        .describe("Modulation gate signal [0-1] for fixed gating mode (default: 0.5)"),
     },
   }, async (params) => handleGenerateText(client, params));
 }

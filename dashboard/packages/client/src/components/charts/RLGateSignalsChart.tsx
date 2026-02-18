@@ -17,27 +17,21 @@ export default function RLGateSignalsChart({
   const [zoomed, setZoomed] = useState(false);
 
   const data = useMemo(() => {
-    const creativity = history?.gate_creativity ?? [];
-    const focus = history?.gate_focus ?? [];
-    const stability = history?.gate_stability ?? [];
-    const len = creativity.length;
+    const modulation = history?.gate_modulation ?? [];
+    const len = modulation.length;
     if (len === 0)
       return [
         new Float64Array(0),
         new Float64Array(0),
-        new Float64Array(0),
-        new Float64Array(0),
       ] as const;
-    const steps = new Float64Array(creativity.map((_, i) => i));
+    const steps = new Float64Array(modulation.map((_, i) => i));
     return [
       steps,
-      new Float64Array(creativity),
-      new Float64Array(focus),
-      new Float64Array(stability),
+      new Float64Array(modulation),
     ] as const;
   }, [history]);
 
-  if (!history?.gate_creativity?.length) {
+  if (!history?.gate_modulation?.length) {
     return (
       <div className="text-gray-500 text-sm p-4">
         No gate signal data yet
@@ -57,7 +51,7 @@ export default function RLGateSignalsChart({
       />
       <UPlotChart
         ref={chartRef}
-        data={[data[0], data[1], data[2], data[3]]}
+        data={[data[0], data[1]]}
         onZoomChange={setZoomed}
         options={{
           title: "",
@@ -76,9 +70,7 @@ export default function RLGateSignalsChart({
           ],
           series: [
             {},
-            { label: "Creativity", stroke: "#f472b6", width: 1.5 },
-            { label: "Focus", stroke: "#60a5fa", width: 1.5 },
-            { label: "Stability", stroke: "#34d399", width: 1.5 },
+            { label: "Modulation", stroke: "#a78bfa", width: 1.5 },
           ],
         }}
       />

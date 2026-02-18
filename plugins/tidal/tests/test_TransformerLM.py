@@ -66,7 +66,7 @@ class TestTransformerLM(unittest.TestCase):
         seq_len = 10
         input_ids = torch.randint(0, self.vocab_size, (batch_size, seq_len), device=self.device)
         target_ids = torch.randint(0, self.vocab_size, (batch_size, seq_len), device=self.device)
-        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]], device=self.device)
+        gate_signals = torch.tensor([[0.5], [0.8]], device=self.device)
 
         logits, (loss, _), _ = self.model(input_ids, target_ids, gate_signals=gate_signals)
 
@@ -139,7 +139,7 @@ class TestTransformerLM(unittest.TestCase):
         seq_len = 10
         input_ids = torch.randint(0, self.vocab_size, (batch_size, seq_len), device=self.device)
         target_ids = torch.randint(0, self.vocab_size, (batch_size, seq_len), device=self.device)
-        gate_signals = torch.tensor([[0.7, 0.3, 0.5]] * batch_size, device=self.device, requires_grad=True)
+        gate_signals = torch.tensor([[0.7]] * batch_size, device=self.device, requires_grad=True)
 
         self.model.train()
         logits, (loss, _), _ = self.model(input_ids, target_ids, gate_signals=gate_signals)
@@ -156,8 +156,8 @@ class TestDynamicGate(unittest.TestCase):
 
     def test_neutral_initialization(self):
         """Gate should produce ~1.0 outputs at initialization."""
-        gate = DynamicGate(gate_dim=3, embed_dim=64)
-        signals = torch.tensor([[0.5, 0.5, 0.5]])
+        gate = DynamicGate(gate_dim=1, embed_dim=64)
+        signals = torch.tensor([[0.5]])
         output = gate(signals)
 
         # Should be close to 1.0 due to bias initialization
@@ -165,13 +165,13 @@ class TestDynamicGate(unittest.TestCase):
 
     def test_none_gate_signals(self):
         """Gate should return 1.0 when gate_signals is None."""
-        gate = DynamicGate(gate_dim=3, embed_dim=64)
+        gate = DynamicGate(gate_dim=1, embed_dim=64)
         output = gate(None)
         self.assertEqual(output, 1.0)
 
     def test_output_shape(self):
-        gate = DynamicGate(gate_dim=3, embed_dim=64)
-        signals = torch.randn(4, 3)
+        gate = DynamicGate(gate_dim=1, embed_dim=64)
+        signals = torch.randn(4, 1)
         output = gate(signals)
         self.assertEqual(output.shape, (4, 1, 64))
 
@@ -188,7 +188,7 @@ class TestGatedTransformerBlock(unittest.TestCase):
     def test_forward_with_gating(self):
         block = GatedTransformerBlock(embed_dim=64, num_heads=4, ffn_hidden_dim=128)
         x = torch.randn(2, 10, 64)
-        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
+        gate_signals = torch.tensor([[0.5], [0.8]])
         out = block(x, gate_signals)
         self.assertEqual(out.shape, (2, 10, 64))
 
@@ -289,7 +289,7 @@ class TestGatedTransformerBlockKVCache(unittest.TestCase):
         """Cache works alongside gate_signals."""
         x = torch.randn(2, 10, self.embed_dim)
         cos, sin = precompute_rope_frequencies(self.head_dim, 32)
-        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
+        gate_signals = torch.tensor([[0.5], [0.8]])
 
         result = self.block(
             x, gate_signals=gate_signals,
@@ -529,7 +529,7 @@ class TestTorchCompileForward(unittest.TestCase):
 
         input_ids = torch.randint(0, self.vocab_size, (2, 10))
         target_ids = torch.randint(0, self.vocab_size, (2, 10))
-        gate_signals = torch.tensor([[0.5, 0.5, 0.5], [0.8, 0.2, 0.9]])
+        gate_signals = torch.tensor([[0.5], [0.8]])
 
         logits, (loss, _), _ = compiled(input_ids, target_ids, gate_signals=gate_signals)
         self.assertEqual(logits.shape, (2, 10, self.vocab_size))

@@ -150,9 +150,7 @@ export class GenerationBridge {
         topK: req.topK ?? 50,
         gatingMode: req.gatingMode ?? "none",
         rlCheckpoint: rlCheckpoint,
-        creativity: req.creativity,
-        focus: req.focus,
-        stability: req.stability,
+        modulation: req.modulation,
       }),
       signal: AbortSignal.timeout(120_000),
     });

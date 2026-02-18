@@ -5,7 +5,7 @@ Multi-component reward function for RL gate signal control.
 Provides dense per-step rewards based on:
 - Perplexity (language quality)
 - Diversity (vocabulary variety)
-- Focus (sampling entropy of post-filtered distribution)
+- Sampling (entropy of post-filtered distribution)
 - Repetition penalty (avoid repeats)
 - Coherence (bigram likelihood)
 
@@ -49,7 +49,8 @@ class RewardComputer:
         # Reward component weights
         self.perplexity_weight = config.get("RL_REWARD_PERPLEXITY_WEIGHT", 0.30)
         self.diversity_weight = config.get("RL_REWARD_DIVERSITY_WEIGHT", 0.25)
-        self.focus_weight = config.get("RL_REWARD_FOCUS_WEIGHT", 0.15)
+        self.sampling_weight = config.get("RL_REWARD_SAMPLING_WEIGHT",
+                                         config.get("RL_REWARD_FOCUS_WEIGHT", 0.15))
         self.repetition_weight = config.get("RL_REWARD_REPETITION_WEIGHT", 0.20)
         self.coherence_weight = config.get("RL_REWARD_COHERENCE_WEIGHT", 0.10)
 
@@ -158,16 +159,16 @@ class RewardComputer:
 
         return reward
 
-    def compute_focus_reward(
+    def compute_sampling_reward(
         self,
         sampling_entropy: float,
     ) -> float:
         """
-        Compute focus reward from post-filtered sampling entropy.
+        Compute sampling reward from post-filtered sampling entropy.
 
         Measures the entropy of the probability distribution after top-k
         and top-p filtering. This creates a direct gradient path for the
-        focus gate: focus → top-k → filtered distribution → sampling entropy.
+        modulation gate: modulation → top-k/top-p → filtered distribution → sampling entropy.
 
         Uses the same Gaussian-target pattern as compute_diversity_reward().
 
@@ -175,7 +176,7 @@ class RewardComputer:
             sampling_entropy: Entropy of the post-filtered probability distribution
 
         Returns:
-            Focus reward in [0, 1] range, peaking at sampling_entropy_target
+            Sampling reward in [0, 1] range, peaking at sampling_entropy_target
         """
         bandwidth = self.sampling_entropy_target * 0.5
         deviation = sampling_entropy - self.sampling_entropy_target
@@ -324,11 +325,11 @@ class RewardComputer:
             "total_raw": total_reward if not normalize else None
         }
 
-        # Focus reward (only when sampling_entropy is provided)
+        # Sampling reward (only when sampling_entropy is provided)
         if sampling_entropy is not None:
-            focus_reward = self.compute_focus_reward(sampling_entropy)
-            total_reward += self.focus_weight * focus_reward
-            components["focus"] = focus_reward
+            sampling_reward = self.compute_sampling_reward(sampling_entropy)
+            total_reward += self.sampling_weight * sampling_reward
+            components["sampling"] = sampling_reward
 
         # Update running statistics and normalize
         if normalize:
@@ -445,7 +446,7 @@ class AblationRewardComputer(RewardComputer):
         vocab_size: int,
         enable_perplexity: bool = True,
         enable_diversity: bool = True,
-        enable_focus: bool = True,
+        enable_sampling: bool = True,
         enable_repetition: bool = True,
         enable_coherence: bool = True
     ):
@@ -456,8 +457,8 @@ class AblationRewardComputer(RewardComputer):
             self.perplexity_weight = 0.0
         if not enable_diversity:
             self.diversity_weight = 0.0
-        if not enable_focus:
-            self.focus_weight = 0.0
+        if not enable_sampling:
+            self.sampling_weight = 0.0
         if not enable_repetition:
             self.repetition_weight = 0.0
         if not enable_coherence:
@@ -467,7 +468,7 @@ class AblationRewardComputer(RewardComputer):
         total_weight = (
             self.perplexity_weight +
             self.diversity_weight +
-            self.focus_weight +
+            self.sampling_weight +
             self.repetition_weight +
             self.coherence_weight
         )
@@ -475,6 +476,6 @@ class AblationRewardComputer(RewardComputer):
         if total_weight > 0:
             self.perplexity_weight /= total_weight
             self.diversity_weight /= total_weight
-            self.focus_weight /= total_weight
+            self.sampling_weight /= total_weight
             self.repetition_weight /= total_weight
             self.coherence_weight /= total_weight

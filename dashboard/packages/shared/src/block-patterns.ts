@@ -91,19 +91,7 @@ function buildRlAnalysis(experimentId: string): BlockContent[] {
     {
       id: crypto.randomUUID(),
       type: "experimentChart",
-      props: { experimentId, chartMode: "rl", rlMetricKey: "gate_creativity" },
-      children: [],
-    },
-    {
-      id: crypto.randomUUID(),
-      type: "experimentChart",
-      props: { experimentId, chartMode: "rl", rlMetricKey: "gate_focus" },
-      children: [],
-    },
-    {
-      id: crypto.randomUUID(),
-      type: "experimentChart",
-      props: { experimentId, chartMode: "rl", rlMetricKey: "gate_stability" },
+      props: { experimentId, chartMode: "rl", rlMetricKey: "gate_modulation" },
       children: [],
     },
     {

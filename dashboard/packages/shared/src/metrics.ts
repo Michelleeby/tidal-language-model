@@ -24,12 +24,10 @@ export interface RLTrainingHistory {
   policy_loss: number[];
   value_loss: number[];
   entropy: number[];
-  gate_creativity?: number[];
-  gate_focus?: number[];
-  gate_stability?: number[];
+  gate_modulation?: number[];
   reward_perplexity?: number[];
   reward_diversity?: number[];
-  reward_focus?: number[];
+  reward_sampling?: number[];
   reward_repetition?: number[];
   reward_coherence?: number[];
   explained_variance?: number[];

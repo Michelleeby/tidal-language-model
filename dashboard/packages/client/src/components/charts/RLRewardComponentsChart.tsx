@@ -19,7 +19,7 @@ export default function RLRewardComponentsChart({
   const data = useMemo(() => {
     const perplexity = history?.reward_perplexity ?? [];
     const diversity = history?.reward_diversity ?? [];
-    const focus = history?.reward_focus ?? [];
+    const sampling = history?.reward_sampling ?? [];
     const repetition = history?.reward_repetition ?? [];
     const coherence = history?.reward_coherence ?? [];
     const len = perplexity.length;
@@ -37,7 +37,7 @@ export default function RLRewardComponentsChart({
       steps,
       new Float64Array(perplexity),
       new Float64Array(diversity),
-      new Float64Array(focus),
+      new Float64Array(sampling),
       new Float64Array(repetition),
       new Float64Array(coherence),
     ] as const;
@@ -84,7 +84,7 @@ export default function RLRewardComponentsChart({
             {},
             { label: "Perplexity", stroke: "#c084fc", width: 1.5 },
             { label: "Diversity", stroke: "#4ade80", width: 1.5 },
-            { label: "Focus", stroke: "#facc15", width: 1.5 },
+            { label: "Sampling", stroke: "#facc15", width: 1.5 },
             { label: "Repetition", stroke: "#fb923c", width: 1.5 },
             { label: "Coherence", stroke: "#38bdf8", width: 1.5 },
           ],

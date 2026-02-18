@@ -19,8 +19,6 @@ export function buildTrajectoryChartData(
       return [
         new Float64Array(0),
         new Float64Array(0),
-        new Float64Array(0),
-        new Float64Array(0),
       ];
     }
     return [
@@ -38,9 +36,7 @@ export function buildTrajectoryChartData(
   if (view === "signals") {
     return [
       steps,
-      new Float64Array(trajectory.gateSignals.map((s: [number, number, number]) => s[0])),
-      new Float64Array(trajectory.gateSignals.map((s: [number, number, number]) => s[1])),
-      new Float64Array(trajectory.gateSignals.map((s: [number, number, number]) => s[2])),
+      new Float64Array(trajectory.gateSignals.map((s: number[]) => s[0])),
     ];
   }
 
@@ -88,9 +84,7 @@ export default function GateTrajectoryChart({
       ],
       series: [
         {},
-        { label: "Creativity", stroke: "#f472b6", width: 1.5 },
-        { label: "Focus", stroke: "#60a5fa", width: 1.5 },
-        { label: "Stability", stroke: "#34d399", width: 1.5 },
+        { label: "Modulation", stroke: "#a78bfa", width: 1.5 },
       ],
     }),
     [],
