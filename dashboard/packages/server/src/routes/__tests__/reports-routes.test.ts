@@ -11,6 +11,7 @@ import type { ServerConfig } from "../../config.js";
 import { Database } from "../../services/database.js";
 import authPlugin from "../../plugins/auth.js";
 import reportsRoutes from "../reports.js";
+import type { GenerateReportRequest } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -412,6 +413,174 @@ describe("DELETE /api/reports/:id", () => {
 
     assert.equal(resp.statusCode, 404);
 
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/reports/generate
+// ---------------------------------------------------------------------------
+
+describe("POST /api/reports/generate", () => {
+  it("returns 401 without auth", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      payload: { pattern: "experiment-overview", experimentId: "exp-1" },
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("returns 400 for unknown pattern", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "nonexistent", experimentId: "exp-1" },
+    });
+
+    assert.equal(resp.statusCode, 400);
+    assert.match(resp.json().error, /Unknown pattern/);
+    await app.close();
+  });
+
+  it("returns 400 for missing experimentId", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "experiment-overview" },
+    });
+
+    assert.equal(resp.statusCode, 400);
+    assert.match(resp.json().error, /experimentId/);
+    await app.close();
+  });
+
+  it("creates report with experiment-overview pattern", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "experiment-overview", experimentId: "exp-123" } satisfies GenerateReportRequest,
+    });
+
+    assert.equal(resp.statusCode, 201);
+    const { report } = resp.json();
+    assert.ok(report.id);
+    assert.ok(report.blocks.length > 0);
+    // Verify experimentId appears in block props
+    const chartBlock = report.blocks.find((b: Record<string, unknown>) => b.type === "chart");
+    assert.ok(chartBlock);
+    assert.equal((chartBlock as { props: { experimentId: string } }).props.experimentId, "exp-123");
+    await app.close();
+  });
+
+  it("creates report with rl-analysis pattern", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "rl-analysis", experimentId: "exp-1" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.ok(resp.json().report.blocks.length > 0);
+    await app.close();
+  });
+
+  it("creates report with trajectory-report pattern", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "trajectory-report", experimentId: "exp-1" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.ok(resp.json().report.blocks.length > 0);
+    await app.close();
+  });
+
+  it("creates report with full-report pattern", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "full-report", experimentId: "exp-1" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    // full-report is all three patterns combined + a top heading
+    const { report } = resp.json();
+    assert.ok(report.blocks.length > 10);
+    await app.close();
+  });
+
+  it("uses custom title when provided", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "experiment-overview", experimentId: "exp-1", title: "My Custom Title" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.equal(resp.json().report.title, "My Custom Title");
+    await app.close();
+  });
+
+  it("associates user via githubLogin", async () => {
+    const { app, db } = await buildApp();
+
+    const user = db.upsertUser({
+      githubId: 42,
+      githubLogin: "octocat",
+      githubAvatarUrl: null,
+    });
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "experiment-overview", experimentId: "exp-1", githubLogin: "octocat" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.equal(resp.json().report.userId, user.id);
+    await app.close();
+  });
+
+  it("gracefully sets null userId for unknown githubLogin", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/generate",
+      headers: { authorization: AUTH_HEADER },
+      payload: { pattern: "experiment-overview", experimentId: "exp-1", githubLogin: "nobody" },
+    });
+
+    assert.equal(resp.statusCode, 201);
+    assert.equal(resp.json().report.userId, null);
     await app.close();
   });
 });

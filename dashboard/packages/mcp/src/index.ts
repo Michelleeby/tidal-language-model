@@ -13,6 +13,7 @@ import { registerPluginTools } from "./tools/plugin-tools.js";
 import { registerJobTools } from "./tools/job-tools.js";
 import { registerGenerationTools } from "./tools/generation-tools.js";
 import { registerAnalysisTools } from "./tools/analysis-tools.js";
+import { registerReportTools } from "./tools/report-tools.js";
 
 const BASE_URL = process.env.TIDAL_API_URL ?? "http://localhost:4400";
 const TOKEN = process.env.TIDAL_API_TOKEN;
@@ -24,12 +25,13 @@ const server = new McpServer({
 
 const client = new FetchTidalApiClient(BASE_URL, TOKEN);
 
-// Register all 13 tools
+// Register all 15 tools
 registerExperimentTools(server, client);
 registerPluginTools(server, client);
 registerJobTools(server, client);
 registerGenerationTools(server, client);
 registerAnalysisTools(server, client);
+registerReportTools(server, client);
 
 // Connect via stdio
 const transport = new StdioServerTransport();

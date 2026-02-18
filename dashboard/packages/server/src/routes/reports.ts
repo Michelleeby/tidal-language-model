@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { CreateReportRequest, UpdateReportRequest } from "@tidal/shared";
+import type { CreateReportRequest, UpdateReportRequest, GenerateReportRequest } from "@tidal/shared";
+import { buildPatternBlocks } from "@tidal/shared";
 
 export default async function reportsRoutes(fastify: FastifyInstance) {
   // List all reports (summaries only)
@@ -45,6 +46,42 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Report not found" });
       }
       return { report };
+    },
+  );
+
+  // Generate a report from a block pattern
+  fastify.post<{ Body: GenerateReportRequest }>(
+    "/api/reports/generate",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { pattern, experimentId, title, githubLogin } = request.body ?? {};
+
+      if (!experimentId) {
+        return reply.status(400).send({ error: "experimentId is required" });
+      }
+      if (!pattern) {
+        return reply.status(400).send({ error: "pattern is required" });
+      }
+
+      const blocks = buildPatternBlocks(pattern, experimentId);
+      if (!blocks) {
+        return reply.status(400).send({ error: `Unknown pattern: ${pattern}` });
+      }
+
+      // Resolve user from githubLogin if provided
+      let userId: string | undefined;
+      if (githubLogin) {
+        const user = fastify.db.getUserByGithubLogin(githubLogin);
+        if (user) userId = user.id;
+      }
+
+      const report = fastify.db.createReport(
+        title ?? `${pattern} — ${experimentId}`,
+        userId,
+      );
+      const updated = fastify.db.updateReport(report.id, { blocks });
+
+      return reply.status(201).send({ report: updated });
     },
   );
 
