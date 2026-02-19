@@ -7,7 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { FetchTidalApiClient } from "./http-client.js";
+import { FetchTidalApiClient, CachingTidalApiClient } from "./http-client.js";
 import { registerExperimentTools } from "./tools/experiment-tools.js";
 import { registerPluginTools } from "./tools/plugin-tools.js";
 import { registerJobTools } from "./tools/job-tools.js";
@@ -23,7 +23,11 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-const client = new FetchTidalApiClient(BASE_URL, TOKEN);
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const CACHE_DIR = process.env.TIDAL_CACHE_DIR ?? join(homedir(), ".cache", "tidal");
+const client = new CachingTidalApiClient(new FetchTidalApiClient(BASE_URL, TOKEN), CACHE_DIR);
 
 // Register all 15 tools
 registerExperimentTools(server, client);
