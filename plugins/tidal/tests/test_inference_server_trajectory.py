@@ -11,11 +11,12 @@ from unittest.mock import patch, MagicMock
 
 import torch
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.TransformerLM import TransformerLM
 from plugins.tidal.GatingModulator import GatingModulator, GatingEffects
 
 
-class TestInferenceServerTrajectory(unittest.TestCase):
+class TestInferenceServerTrajectory(TimedTestCase):
     """Tests for trajectory serialization in inference server responses."""
 
     @classmethod
@@ -195,7 +196,7 @@ class TestInferenceServerTrajectory(unittest.TestCase):
         self.assertNotIn("trajectory", data)
 
 
-class TestFixedModeCustomGateValues(unittest.TestCase):
+class TestFixedModeCustomGateValues(TimedTestCase):
     """Tests that fixed mode passes custom modulation value."""
 
     @classmethod
@@ -296,7 +297,7 @@ class TestFixedModeCustomGateValues(unittest.TestCase):
         self.assertFalse(all_same, "Random gating produced identical signals for every step")
 
 
-class TestAnalyzeTrajectoriesEndpoint(unittest.TestCase):
+class TestAnalyzeTrajectoriesEndpoint(TimedTestCase):
     """Tests for POST /analyze-trajectories."""
 
     @classmethod

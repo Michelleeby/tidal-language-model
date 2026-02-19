@@ -12,10 +12,11 @@ import os
 import torch
 import torch.nn as nn
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.TransformerLM import TransformerLM
 
 
-class TestMigrateGateDim(unittest.TestCase):
+class TestMigrateGateDim(TimedTestCase):
     """Tests for migrate_gate_dim function."""
 
     def setUp(self):
