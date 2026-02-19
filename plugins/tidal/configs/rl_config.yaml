@@ -31,7 +31,7 @@ RL_MAX_GRAD_NORM: 0.5  # Gradient clipping
 RL_ENTROPY_SCHEDULE: "homeostasis"
 
 # Homeostatic entropy regulation (used when RL_ENTROPY_SCHEDULE = "homeostasis")
-RL_POLICY_ENTROPY_TARGET: -1.0  # Target policy entropy (Beta dist entropy)
+RL_POLICY_ENTROPY_TARGET: -0.35  # Target policy entropy (1D Beta dist entropy)
 RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE: 0.05  # Boost rate when entropy < target
 RL_ENTROPY_HOMEOSTASIS_DECAY_RATE: 0.95  # Decay rate toward baseline
 RL_ENTROPY_COEF_MIN: 0.01  # Floor for entropy coefficient
@@ -45,7 +45,7 @@ RL_TOTAL_TIMESTEPS: 100000  # Total training steps
 RL_EMA_ALPHA: 0.05  # Smoothing factor for episode stat tracking (replaces deque)
 
 # Beta distribution concentration cap (prevents entropy collapse)
-# Beta(15,15) entropy ≈ -0.8; allows peaked distributions for exploitation
+# Beta(15,15) entropy ≈ -0.8; 1D Beta entropy ranges from ~-0.5 to ~-0.7
 RL_BETA_CONCENTRATION_MAX: 15.0
 
 # ============================================================================
@@ -90,11 +90,11 @@ RL_MODULATION_TOP_K_MAX: 100  # At modulation=1: wide sampling (top 100 tokens)
 # ============================================================================
 
 # Multi-component reward: reward = sum(weight_i * component_i)
-RL_REWARD_PERPLEXITY_WEIGHT: 0.30  # Lower perplexity = better
-RL_REWARD_DIVERSITY_WEIGHT: 0.25   # Higher diversity = better (raw logits entropy)
+RL_REWARD_PERPLEXITY_WEIGHT: 0.35  # Lower perplexity = better (quality)
+RL_REWARD_DIVERSITY_WEIGHT: 0.15   # Higher diversity = better (raw logits entropy)
 RL_REWARD_SAMPLING_WEIGHT: 0.15    # Sampling entropy of post-filtered distribution
 RL_REWARD_REPETITION_WEIGHT: 0.20  # Lower repetition = better
-RL_REWARD_COHERENCE_WEIGHT: 0.10   # Higher coherence = better
+RL_REWARD_COHERENCE_WEIGHT: 0.15   # Higher coherence = better (quality)
 
 # Reward normalization
 RL_PERPLEXITY_CLIP: 100.0  # Max perplexity before clipping

@@ -47,12 +47,12 @@ class RewardComputer:
         self.vocab_size = vocab_size
 
         # Reward component weights
-        self.perplexity_weight = config.get("RL_REWARD_PERPLEXITY_WEIGHT", 0.30)
-        self.diversity_weight = config.get("RL_REWARD_DIVERSITY_WEIGHT", 0.25)
+        self.perplexity_weight = config.get("RL_REWARD_PERPLEXITY_WEIGHT", 0.35)
+        self.diversity_weight = config.get("RL_REWARD_DIVERSITY_WEIGHT", 0.15)
         self.sampling_weight = config.get("RL_REWARD_SAMPLING_WEIGHT",
                                          config.get("RL_REWARD_FOCUS_WEIGHT", 0.15))
         self.repetition_weight = config.get("RL_REWARD_REPETITION_WEIGHT", 0.20)
-        self.coherence_weight = config.get("RL_REWARD_COHERENCE_WEIGHT", 0.10)
+        self.coherence_weight = config.get("RL_REWARD_COHERENCE_WEIGHT", 0.15)
 
         # Normalization parameters
         self.perplexity_clip = config.get("RL_PERPLEXITY_CLIP", 100.0)

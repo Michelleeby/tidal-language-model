@@ -66,7 +66,7 @@ class EntropyHomeostasis:
     def __init__(self, config: dict):
         self.baseline = config.get("RL_ENTROPY_COEF", 0.01)
         self.coef = self.baseline
-        self.target = config.get("RL_POLICY_ENTROPY_TARGET", -1.0)
+        self.target = config.get("RL_POLICY_ENTROPY_TARGET", -0.35)
         self.release_rate = config.get("RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE", 0.05)
         self.decay_rate = config.get("RL_ENTROPY_HOMEOSTASIS_DECAY_RATE", 0.95)
         self.coef_min = config.get("RL_ENTROPY_COEF_MIN", 0.01)

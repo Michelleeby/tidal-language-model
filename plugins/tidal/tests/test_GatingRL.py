@@ -1463,7 +1463,7 @@ class TestEntropyHomeostasis(TimedTestCase):
     def setUp(self):
         self.config = {
             "RL_ENTROPY_COEF": 0.01,
-            "RL_POLICY_ENTROPY_TARGET": -1.0,
+            "RL_POLICY_ENTROPY_TARGET": -0.35,
             "RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE": 0.05,
             "RL_ENTROPY_HOMEOSTASIS_DECAY_RATE": 0.95,
             "RL_ENTROPY_COEF_MIN": 0.01,
@@ -1475,7 +1475,7 @@ class TestEntropyHomeostasis(TimedTestCase):
         h = EntropyHomeostasis(self.config)
         self.assertAlmostEqual(h.coef, 0.01)
         self.assertAlmostEqual(h.baseline, 0.01)
-        self.assertAlmostEqual(h.target, -1.0)
+        self.assertAlmostEqual(h.target, -0.35)
         self.assertAlmostEqual(h.release_rate, 0.05)
         self.assertAlmostEqual(h.decay_rate, 0.95)
         self.assertAlmostEqual(h.coef_min, 0.01)
@@ -1485,7 +1485,7 @@ class TestEntropyHomeostasis(TimedTestCase):
         """Coef increases when entropy < target."""
         h = EntropyHomeostasis(self.config)
         initial_coef = h.coef
-        h.step(current_entropy=-2.5)  # well below target of -1.0
+        h.step(current_entropy=-0.7)  # well below target of -0.35
         self.assertGreater(h.coef, initial_coef)
 
     def test_no_boost_when_entropy_healthy(self):
@@ -1493,11 +1493,11 @@ class TestEntropyHomeostasis(TimedTestCase):
         h = EntropyHomeostasis(self.config)
         # First pump coef up
         for _ in range(50):
-            h.step(current_entropy=-3.0)
+            h.step(current_entropy=-0.7)
         pumped_coef = h.coef
         self.assertGreater(pumped_coef, h.baseline)
         # Now feed healthy entropy — coef should decrease
-        h.step(current_entropy=-0.5)
+        h.step(current_entropy=-0.1)
         self.assertLess(h.coef, pumped_coef)
 
     def test_decay_toward_baseline(self):
@@ -1505,10 +1505,10 @@ class TestEntropyHomeostasis(TimedTestCase):
         h = EntropyHomeostasis(self.config)
         # First pump coef up
         for _ in range(50):
-            h.step(current_entropy=-3.0)
+            h.step(current_entropy=-0.7)
         # Now let it decay with healthy entropy
         for _ in range(200):
-            h.step(current_entropy=-0.5)
+            h.step(current_entropy=-0.1)
         self.assertAlmostEqual(h.coef, h.baseline, places=2)
 
     def test_clamping_to_max(self):
@@ -1543,10 +1543,33 @@ class TestEntropyHomeostasis(TimedTestCase):
         h1 = EntropyHomeostasis(config)
         h2 = EntropyHomeostasis(config)
 
-        h1.step(current_entropy=-1.5)  # small deficit (target is -1.0)
-        h2.step(current_entropy=-3.0)  # large deficit
+        h1.step(current_entropy=-0.5)  # small deficit (target is -0.35)
+        h2.step(current_entropy=-1.0)  # large deficit
 
         self.assertGreater(h2.coef, h1.coef)
+
+    def test_triggers_for_1d_beta_entropy_range(self):
+        """Homeostasis triggers at entropy values observed with 1D Beta policy.
+
+        A 1D Beta distribution's entropy ranges from ~-0.5 to ~-0.7 during
+        training. The target must be calibrated so that these values fall below
+        it, triggering the release mechanism to boost entropy_coef.
+        """
+        h = EntropyHomeostasis(self.config)
+        initial_coef = h.coef
+
+        # Typical 1D Beta entropy values observed during RL training
+        h.step(current_entropy=-0.5)
+        boosted_at_minus_05 = h.coef > initial_coef
+
+        h2 = EntropyHomeostasis(self.config)
+        h2.step(current_entropy=-0.7)
+        boosted_at_minus_07 = h2.coef > h2.baseline
+
+        self.assertTrue(boosted_at_minus_05,
+                        "Homeostasis should trigger at entropy=-0.5 (1D Beta range)")
+        self.assertTrue(boosted_at_minus_07,
+                        "Homeostasis should trigger at entropy=-0.7 (1D Beta range)")
 
 
 class TestPPOTrainerHomeostaticSchedule(TimedTestCase):
@@ -1585,7 +1608,7 @@ class TestPPOTrainerHomeostaticSchedule(TimedTestCase):
         """RL_ENTROPY_SCHEDULE='homeostasis' creates EntropyHomeostasis instance."""
         config = self._base_config()
         config["RL_ENTROPY_SCHEDULE"] = "homeostasis"
-        config["RL_POLICY_ENTROPY_TARGET"] = -1.0
+        config["RL_POLICY_ENTROPY_TARGET"] = -0.35
         config["RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE"] = 0.05
         config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 0.95
         config["RL_ENTROPY_COEF_MIN"] = 0.01
@@ -1611,7 +1634,7 @@ class TestPPOTrainerHomeostaticSchedule(TimedTestCase):
         """history['entropy_coef'] is populated after train()."""
         config = self._base_config()
         config["RL_ENTROPY_SCHEDULE"] = "homeostasis"
-        config["RL_POLICY_ENTROPY_TARGET"] = -1.0
+        config["RL_POLICY_ENTROPY_TARGET"] = -0.35
         config["RL_ENTROPY_HOMEOSTASIS_RELEASE_RATE"] = 0.05
         config["RL_ENTROPY_HOMEOSTASIS_DECAY_RATE"] = 0.95
         config["RL_ENTROPY_COEF_MIN"] = 0.01
@@ -1668,11 +1691,11 @@ class TestSamplingReward(TimedTestCase):
 
     def setUp(self):
         self.config = {
-            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
-            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
             "RL_REWARD_SAMPLING_WEIGHT": 0.15,
             "RL_REWARD_REPETITION_WEIGHT": 0.20,
-            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
             "RL_PERPLEXITY_CLIP": 100.0,
             "RL_ENTROPY_TARGET": 5.0,
             "RL_SAMPLING_ENTROPY_TARGET": 2.5,
@@ -1722,11 +1745,11 @@ class TestSamplingRewardIntegration(TimedTestCase):
 
     def setUp(self):
         self.config = {
-            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
-            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
             "RL_REWARD_SAMPLING_WEIGHT": 0.15,
             "RL_REWARD_REPETITION_WEIGHT": 0.20,
-            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
             "RL_PERPLEXITY_CLIP": 100.0,
             "RL_ENTROPY_TARGET": 5.0,
             "RL_SAMPLING_ENTROPY_TARGET": 2.5,
@@ -1768,6 +1791,36 @@ class TestSamplingRewardIntegration(TimedTestCase):
         )
 
         self.assertNotAlmostEqual(comps_low["sampling"], comps_high["sampling"], places=2)
+
+
+class TestRewardWeightBalance(TimedTestCase):
+    """Tests that reward weights are rebalanced for 1D gate: quality > entropy."""
+
+    def test_production_weights_sum_to_one(self):
+        """Default reward weights must sum to 1.0."""
+        rc = RewardComputer({}, vocab_size=1000)
+        total = (rc.perplexity_weight + rc.diversity_weight +
+                 rc.sampling_weight + rc.repetition_weight +
+                 rc.coherence_weight)
+        self.assertAlmostEqual(total, 1.0, places=5,
+                               msg=f"Weights sum to {total}, expected 1.0")
+
+    def test_reward_computer_loads_rebalanced_weights(self):
+        """RewardComputer defaults reflect the 1D-gate rebalanced weights."""
+        rc = RewardComputer({}, vocab_size=1000)
+        self.assertAlmostEqual(rc.perplexity_weight, 0.35)
+        self.assertAlmostEqual(rc.diversity_weight, 0.15)
+        self.assertAlmostEqual(rc.sampling_weight, 0.15)
+        self.assertAlmostEqual(rc.repetition_weight, 0.20)
+        self.assertAlmostEqual(rc.coherence_weight, 0.15)
+
+    def test_diversity_no_longer_dominates_entropy_reward(self):
+        """Quality-related weights (perplexity + coherence) > entropy-related (diversity + sampling)."""
+        rc = RewardComputer({}, vocab_size=1000)
+        quality_weight = rc.perplexity_weight + rc.coherence_weight
+        entropy_weight = rc.diversity_weight + rc.sampling_weight
+        self.assertGreater(quality_weight, entropy_weight,
+                           f"Quality ({quality_weight}) should exceed entropy ({entropy_weight})")
 
 
 class TestNucleusSampling(TimedTestCase):
@@ -2037,11 +2090,11 @@ class TestAblationRewardParity(TimedTestCase):
             "RL_MODULATION_TOP_K_MAX": 100,
             "RL_MODULATION_TOP_P_MIN": 0.7,
             "RL_MODULATION_TOP_P_MAX": 1.0,
-            "RL_REWARD_PERPLEXITY_WEIGHT": 0.30,
-            "RL_REWARD_DIVERSITY_WEIGHT": 0.25,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
             "RL_REWARD_SAMPLING_WEIGHT": 0.15,
             "RL_REWARD_REPETITION_WEIGHT": 0.20,
-            "RL_REWARD_COHERENCE_WEIGHT": 0.10,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
             "RL_PERPLEXITY_CLIP": 100.0,
             "RL_ENTROPY_TARGET": 5.0,
             "RL_MAX_EPISODE_LENGTH": 50,
