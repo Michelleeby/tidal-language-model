@@ -4,8 +4,9 @@ import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
 import { useCheckpoints } from "../../../hooks/useMetrics.js";
 import { useTrajectoryAnalysis } from "../../../hooks/useTrajectoryAnalysis.js";
+import { useAnalyses, useAnalysis, useSaveAnalysis } from "../../../hooks/useAnalyses.js";
 import { gatingModeOptions } from "./TrajectoryChartBlock.js";
-import type { BatchAnalysis, AnalyzeRequest } from "@tidal/shared";
+import type { BatchAnalysis, AnalyzeRequest, AnalyzeResponse } from "@tidal/shared";
 import { CURATED_PROMPTS } from "@tidal/shared";
 
 const SIGNAL_NAMES = ["modulation"] as const;
@@ -127,14 +128,18 @@ export const CrossPromptBlock = createReactBlockSpec(
       ...defaultProps,
       experimentId: { default: "" },
       gatingMode: { default: "fixed" },
+      analysisId: { default: "" },
     },
     content: "none",
   },
   {
     render: ({ block, editor }: any) => {
-      const { experimentId, gatingMode } = block.props;
+      const { experimentId, gatingMode, analysisId } = block.props;
       const { data: expData } = useExperiments();
       const { data: checkpointsData } = useCheckpoints(experimentId || null);
+      const { data: cachedAnalyses } = useAnalyses(experimentId || null, "cross-prompt");
+      const { data: cachedData } = useAnalysis(analysisId || null);
+      const saveAnalysis = useSaveAnalysis();
       const isEditable = editor.isEditable;
       const analysis = useTrajectoryAnalysis();
 
@@ -155,11 +160,37 @@ export const CrossPromptBlock = createReactBlockSpec(
           maxTokens: 50,
           gatingMode: gatingMode as AnalyzeRequest["gatingMode"],
         };
-        analysis.mutate(body);
+        analysis.mutate(body, {
+          onSuccess: (data) => {
+            if (experimentId) {
+              saveAnalysis.mutate(
+                {
+                  expId: experimentId,
+                  analysisType: "cross-prompt",
+                  label: `Cross-prompt — ${gatingMode} — ${CURATED_PROMPTS.length} prompts`,
+                  request: body as unknown as Record<string, unknown>,
+                  data: data as unknown as Record<string, unknown>,
+                },
+                {
+                  onSuccess: (resp) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: resp.analysis.id },
+                    });
+                  },
+                },
+              );
+            }
+          },
+        });
       };
 
+      // Use cached data when available
+      const cachedBatch = cachedData?.analysis?.data
+        ? (cachedData.analysis.data as unknown as AnalyzeResponse).batchAnalysis
+        : undefined;
+      const batch = analysis.data?.batchAnalysis ?? cachedBatch;
+
       // Re-render canvas whenever analysis data changes
-      const batch = analysis.data?.batchAnalysis;
       useEffect(() => {
         if (!batch) return;
         const heatmap = extractHeatmapData(batch);
@@ -214,6 +245,24 @@ export const CrossPromptBlock = createReactBlockSpec(
               >
                 {analysis.isPending ? "Analyzing..." : "Run Analysis"}
               </button>
+              {(cachedAnalyses?.analyses ?? []).length > 0 && (
+                <select
+                  className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-xs px-2 py-1"
+                  value={analysisId}
+                  onChange={(e) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: e.target.value },
+                    });
+                  }}
+                >
+                  <option value="">Cached analyses...</option>
+                  {(cachedAnalyses?.analyses ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
 

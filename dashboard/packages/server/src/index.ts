@@ -30,6 +30,7 @@ import reportsRoutes from "./routes/reports.js";
 import authRoutes from "./routes/auth.js";
 import modelSourceRoutes from "./routes/model-source.js";
 import analyzeRoutes from "./routes/analyze.js";
+import analysesRoutes from "./routes/analyses.js";
 import adminRoutes from "./routes/admin.js";
 
 declare module "fastify" {
@@ -134,6 +135,7 @@ async function main() {
   await fastify.register(reportsRoutes);
   await fastify.register(modelSourceRoutes);
   await fastify.register(analyzeRoutes);
+  await fastify.register(analysesRoutes);
   await fastify.register(adminRoutes);
 
   // Serve built client in production

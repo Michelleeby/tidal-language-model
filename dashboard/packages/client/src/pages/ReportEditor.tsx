@@ -3,7 +3,13 @@ import { useExperimentStore } from "../stores/experimentStore.js";
 import { useReport, useUpdateReport } from "../hooks/useReports.js";
 import BlockEditor from "../components/reports/BlockEditor.js";
 import type { ReportBlock } from "../components/reports/BlockEditor.js";
-import { exportToHTML, exportToMarkdown } from "../utils/reportExport.js";
+import {
+  exportToHTML,
+  exportToMarkdown,
+  exportToInteractiveHTML,
+  captureBlockCanvases,
+} from "../utils/reportExport.js";
+import { api } from "../api/client.js";
 
 type SaveStatus = "saved" | "saving" | "unsaved";
 
@@ -66,15 +72,43 @@ export default function ReportEditor() {
     debouncedSave({ blocks });
   };
 
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+
+  /** Collect analysis data for all blocks that have an analysisId. */
+  const collectAnalysisData = async (): Promise<Map<string, Record<string, unknown>>> => {
+    const dataMap = new Map<string, Record<string, unknown>>();
+    const blocks = blocksRef.current;
+    const fetches = blocks
+      .filter((b) => (b.props as any)?.analysisId)
+      .map(async (b) => {
+        try {
+          const resp = await api.getAnalysis((b.props as any).analysisId);
+          dataMap.set(b.id, resp.analysis.data);
+        } catch {
+          // Skip blocks whose analysis cannot be fetched
+        }
+      });
+    await Promise.all(fetches);
+    return dataMap;
+  };
+
   const handleExportHTML = async () => {
     setExportMenuOpen(false);
-    const html = exportToHTML(titleRef.current, blocksRef.current);
+    const analysisData = await collectAnalysisData();
+    // Use interactive export if we have any analysis data, otherwise basic
+    const html = analysisData.size > 0
+      ? exportToInteractiveHTML(titleRef.current, blocksRef.current, analysisData)
+      : exportToHTML(titleRef.current, blocksRef.current);
     downloadFile(`${titleRef.current || "report"}.html`, html, "text/html");
   };
 
   const handleExportMarkdown = async () => {
     setExportMenuOpen(false);
-    const md = exportToMarkdown(titleRef.current, blocksRef.current);
+    // Capture canvases from the live editor DOM
+    const captures = editorContainerRef.current
+      ? captureBlockCanvases(editorContainerRef.current)
+      : undefined;
+    const md = exportToMarkdown(titleRef.current, blocksRef.current, captures);
     downloadFile(`${titleRef.current || "report"}.md`, md, "text/markdown");
   };
 
@@ -157,10 +191,12 @@ export default function ReportEditor() {
       </div>
 
       {/* Block editor */}
-      <BlockEditor
-        initialBlocks={(data?.report?.blocks ?? []) as ReportBlock[]}
-        onChange={handleBlocksChange}
-      />
+      <div ref={editorContainerRef}>
+        <BlockEditor
+          initialBlocks={(data?.report?.blocks ?? []) as ReportBlock[]}
+          onChange={handleBlocksChange}
+        />
+      </div>
     </div>
   );
 }

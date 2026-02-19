@@ -4,7 +4,8 @@ import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
 import { useCheckpoints } from "../../../hooks/useMetrics.js";
 import { useTrajectoryAnalysis } from "../../../hooks/useTrajectoryAnalysis.js";
-import type { SweepAnalysis, AnalyzeRequest } from "@tidal/shared";
+import { useAnalyses, useAnalysis, useSaveAnalysis } from "../../../hooks/useAnalyses.js";
+import type { SweepAnalysis, AnalyzeRequest, AnalyzeResponse } from "@tidal/shared";
 
 const SIGNAL_NAMES = ["modulation"] as const;
 const SIGNAL_COLORS = ["#a78bfa"] as const;
@@ -187,14 +188,18 @@ export const SweepBlock = createReactBlockSpec(
       ...defaultProps,
       experimentId: { default: "" },
       prompt: { default: "Once upon a time," },
+      analysisId: { default: "" },
     },
     content: "none",
   },
   {
     render: ({ block, editor }: any) => {
-      const { experimentId, prompt } = block.props;
+      const { experimentId, prompt, analysisId } = block.props;
       const { data: expData } = useExperiments();
       const { data: checkpointsData } = useCheckpoints(experimentId || null);
+      const { data: cachedAnalyses } = useAnalyses(experimentId || null, "sweep");
+      const { data: cachedData } = useAnalysis(analysisId || null);
+      const saveAnalysis = useSaveAnalysis();
       const isEditable = editor.isEditable;
       const analysis = useTrajectoryAnalysis();
 
@@ -216,10 +221,35 @@ export const SweepBlock = createReactBlockSpec(
           gatingMode: "fixed",
           includeExtremeValues: true,
         };
-        analysis.mutate(body);
+        analysis.mutate(body, {
+          onSuccess: (data) => {
+            if (experimentId) {
+              saveAnalysis.mutate(
+                {
+                  expId: experimentId,
+                  analysisType: "sweep",
+                  label: `Sweep — "${prompt.slice(0, 30)}"`,
+                  request: body as unknown as Record<string, unknown>,
+                  data: data as unknown as Record<string, unknown>,
+                },
+                {
+                  onSuccess: (resp) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: resp.analysis.id },
+                    });
+                  },
+                },
+              );
+            }
+          },
+        });
       };
 
-      const sweep = analysis.data?.sweepAnalysis;
+      // Use cached data when available
+      const cachedSweep = cachedData?.analysis?.data
+        ? (cachedData.analysis.data as unknown as AnalyzeResponse).sweepAnalysis
+        : undefined;
+      const sweep = analysis.data?.sweepAnalysis ?? cachedSweep;
 
       // Re-render canvas whenever sweep data changes or canvas mounts
       useEffect(() => {
@@ -261,6 +291,24 @@ export const SweepBlock = createReactBlockSpec(
                 >
                   {analysis.isPending ? "Sweeping..." : "Run Sweep"}
                 </button>
+                {(cachedAnalyses?.analyses ?? []).length > 0 && (
+                  <select
+                    className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-xs px-2 py-1"
+                    value={analysisId}
+                    onChange={(e) => {
+                      editor.updateBlock(block, {
+                        props: { analysisId: e.target.value },
+                      });
+                    }}
+                  >
+                    <option value="">Cached analyses...</option>
+                    {(cachedAnalyses?.analyses ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <textarea
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 resize-none"

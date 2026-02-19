@@ -177,6 +177,56 @@ export const CURATED_PROMPTS: string[] = [
   "\"I have an idea,\" said Ben with a big smile.",
 ];
 
+// ---------------------------------------------------------------------------
+// Analysis cache types
+// ---------------------------------------------------------------------------
+
+export type AnalysisType = "trajectory" | "cross-prompt" | "sweep";
+
+/** Summary of a cached analysis result (no data blob). */
+export interface AnalysisResultSummary {
+  id: string;
+  experimentId: string;
+  analysisType: AnalysisType;
+  label: string;
+  createdAt: number;
+  sizeBytes: number;
+}
+
+/** Full cached analysis result including request params and data. */
+export interface AnalysisResult extends AnalysisResultSummary {
+  request: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+/** POST /api/experiments/:expId/analyses */
+export interface CreateAnalysisRequest {
+  analysisType: AnalysisType;
+  label: string;
+  request: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+/** GET /api/experiments/:expId/analyses */
+export interface AnalysisListResponse {
+  analyses: AnalysisResultSummary[];
+}
+
+/** GET /api/analyses/:id */
+export interface AnalysisResponse {
+  analysis: AnalysisResult;
+}
+
+/** POST /api/experiments/:expId/analyses */
+export interface CreateAnalysisResponse {
+  analysis: AnalysisResult;
+}
+
+/** DELETE /api/analyses/:id */
+export interface DeleteAnalysisResponse {
+  deleted: boolean;
+}
+
 /** GET /api/plugins/:name/configs/:filename */
 export interface ConfigFileResponse {
   filename: string;
