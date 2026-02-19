@@ -1,6 +1,6 @@
 # Tidal Language Model
 
-A **Gated Transformer** language model (~30.7M parameters) with an **RL-learned gating controller** that modulates generation behavior at inference time. The model is pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) using GPT-2 BPE tokenization (50,257 vocab), then a PPO agent learns to control three gate signals — **creativity**, **focus**, and **stability** — that dynamically scale attention and FFN outputs across all transformer layers.
+A **Gated Transformer** language model (~30.7M parameters) with an **RL-learned gating controller** that modulates generation behavior at inference time. The model is pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) using GPT-2 BPE tokenization (50,257 vocab), then a PPO agent learns to control a single **modulation** gate on a conservative-to-exploratory axis that dynamically scales attention and FFN outputs across all transformer layers.
 
 ## Architecture
 
@@ -13,25 +13,22 @@ Input tokens
   → LayerNorm → Output Projection → Logits (50,257)
 ```
 
-Each `GatedTransformerBlock` contains two `DynamicGate` modules (one for attention, one for FFN). These are small MLPs (`3 → 32 → 256 → sigmoid`) that convert 3D gate signals into per-dimension scaling factors applied to the residual stream. Initialized with bias = 2.0 so `sigmoid(output) ≈ 1.0` at the start (neutral — no effect). When no gate signals are provided, gates produce unit scaling.
+Each `GatedTransformerBlock` contains two `DynamicGate` modules (one for attention, one for FFN). These are small MLPs (`1 → 32 → 256 → sigmoid`) that convert a 1D modulation signal into per-dimension scaling factors applied to the residual stream. Initialized with bias = 2.0 so `sigmoid(output) ≈ 1.0` at the start (neutral — no effect). When no gate signals are provided, gates produce unit scaling.
 
 Training uses cross-entropy loss with gradient accumulation, mixed-precision (AMP), cosine LR annealing with warmup, and `torch.compile`.
 
 ### Phase 2 — RL Gating Controller (`GatingPolicyAgent`)
 
-A PPO actor-critic agent observes a **64D** vector (token statistics, chunked hidden-state summaries, generation context) and outputs continuous actions in `[0, 1]` via a Beta distribution:
+A PPO actor-critic agent observes a **64D** vector (token statistics, chunked hidden-state summaries, generation context) and outputs a single continuous action in `[0, 1]` via a Beta distribution — the **modulation** signal:
 
-| Signal | Effect |
-|---|---|
-| **creativity** | Scales sampling temperature (`0.5×` – `1.5×` base) |
-| **focus** | Adds position-based attention bias toward recent context |
-| **stability** | Scales repetition penalty (`1×` – `2.5×` base) |
+- **0.0 = conservative**: low temperature, narrow top-k, tight top-p, mild repetition penalty
+- **1.0 = exploratory**: high temperature, wide top-k, full top-p, strong repetition penalty
 
-The `GatingModulator` maps actions to generation parameters, and the `RewardComputer` provides dense per-step rewards from perplexity, diversity, repetition, and coherence components.
+All four generation parameters move monotonically with modulation, eliminating the redundancy of the [previous 3-gate design](research/adrs/0001-single-modulation-gate.md). The `GatingModulator` maps the action to generation parameters, and the `RewardComputer` provides dense per-step rewards from perplexity, diversity, sampling entropy, repetition, and coherence components (weighted 50% quality, 30% entropy, 20% penalty).
 
 ### Real-Time Dashboard
 
-A monitoring dashboard built with **Fastify 5 + React 19 + Redis 7** (replacing the deprecated Streamlit dashboard). Training metrics flow from `MetricsLogger` → Redis (real-time SSE) + JSONL (archival) → Fastify API → React frontend.
+A monitoring dashboard built with **Fastify 5 + React 19 + Redis 7** (replacing the deprecated Streamlit dashboard). Training metrics flow from `MetricsLogger` → Redis (real-time SSE) + JSONL (archival) → Fastify API → React frontend. An **MCP server** (`dashboard/packages/mcp/`) exposes experiment data to Claude Code with a [lazy disk cache](research/adrs/0004-lazy-disk-cache-for-mcp-http-client.md) that eliminates redundant network calls for completed experiments.
 
 ![Training metrics dashboard](docs/images/dashboard-training.png)
 
@@ -97,36 +94,46 @@ Authorization: Bearer your-secret-token-here
 
 ```
 tidal-language-model/
-├── TransformerLM.py          # Gated Transformer language model
-├── GatingPolicyAgent.py      # PPO actor-critic for gate control
-├── GatingEnvironment.py      # RL environment wrapping the LM
-├── GatingModulator.py        # Maps gate signals → generation params
-├── RewardComputer.py         # Multi-component reward function
-├── Main.py                   # Phase 1 training entry point
-├── train_rl.py               # Phase 2 RL training entry point
-├── Trainer.py                # LM training loop
-├── RLTrainer.py              # PPO training loop
-├── Generator.py              # Text generation (with optional RL gating)
-├── Evaluator.py              # Model evaluation
-├── DataPipeline.py           # TinyStories loading + GPT-2 BPE tokenization
-├── MetricsLogger.py          # Redis + JSONL metrics logging
-├── worker_agent.py           # Job worker (spawns training subprocesses)
-├── DynamicLRScheduler.py     # Cosine annealing with warmup
-├── Utils.py                  # Shared utilities
-├── configs/                  # YAML config files (gitignored)
-├── experiments/              # Checkpoints and run artifacts
-├── tests/                    # Unit tests (unittest)
-├── dashboard/                # Fastify + React monitoring dashboard
-│   ├── docker-compose.yml    # Redis 7 service
+├── plugins/tidal/               # Model plugin (all model-specific code)
+│   ├── TransformerLM.py         # Gated Transformer language model
+│   ├── GatingPolicyAgent.py     # PPO actor-critic for gate control
+│   ├── GatingEnvironment.py     # RL environment wrapping the LM
+│   ├── GatingModulator.py       # Maps modulation signal → generation params
+│   ├── RewardComputer.py        # Multi-component reward function
+│   ├── Main.py                  # Phase 1 training entry point
+│   ├── train_rl.py              # Phase 2 RL training entry point
+│   ├── Trainer.py               # LM training loop
+│   ├── RLTrainer.py             # PPO training loop (with entropy homeostasis)
+│   ├── Generator.py             # Text generation (with optional RL gating)
+│   ├── Evaluator.py             # Model evaluation
+│   ├── DataPipeline.py          # TinyStories loading + GPT-2 BPE (uint16 cache)
+│   ├── TrajectoryAnalyzer.py    # Gate signal trajectory analysis
+│   ├── DynamicLRScheduler.py    # Cosine annealing with warmup
+│   ├── migrate_checkpoint.py    # 3-gate → 1-gate checkpoint migration
+│   ├── inference_server.py      # Inference server for dashboard
+│   ├── Utils.py                 # Shared utilities
+│   ├── manifest.yaml            # Plugin descriptor (phases, checkpoints, metrics)
+│   ├── configs/                 # YAML config files (gitignored)
+│   └── tests/                   # Model unit tests (unittest)
+├── MetricsLogger.py             # Redis + JSONL metrics logging
+├── worker_agent.py              # Job worker (spawns training subprocesses)
+├── experiment_utils.py          # Experiment ID generation and utilities
+├── tests/                       # Infrastructure unit tests (unittest)
+├── dashboard/                   # Fastify + React monitoring dashboard
+│   ├── docker-compose.yml       # Redis 7 service
 │   └── packages/
-│       ├── server/           # Fastify 5 API (port 4400)
+│       ├── server/              # Fastify 5 API (port 4400)
 │       │   └── src/
-│       │       ├── plugins/  # Auth & rate limiting
-│       │       ├── services/ # Job orchestrator, store, worker spawner
-│       │       └── routes/   # REST + SSE endpoints
-│       ├── client/           # React 19 / Vite 6 (port 5173)
-│       └── shared/           # Shared types
-├── legacy_research/          # Original physics-based architecture
+│       │       ├── plugins/     # Auth & rate limiting
+│       │       ├── services/    # Job orchestrator, store, worker spawner
+│       │       └── routes/      # REST + SSE endpoints
+│       ├── client/              # React 19 / Vite 6 (port 5173)
+│       ├── mcp/                 # MCP server (with lazy disk cache)
+│       └── shared/              # Shared types
+├── research/                    # ADRs, session logs, experiment data
+├── experiments/                 # Checkpoints and run artifacts
+├── scripts/                     # Utility scripts
+├── legacy_research/             # Original physics-based architecture
 └── requirements.txt
 ```
 
@@ -158,7 +165,7 @@ pip3 install torch torchvision --index-url "https://download.pytorch.org/whl/${C
 ### Train the Language Model (Phase 1)
 
 ```bash
-python3 Main.py --config configs/base_config.yaml
+python3 plugins/tidal/Main.py --config plugins/tidal/configs/base_config.yaml
 ```
 
 Checkpoints are saved as raw `state_dict` files to `experiments/<experiment_id>/`.
@@ -168,9 +175,9 @@ Checkpoints are saved as raw `state_dict` files to `experiments/<experiment_id>/
 Requires a trained TransformerLM checkpoint:
 
 ```bash
-python3 train_rl.py \
-    --config configs/base_config.yaml \
-    --rl-config configs/rl_config.yaml \
+python3 plugins/tidal/train_rl.py \
+    --config plugins/tidal/configs/base_config.yaml \
+    --rl-config plugins/tidal/configs/rl_config.yaml \
     --checkpoint experiments/<experiment_id>/transformer-lm_v1.0.0.pth
 ```
 
@@ -179,8 +186,8 @@ python3 train_rl.py \
 Standard generation:
 
 ```bash
-python3 Generator.py \
-    --config configs/base_config.yaml \
+python3 plugins/tidal/Generator.py \
+    --config plugins/tidal/configs/base_config.yaml \
     --checkpoint experiments/<experiment_id>/checkpoint_foundational_epoch_1.pth \
     --prompt "Once upon a time" --max_tokens 50 --temperature 0.8 --top_k 50
 ```
@@ -188,8 +195,8 @@ python3 Generator.py \
 With RL-controlled gating:
 
 ```bash
-python3 Generator.py \
-    --config configs/base_config.yaml \
+python3 plugins/tidal/Generator.py \
+    --config plugins/tidal/configs/base_config.yaml \
     --checkpoint <model_checkpoint> \
     --rl-agent --rl-checkpoint <rl_checkpoint> \
     --prompt "Once upon a time"
@@ -198,7 +205,11 @@ python3 Generator.py \
 ### Run Tests
 
 ```bash
+# Infrastructure tests
 python -m unittest discover -s tests -v
+
+# Model tests
+python -m unittest discover -s plugins/tidal/tests -v
 ```
 
 ### Start the Dashboard
@@ -222,128 +233,25 @@ cd dashboard && docker compose up -d && npm run dev
 
 ## Configuration
 
-Config files live in `configs/` (gitignored). Two YAML files control training:
+Two YAML files in [`plugins/tidal/configs/`](plugins/tidal/configs/) control training:
 
-- **`base_config.yaml`** — Model architecture, data pipeline, and LM training hyperparameters
-- **`rl_config.yaml`** — PPO agent, gating modulator, reward function, and RL training loop
+- [**`base_config.yaml`**](plugins/tidal/configs/base_config.yaml) — Model architecture, data pipeline, and LM training hyperparameters
+- [**`rl_config.yaml`**](plugins/tidal/configs/rl_config.yaml) — PPO agent, gating modulator, reward function, and RL training loop
 
-### Example: `configs/base_config.yaml`
+## Architecture Decision Records
 
-```yaml
-# Model Architecture
-MODEL_VERSION: "1.0.0"
-MODEL_NAME: "transformer-lm"
-EMBED_DIM: 256
-NUM_TRANSFORMER_BLOCKS: 6
-NUM_ATTENTION_HEADS: 8
-FFN_HIDDEN_DIM: 1024
-DROPOUT: 0.1
-MAX_CONTEXT_LENGTH: 256
+Design decisions are documented in [`research/adrs/`](research/adrs/):
 
-# Data Pipeline
-DATASET: "roneneldan/TinyStories"
-TOKENIZER: "gpt2"
-VOCAB_SIZE: 50257
-
-# Training Hyperparameters
-BATCH_SIZE: 64
-DESIRED_BATCH_SIZE: 2048
-NUM_EPOCHS: 12
-PATIENCE: 5
-MIN_DELTA: 0.0001
-
-# Learning Rate Schedule (cosine annealing with warmup)
-LEARNING_RATE_SCHEDULER:
-  WARMUP_RATIO: 0.1
-  BASE_LR: 0.001
-  MIN_LR: 1.0e-6
-
-# Evaluation & Logging
-EVAL_BATCH_SIZE: 64
-VALIDATION_SPLIT_RATIO: 0.1
-NUM_CPU_CORE_WORKERS: 4
-LOG_DIRECTORY: "logs"
-ENABLE_CONSOLE_LOGGING: false
-TRAINING_MODEL_ARTIFACT_CACHE_FREQUENCY: 1
-
-# Device & Optimization
-DEVICE: "auto"
-MAX_GRAD_NORM: 1.0
-
-# TensorBoard
-TENSORBOARD_TAGS:
-  LOSSES: "Loss"
-  LEARNING_RATE: "Learning"
-```
-
-### Example: `configs/rl_config.yaml`
-
-```yaml
-# RL Agent
-RL_AGENT_TYPE: "beta"
-RL_OBSERVATION_DIM: 64
-RL_ACTION_DIM: 3
-RL_HIDDEN_DIM: 128
-
-# PPO Hyperparameters
-RL_LEARNING_RATE: 3.0e-4
-RL_GAMMA: 0.99
-RL_GAE_LAMBDA: 0.95
-RL_CLIP_EPSILON: 0.2
-RL_ENTROPY_COEF: 0.01
-RL_VALUE_COEF: 0.5
-RL_MAX_GRAD_NORM: 0.5
-
-# Training Loop
-RL_ROLLOUT_STEPS: 128
-RL_NUM_EPOCHS: 4
-RL_BATCH_SIZE: 32
-RL_TOTAL_TIMESTEPS: 100000
-
-# Environment
-RL_MAX_EPISODE_LENGTH: 50
-RL_PROMPT_MIN_LENGTH: 3
-RL_PROMPT_MAX_LENGTH: 10
-RL_TOP_K: 40
-
-# Gating Modulator (how signals affect generation)
-RL_BASE_TEMPERATURE: 1.0
-RL_BASE_REPETITION_PENALTY: 1.2
-RL_CREATIVITY_TEMP_MIN: 0.5
-RL_CREATIVITY_TEMP_MAX: 1.5
-RL_STABILITY_PENALTY_MIN: 1.0
-RL_STABILITY_PENALTY_MAX: 2.5
-RL_FOCUS_ATTENTION_STRENGTH: 2.0
-
-# Reward Function Weights
-RL_REWARD_PERPLEXITY_WEIGHT: 0.4
-RL_REWARD_DIVERSITY_WEIGHT: 0.3
-RL_REWARD_REPETITION_WEIGHT: 0.2
-RL_REWARD_COHERENCE_WEIGHT: 0.1
-RL_PERPLEXITY_CLIP: 100.0
-RL_ENTROPY_TARGET: 5.0
-
-# Evaluation
-RL_EVAL_EPISODES: 50
-RL_EVAL_INTERVAL: 1000
-
-# Logging
-RL_LOG_INTERVAL: 10
-RL_METRICS_INTERVAL: 50
-RL_CHECKPOINT_INTERVAL: 100
-
-# TensorBoard
-TENSORBOARD_TAGS:
-  LOSSES: "Loss"
-  LEARNING_RATE: "Learning"
-  RL_REWARDS: "RL/Rewards"
-  RL_POLICY: "RL/Policy"
-  RL_GATING: "RL/Gating"
-```
+| ADR | Decision |
+|---|---|
+| [0001](research/adrs/0001-single-modulation-gate.md) | Collapse 3-gate system to single modulation gate |
+| [0002](research/adrs/0002-uint16-data-cache.md) | Use uint16 for tokenized data cache (4x size reduction) |
+| [0003](research/adrs/0003-recalibrate-entropy-homeostasis-and-reward-weights.md) | Recalibrate entropy homeostasis and reward weights for 1D gate |
+| [0004](research/adrs/0004-lazy-disk-cache-for-mcp-http-client.md) | Lazy disk cache for MCP HTTP client |
 
 ## Legacy
 
-The original architecture used an N-body physics simulation in 2D space with a "Semantic Endocrine System" for modulating embeddings. That work has been archived to `legacy_research/` along with its [README](legacy_research/README.md).
+The original architecture used an N-body physics simulation in 2D space with a "Semantic Endocrine System" for modulating embeddings. That work has been archived to `research/legacy` along with its [README](research/legacy/README.md).
 
 ## License
 
