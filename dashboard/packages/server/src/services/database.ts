@@ -6,6 +6,9 @@ import type {
   BlockContent,
   User,
   AllowedUser,
+  AnalysisResult,
+  AnalysisResultSummary,
+  AnalysisType,
 } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +41,17 @@ interface ReportRow {
   updated_at: number;
 }
 
+interface AnalysisResultRow {
+  id: string;
+  experiment_id: string;
+  analysis_type: string;
+  label: string;
+  request: string; // JSON text
+  data: string; // JSON text
+  size_bytes: number;
+  created_at: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -59,6 +73,30 @@ function allowedUserRowToAllowedUser(row: AllowedUserRow): AllowedUser {
     id: row.id,
     githubLogin: row.github_login,
     addedBy: row.added_by,
+    createdAt: row.created_at,
+  };
+}
+
+function analysisRowToResult(row: AnalysisResultRow): AnalysisResult {
+  return {
+    id: row.id,
+    experimentId: row.experiment_id,
+    analysisType: row.analysis_type as AnalysisType,
+    label: row.label,
+    request: JSON.parse(row.request) as Record<string, unknown>,
+    data: JSON.parse(row.data) as Record<string, unknown>,
+    sizeBytes: row.size_bytes,
+    createdAt: row.created_at,
+  };
+}
+
+function analysisRowToSummary(row: AnalysisResultRow): AnalysisResultSummary {
+  return {
+    id: row.id,
+    experimentId: row.experiment_id,
+    analysisType: row.analysis_type as AnalysisType,
+    label: row.label,
+    sizeBytes: row.size_bytes,
     createdAt: row.created_at,
   };
 }
@@ -129,6 +167,20 @@ export class Database {
         added_by TEXT,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS analysis_results (
+        id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        label TEXT NOT NULL,
+        request TEXT NOT NULL DEFAULT '{}',
+        data TEXT NOT NULL DEFAULT '{}',
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_analysis_results_experiment
+        ON analysis_results(experiment_id);
     `);
 
     // Migrations for existing databases
@@ -191,6 +243,17 @@ export class Database {
       countAllowedUsers: this.db.prepare(
         "SELECT COUNT(*) AS cnt FROM allowed_users",
       ),
+
+      // Analysis results
+      createAnalysis: this.db.prepare(`
+        INSERT INTO analysis_results (id, experiment_id, analysis_type, label, request, data, size_bytes, created_at)
+        VALUES (@id, @experimentId, @analysisType, @label, @request, @data, @sizeBytes, @now)
+      `),
+      getAnalysis: this.db.prepare("SELECT * FROM analysis_results WHERE id = ?"),
+      listAnalysesByExperiment: this.db.prepare(
+        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC",
+      ),
+      deleteAnalysis: this.db.prepare("DELETE FROM analysis_results WHERE id = ?"),
     };
   }
 
@@ -349,6 +412,56 @@ export class Database {
   countAllowedUsers(): number {
     const row = this.stmts.countAllowedUsers.get() as { cnt: number };
     return row.cnt;
+  }
+
+  // -------------------------------------------------------------------------
+  // Analysis results
+  // -------------------------------------------------------------------------
+
+  createAnalysis(params: {
+    experimentId: string;
+    analysisType: AnalysisType;
+    label: string;
+    request: Record<string, unknown>;
+    data: Record<string, unknown>;
+  }): AnalysisResult {
+    const now = Date.now();
+    const id = nanoid();
+    const requestJson = JSON.stringify(params.request);
+    const dataJson = JSON.stringify(params.data);
+    const sizeBytes = Buffer.byteLength(dataJson, "utf-8");
+
+    this.stmts.createAnalysis.run({
+      id,
+      experimentId: params.experimentId,
+      analysisType: params.analysisType,
+      label: params.label,
+      request: requestJson,
+      data: dataJson,
+      sizeBytes,
+      now,
+    });
+
+    return analysisRowToResult(
+      this.stmts.getAnalysis.get(id) as AnalysisResultRow,
+    );
+  }
+
+  getAnalysis(id: string): AnalysisResult | null {
+    const row = this.stmts.getAnalysis.get(id) as AnalysisResultRow | undefined;
+    return row ? analysisRowToResult(row) : null;
+  }
+
+  listAnalyses(experimentId: string): AnalysisResultSummary[] {
+    const rows = this.stmts.listAnalysesByExperiment.all(
+      experimentId,
+    ) as AnalysisResultRow[];
+    return rows.map(analysisRowToSummary);
+  }
+
+  deleteAnalysis(id: string): boolean {
+    const result = this.stmts.deleteAnalysis.run(id);
+    return result.changes > 0;
   }
 
   // -------------------------------------------------------------------------

@@ -31,6 +31,7 @@ import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
 import LogTailCard from "../components/logs/LogTailCard.js";
 import ConfigViewer from "../components/config/ConfigViewer.js";
 import GenerationSection from "../components/generation/GenerationSection.js";
+import AnalysisSection from "../components/analysis/AnalysisSection.js";
 import ChartExportButton from "../components/charts/ChartExportButton.js";
 import { lttbDownsample } from "../utils/downsample.js";
 import { useReportData } from "../hooks/useReportData.js";
@@ -400,7 +401,12 @@ export default function ExperimentNotebook() {
         <GenerationSection expId={selectedExpId} />
       </CollapsibleSection>
 
-      {/* 6. Samples */}
+      {/* 6. Analysis */}
+      <CollapsibleSection title="Analysis">
+        <AnalysisSection expId={selectedExpId} />
+      </CollapsibleSection>
+
+      {/* 7. Samples */}
       <CollapsibleSection title="Samples">
         <SamplePreviews results={evalData?.results ?? null} />
       </CollapsibleSection>

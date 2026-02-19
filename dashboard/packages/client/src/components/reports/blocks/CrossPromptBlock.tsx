@@ -4,12 +4,16 @@ import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
 import { useCheckpoints } from "../../../hooks/useMetrics.js";
 import { useTrajectoryAnalysis } from "../../../hooks/useTrajectoryAnalysis.js";
+import { useAnalyses, useAnalysis, useSaveAnalysis } from "../../../hooks/useAnalyses.js";
 import { gatingModeOptions } from "./TrajectoryChartBlock.js";
-import type { BatchAnalysis, AnalyzeRequest } from "@tidal/shared";
+import {
+  renderHeatmap,
+  SIGNAL_NAMES,
+  SIGNAL_COLORS,
+  HEATMAP_DIMENSIONS,
+} from "../../../utils/chartRenderers.js";
+import type { BatchAnalysis, AnalyzeRequest, AnalyzeResponse } from "@tidal/shared";
 import { CURATED_PROMPTS } from "@tidal/shared";
-
-const SIGNAL_NAMES = ["modulation"] as const;
-const SIGNAL_COLORS = ["#a78bfa"] as const;
 
 // ---------------------------------------------------------------------------
 // Pure data extraction functions (exported for testing)
@@ -41,80 +45,8 @@ export function extractVarianceSummary(
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Canvas rendering helpers
-// ---------------------------------------------------------------------------
-
-const HEATMAP_W = 600;
-const HEATMAP_H = 300;
-
-function renderHeatmap(
-  canvas: HTMLCanvasElement | null,
-  data: ReturnType<typeof extractHeatmapData>,
-) {
-  if (!canvas || data.prompts.length === 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = HEATMAP_W * dpr;
-  canvas.height = HEATMAP_H * dpr;
-  canvas.style.width = `${HEATMAP_W}px`;
-  canvas.style.height = `${HEATMAP_H}px`;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, HEATMAP_W, HEATMAP_H);
-
-  const labelW = 180;
-  const headerH = 24;
-  const cellW = (HEATMAP_W - labelW) / data.signals.length;
-  const cellH = Math.min(24, (HEATMAP_H - headerH) / data.prompts.length);
-
-  // Column headers
-  ctx.font = "11px monospace";
-  ctx.textAlign = "center";
-  for (let j = 0; j < data.signals.length; j++) {
-    ctx.fillStyle = SIGNAL_COLORS[j];
-    ctx.fillText(
-      data.signals[j],
-      labelW + j * cellW + cellW / 2,
-      headerH - 6,
-    );
-  }
-
-  // Rows
-  for (let i = 0; i < data.prompts.length; i++) {
-    const y = headerH + i * cellH;
-
-    // Prompt label (truncated)
-    ctx.fillStyle = "#9ca3af";
-    ctx.font = "10px monospace";
-    ctx.textAlign = "right";
-    const label =
-      data.prompts[i].length > 28
-        ? data.prompts[i].slice(0, 28) + "..."
-        : data.prompts[i];
-    ctx.fillText(label, labelW - 8, y + cellH / 2 + 3);
-
-    // Cells
-    for (let j = 0; j < data.signals.length; j++) {
-      const v = data.values[i][j]; // [0,1]
-      const x = labelW + j * cellW;
-
-      // Color: blend from dark to signal color based on value
-      const r = parseInt(SIGNAL_COLORS[j].slice(1, 3), 16);
-      const g = parseInt(SIGNAL_COLORS[j].slice(3, 5), 16);
-      const b = parseInt(SIGNAL_COLORS[j].slice(5, 7), 16);
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.15 + v * 0.85})`;
-      ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
-
-      // Value text
-      ctx.fillStyle = v > 0.5 ? "#111827" : "#e5e7eb";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(v.toFixed(2), x + cellW / 2, y + cellH / 2 + 3);
-    }
-  }
-}
+const HEATMAP_W = HEATMAP_DIMENSIONS.width;
+const HEATMAP_H = HEATMAP_DIMENSIONS.height;
 
 // ---------------------------------------------------------------------------
 // Block component
@@ -127,14 +59,18 @@ export const CrossPromptBlock = createReactBlockSpec(
       ...defaultProps,
       experimentId: { default: "" },
       gatingMode: { default: "fixed" },
+      analysisId: { default: "" },
     },
     content: "none",
   },
   {
     render: ({ block, editor }: any) => {
-      const { experimentId, gatingMode } = block.props;
+      const { experimentId, gatingMode, analysisId } = block.props;
       const { data: expData } = useExperiments();
       const { data: checkpointsData } = useCheckpoints(experimentId || null);
+      const { data: cachedAnalyses } = useAnalyses(experimentId || null, "cross-prompt");
+      const { data: cachedData } = useAnalysis(analysisId || null);
+      const saveAnalysis = useSaveAnalysis();
       const isEditable = editor.isEditable;
       const analysis = useTrajectoryAnalysis();
 
@@ -155,11 +91,47 @@ export const CrossPromptBlock = createReactBlockSpec(
           maxTokens: 50,
           gatingMode: gatingMode as AnalyzeRequest["gatingMode"],
         };
-        analysis.mutate(body);
+        analysis.mutate(body, {
+          onSuccess: (data) => {
+            if (experimentId) {
+              saveAnalysis.mutate(
+                {
+                  expId: experimentId,
+                  analysisType: "cross-prompt",
+                  label: `Cross-prompt — ${gatingMode} — ${CURATED_PROMPTS.length} prompts`,
+                  request: body as unknown as Record<string, unknown>,
+                  data: data as unknown as Record<string, unknown>,
+                },
+                {
+                  onSuccess: (resp) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: resp.analysis.id },
+                    });
+                  },
+                },
+              );
+            }
+          },
+        });
       };
 
+      // Use cached data when available
+      const cachedBatch = cachedData?.analysis?.data
+        ? (cachedData.analysis.data as unknown as AnalyzeResponse).batchAnalysis
+        : undefined;
+
+      // Reset live mutation when user selects a different cached analysis,
+      // otherwise analysis.data permanently shadows the cached selection.
+      useEffect(() => {
+        if (analysisId) {
+          analysis.reset();
+        }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [analysisId]);
+
+      const batch = analysis.data?.batchAnalysis ?? cachedBatch;
+
       // Re-render canvas whenever analysis data changes
-      const batch = analysis.data?.batchAnalysis;
       useEffect(() => {
         if (!batch) return;
         const heatmap = extractHeatmapData(batch);
@@ -214,6 +186,24 @@ export const CrossPromptBlock = createReactBlockSpec(
               >
                 {analysis.isPending ? "Analyzing..." : "Run Analysis"}
               </button>
+              {(cachedAnalyses?.analyses ?? []).length > 0 && (
+                <select
+                  className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-xs px-2 py-1"
+                  value={analysisId}
+                  onChange={(e) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: e.target.value },
+                    });
+                  }}
+                >
+                  <option value="">Cached analyses...</option>
+                  {(cachedAnalyses?.analyses ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
 

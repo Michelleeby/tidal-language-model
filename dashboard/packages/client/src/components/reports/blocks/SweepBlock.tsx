@@ -4,16 +4,15 @@ import { defaultProps } from "@blocknote/core";
 import { useExperiments } from "../../../hooks/useExperiments.js";
 import { useCheckpoints } from "../../../hooks/useMetrics.js";
 import { useTrajectoryAnalysis } from "../../../hooks/useTrajectoryAnalysis.js";
-import type { SweepAnalysis, AnalyzeRequest } from "@tidal/shared";
-
-const SIGNAL_NAMES = ["modulation"] as const;
-const SIGNAL_COLORS = ["#a78bfa"] as const;
-const TEXT_PROPS = ["wordCount", "uniqueTokenRatio", "charCount"] as const;
-const PROP_LABELS: Record<string, string> = {
-  wordCount: "Words",
-  uniqueTokenRatio: "Unique Ratio",
-  charCount: "Chars",
-};
+import { useAnalyses, useAnalysis, useSaveAnalysis } from "../../../hooks/useAnalyses.js";
+import {
+  renderSweepPanel,
+  SIGNAL_NAMES,
+  SIGNAL_COLORS,
+  SWEEP_DIMENSIONS,
+  TEXT_PROP_LABELS,
+} from "../../../utils/chartRenderers.js";
+import type { SweepAnalysis, AnalyzeRequest, AnalyzeResponse } from "@tidal/shared";
 
 // ---------------------------------------------------------------------------
 // Pure data extraction functions (exported for testing)
@@ -68,113 +67,11 @@ export function extractInterpretabilitySummary(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Canvas rendering
-// ---------------------------------------------------------------------------
-
-const PANEL_W = 600;
-const ROW_H = 80;
-const HEADER_H = 24;
-
-function renderSweepPanel(
-  canvas: HTMLCanvasElement | null,
-  data: SweepSignalData[],
-) {
-  if (!canvas || data.length === 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const totalH = HEADER_H + data.length * ROW_H;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = PANEL_W * dpr;
-  canvas.height = totalH * dpr;
-  canvas.style.width = `${PANEL_W}px`;
-  canvas.style.height = `${totalH}px`;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, PANEL_W, totalH);
-
-  const labelW = 80;
-  const chartW = PANEL_W - labelW - 20;
-  const barH = 16;
-  const barGap = 4;
-
-  // Header
-  ctx.font = "11px monospace";
-  ctx.fillStyle = "#9ca3af";
-  ctx.textAlign = "center";
-  const propW = chartW / TEXT_PROPS.length;
-  for (let j = 0; j < TEXT_PROPS.length; j++) {
-    ctx.fillText(
-      PROP_LABELS[TEXT_PROPS[j]] ?? TEXT_PROPS[j],
-      labelW + j * propW + propW / 2,
-      HEADER_H - 6,
-    );
-  }
-
-  for (let i = 0; i < data.length; i++) {
-    const y = HEADER_H + i * ROW_H;
-    const signalIdx = SIGNAL_NAMES.indexOf(data[i].signal as any);
-    const color = SIGNAL_COLORS[signalIdx >= 0 ? signalIdx : 0];
-
-    // Signal label
-    ctx.fillStyle = color;
-    ctx.font = "11px monospace";
-    ctx.textAlign = "right";
-    ctx.fillText(data[i].signal, labelW - 8, y + ROW_H / 2 + 4);
-
-    for (let j = 0; j < data[i].properties.length; j++) {
-      const prop = data[i].properties[j];
-      const px = labelW + j * propW;
-      const barY = y + 8;
-
-      // Find max absolute value for scaling
-      const maxVal = Math.max(Math.abs(prop.low), Math.abs(prop.high), 1);
-
-      // Low bar
-      const lowW = (Math.abs(prop.low) / maxVal) * (propW / 2 - 8);
-      ctx.fillStyle = `${color}66`;
-      ctx.fillRect(px + 4, barY, lowW, barH);
-      ctx.fillStyle = "#9ca3af";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(
-        typeof prop.low === "number" && prop.low % 1 !== 0
-          ? prop.low.toFixed(2)
-          : String(prop.low),
-        px + 4 + lowW + 2,
-        barY + barH - 3,
-      );
-
-      // High bar
-      const highY = barY + barH + barGap;
-      const highW = (Math.abs(prop.high) / maxVal) * (propW / 2 - 8);
-      ctx.fillStyle = color;
-      ctx.fillRect(px + 4, highY, highW, barH);
-      ctx.fillStyle = "#e5e7eb";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(
-        typeof prop.high === "number" && prop.high % 1 !== 0
-          ? prop.high.toFixed(2)
-          : String(prop.high),
-        px + 4 + highW + 2,
-        highY + barH - 3,
-      );
-
-      // Delta annotation
-      const deltaY = highY + barH + 12;
-      const sign = prop.delta >= 0 ? "+" : "";
-      const deltaStr =
-        typeof prop.delta === "number" && prop.delta % 1 !== 0
-          ? `${sign}${prop.delta.toFixed(2)}`
-          : `${sign}${prop.delta}`;
-      ctx.fillStyle = prop.delta >= 0 ? "#4ade80" : "#f87171";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(`Δ ${deltaStr}`, px + 4, deltaY);
-    }
-  }
-}
+const TEXT_PROPS = ["wordCount", "uniqueTokenRatio", "charCount"] as const;
+const PROP_LABELS = TEXT_PROP_LABELS;
+const PANEL_W = SWEEP_DIMENSIONS.width;
+const ROW_H = SWEEP_DIMENSIONS.rowHeight;
+const HEADER_H = SWEEP_DIMENSIONS.headerHeight;
 
 // ---------------------------------------------------------------------------
 // Block component
@@ -187,14 +84,18 @@ export const SweepBlock = createReactBlockSpec(
       ...defaultProps,
       experimentId: { default: "" },
       prompt: { default: "Once upon a time," },
+      analysisId: { default: "" },
     },
     content: "none",
   },
   {
     render: ({ block, editor }: any) => {
-      const { experimentId, prompt } = block.props;
+      const { experimentId, prompt, analysisId } = block.props;
       const { data: expData } = useExperiments();
       const { data: checkpointsData } = useCheckpoints(experimentId || null);
+      const { data: cachedAnalyses } = useAnalyses(experimentId || null, "sweep");
+      const { data: cachedData } = useAnalysis(analysisId || null);
+      const saveAnalysis = useSaveAnalysis();
       const isEditable = editor.isEditable;
       const analysis = useTrajectoryAnalysis();
 
@@ -216,10 +117,45 @@ export const SweepBlock = createReactBlockSpec(
           gatingMode: "fixed",
           includeExtremeValues: true,
         };
-        analysis.mutate(body);
+        analysis.mutate(body, {
+          onSuccess: (data) => {
+            if (experimentId) {
+              saveAnalysis.mutate(
+                {
+                  expId: experimentId,
+                  analysisType: "sweep",
+                  label: `Sweep — "${prompt.slice(0, 30)}"`,
+                  request: body as unknown as Record<string, unknown>,
+                  data: data as unknown as Record<string, unknown>,
+                },
+                {
+                  onSuccess: (resp) => {
+                    editor.updateBlock(block, {
+                      props: { analysisId: resp.analysis.id },
+                    });
+                  },
+                },
+              );
+            }
+          },
+        });
       };
 
-      const sweep = analysis.data?.sweepAnalysis;
+      // Use cached data when available
+      const cachedSweep = cachedData?.analysis?.data
+        ? (cachedData.analysis.data as unknown as AnalyzeResponse).sweepAnalysis
+        : undefined;
+
+      // Reset live mutation when user selects a different cached analysis,
+      // otherwise analysis.data permanently shadows the cached selection.
+      useEffect(() => {
+        if (analysisId) {
+          analysis.reset();
+        }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [analysisId]);
+
+      const sweep = analysis.data?.sweepAnalysis ?? cachedSweep;
 
       // Re-render canvas whenever sweep data changes or canvas mounts
       useEffect(() => {
@@ -261,6 +197,24 @@ export const SweepBlock = createReactBlockSpec(
                 >
                   {analysis.isPending ? "Sweeping..." : "Run Sweep"}
                 </button>
+                {(cachedAnalyses?.analyses ?? []).length > 0 && (
+                  <select
+                    className="rounded bg-gray-800 border border-gray-600 text-gray-200 text-xs px-2 py-1"
+                    value={analysisId}
+                    onChange={(e) => {
+                      editor.updateBlock(block, {
+                        props: { analysisId: e.target.value },
+                      });
+                    }}
+                  >
+                    <option value="">Cached analyses...</option>
+                    {(cachedAnalyses?.analyses ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <textarea
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 resize-none"
@@ -282,7 +236,7 @@ export const SweepBlock = createReactBlockSpec(
             </div>
           ) : analysis.isPending ? (
             <div className="text-gray-500 text-sm py-8 text-center">
-              Running 3-config extreme-value sweep...
+              Running 15-config extreme-value sweep...
             </div>
           ) : sweep ? (
             <div className="space-y-4">

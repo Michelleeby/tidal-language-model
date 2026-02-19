@@ -28,6 +28,11 @@ import type {
   DeleteReportResponse,
   PluginFileTreeResponse,
   PluginFileReadResponse,
+  AnalysisListResponse,
+  AnalysisResponse,
+  CreateAnalysisRequest,
+  CreateAnalysisResponse,
+  DeleteAnalysisResponse,
 } from "@tidal/shared";
 
 const BASE = "/api";
@@ -167,4 +172,25 @@ export const api = {
 
   getModelFile: (filePath: string) =>
     fetchJson<PluginFileReadResponse>(`${BASE}/model/files/${filePath}`),
+
+  // Analysis cache
+  listAnalyses: (expId: string, type?: string) =>
+    fetchJson<AnalysisListResponse>(
+      `${BASE}/experiments/${expId}/analyses${type ? `?type=${type}` : ""}`,
+    ),
+
+  getAnalysis: (id: string) =>
+    fetchJson<AnalysisResponse>(`${BASE}/analyses/${id}`),
+
+  createAnalysis: (expId: string, body: CreateAnalysisRequest) =>
+    fetchJson<CreateAnalysisResponse>(`${BASE}/experiments/${expId}/analyses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  deleteAnalysis: (id: string) =>
+    fetchJson<DeleteAnalysisResponse>(`${BASE}/analyses/${id}`, {
+      method: "DELETE",
+    }),
 };
