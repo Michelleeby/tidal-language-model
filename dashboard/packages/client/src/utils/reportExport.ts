@@ -331,7 +331,7 @@ export function exportToInteractiveHTML(
           bodyParts.push(
             `<div class="chart-container">`,
             `  <div class="chart-label"><strong>Chart</strong> (${esc(eModeLabel)}): ${esc(eMetric)}</div>`,
-            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData)}</script>`,
+            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData).replace(/<\//g, "<\\/")}</script>`,
             `  <canvas id="canvas-${block.id}" width="600" height="200"></canvas>`,
             `</div>`,
           );
@@ -354,7 +354,7 @@ export function exportToInteractiveHTML(
           bodyParts.push(
             `<div class="chart-container">`,
             `  <div class="chart-label"><strong>Gate Trajectory</strong>: ${esc(tProps.gatingMode || "fixed")} gating</div>`,
-            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData)}</script>`,
+            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData).replace(/<\//g, "<\\/")}</script>`,
             `  <canvas id="canvas-${block.id}" width="600" height="200"></canvas>`,
             `</div>`,
           );
@@ -372,7 +372,7 @@ export function exportToInteractiveHTML(
           bodyParts.push(
             `<div class="chart-container">`,
             `  <div class="chart-label"><strong>Cross-Prompt Analysis</strong>: ${esc(cpProps.gatingMode || "fixed")} gating</div>`,
-            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData)}</script>`,
+            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData).replace(/<\//g, "<\\/")}</script>`,
             `  <canvas id="canvas-${block.id}" width="600" height="300"></canvas>`,
             `</div>`,
           );
@@ -390,7 +390,7 @@ export function exportToInteractiveHTML(
           bodyParts.push(
             `<div class="chart-container">`,
             `  <div class="chart-label"><strong>Gate Sweep</strong>: extreme-value analysis</div>`,
-            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData)}</script>`,
+            `  <script type="application/json" id="${dataId}">${JSON.stringify(analysisData).replace(/<\//g, "<\\/")}</script>`,
             `  <canvas id="canvas-${block.id}" width="600" height="300"></canvas>`,
             `</div>`,
           );
@@ -429,7 +429,7 @@ export function exportToInteractiveHTML(
     for (var i = 0; i < 4; i++) { var y = (H/4)*i; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
     ctx.strokeStyle = color || '#3b82f6'; ctx.lineWidth = 1.5; ctx.beginPath();
     for (var j = 0; j < values.length; j++) {
-      var x = (j / (values.length-1)) * W;
+      var x = values.length <= 1 ? W / 2 : (j / (values.length-1)) * W;
       var y = H - ((values[j]-min)/range) * (H-8) - 4;
       j === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
@@ -452,7 +452,7 @@ export function exportToInteractiveHTML(
       ctx.clearRect(0, 0, W, H);
       ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 1.5; ctx.beginPath();
       for (var i = 0; i < signals.length; i++) {
-        var x = (i / (signals.length-1)) * W;
+        var x = signals.length <= 1 ? W / 2 : (i / (signals.length-1)) * W;
         var y = H - signals[i][0] * (H-8) - 4;
         i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
       }
@@ -508,10 +508,12 @@ export function captureBlockCanvases(
 ): Map<string, string> {
   const captures = new Map<string, string>();
 
-  // BlockNote wraps custom blocks in elements with data-content-type attribute
+  // BlockNote wraps custom blocks in elements with data-content-type attribute.
+  // The data-id attribute lives on an ancestor (.bn-block-outer), not on the
+  // data-content-type element itself, so we use closest() to find it.
   const blockEls = editorContainer.querySelectorAll("[data-content-type]");
   for (const el of blockEls) {
-    const blockId = el.getAttribute("data-id") ?? "";
+    const blockId = el.closest("[data-id]")?.getAttribute("data-id") ?? "";
     if (!blockId) continue;
 
     const canvas = el.querySelector("canvas");

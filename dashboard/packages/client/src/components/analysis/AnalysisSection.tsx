@@ -4,8 +4,18 @@ import { useAnalyses, useSaveAnalysis, useDeleteAnalysis } from "../../hooks/use
 import { useTrajectoryAnalysis } from "../../hooks/useTrajectoryAnalysis.js";
 import { api } from "../../api/client.js";
 import GateTrajectoryChart from "../charts/GateTrajectoryChart.js";
-import { extractHeatmapData, extractVarianceSummary } from "../reports/blocks/CrossPromptBlock.js";
-import { extractSweepPanelData, extractInterpretabilitySummary } from "../reports/blocks/SweepBlock.js";
+import {
+  extractHeatmapRenderData,
+  extractVarianceSummary,
+  extractSweepRenderData,
+  extractInterpretabilitySummary,
+  renderHeatmap,
+  renderSweepPanel,
+  SIGNAL_COLORS,
+  HEATMAP_DIMENSIONS,
+  SWEEP_DIMENSIONS,
+  TEXT_PROP_LABELS,
+} from "../../utils/chartRenderers.js";
 import type {
   AnalysisType,
   AnalysisResultSummary,
@@ -24,8 +34,6 @@ type TabType = "trajectory" | "cross-prompt" | "sweep";
 interface AnalysisSectionProps {
   expId: string;
 }
-
-const SIGNAL_COLORS = ["#a78bfa"] as const;
 
 export default function AnalysisSection({ expId }: AnalysisSectionProps) {
   const [activeTab, setActiveTab] = useState<TabType>("trajectory");
@@ -230,14 +238,12 @@ function TrajectoryTab({ expId }: { expId: string }) {
 // Cross-Prompt tab
 // ---------------------------------------------------------------------------
 
-const HEATMAP_W = 600;
-const HEATMAP_H = 300;
-
 function CrossPromptTab({ expId }: { expId: string }) {
   const { data: checkpointsData } = useCheckpoints(expId);
   const saveAnalysis = useSaveAnalysis();
   const analysis = useTrajectoryAnalysis();
   const [gatingMode, setGatingMode] = useState<"fixed" | "random" | "learned">("fixed");
+  const [cachedBatch, setCachedBatch] = useState<BatchAnalysis | null>(null);
   const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const checkpoints = checkpointsData?.checkpoints ?? [];
@@ -267,12 +273,14 @@ function CrossPromptTab({ expId }: { expId: string }) {
     });
   };
 
-  const batch = analysis.data?.batchAnalysis;
+  // Display live data or cached data
+  const batch = analysis.data?.batchAnalysis ?? cachedBatch;
 
+  // Re-render canvas whenever batch data changes (runs after DOM commit)
   useEffect(() => {
     if (!batch || !heatmapCanvasRef.current) return;
-    const data = extractHeatmapData(batch);
-    renderHeatmapCanvas(heatmapCanvasRef.current, data);
+    const data = extractHeatmapRenderData(batch);
+    renderHeatmap(heatmapCanvasRef.current, data);
   }, [batch]);
 
   const varianceSummary = batch ? extractVarianceSummary(batch.crossPromptVariance) : [];
@@ -280,11 +288,11 @@ function CrossPromptTab({ expId }: { expId: string }) {
   const handleSelectCached = async (id: string) => {
     const resp = await api.getAnalysis(id);
     const cachedData = resp.analysis.data as unknown as AnalyzeResponse;
-    // We need to update the analysis mutation data — simplest approach is to
-    // re-render the heatmap directly
-    if (cachedData.batchAnalysis && heatmapCanvasRef.current) {
-      const heatmap = extractHeatmapData(cachedData.batchAnalysis);
-      renderHeatmapCanvas(heatmapCanvasRef.current, heatmap);
+    if (cachedData.batchAnalysis) {
+      // Reset live mutation so it doesn't shadow the cached data
+      analysis.reset();
+      // Store in state — triggers re-render → canvas mounts → useEffect renders
+      setCachedBatch(cachedData.batchAnalysis);
     }
   };
 
@@ -321,10 +329,10 @@ function CrossPromptTab({ expId }: { expId: string }) {
             </div>
             <canvas
               ref={heatmapCanvasRef}
-              width={HEATMAP_W}
-              height={HEATMAP_H}
+              width={HEATMAP_DIMENSIONS.width}
+              height={HEATMAP_DIMENSIONS.height}
               className="w-full rounded bg-gray-950"
-              style={{ height: HEATMAP_H }}
+              style={{ height: HEATMAP_DIMENSIONS.height }}
             />
           </div>
           {varianceSummary.length > 0 && (
@@ -364,21 +372,12 @@ function CrossPromptTab({ expId }: { expId: string }) {
 // Sweep tab
 // ---------------------------------------------------------------------------
 
-const PANEL_W = 600;
-const ROW_H = 80;
-const HEADER_H = 24;
-const TEXT_PROPS = ["wordCount", "uniqueTokenRatio", "charCount"] as const;
-const PROP_LABELS: Record<string, string> = {
-  wordCount: "Words",
-  uniqueTokenRatio: "Unique Ratio",
-  charCount: "Chars",
-};
-
 function SweepTab({ expId }: { expId: string }) {
   const { data: checkpointsData } = useCheckpoints(expId);
   const saveAnalysis = useSaveAnalysis();
   const analysis = useTrajectoryAnalysis();
   const [prompt, setPrompt] = useState("Once upon a time,");
+  const [cachedSweep, setCachedSweep] = useState<SweepAnalysis | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const checkpoints = checkpointsData?.checkpoints ?? [];
@@ -409,26 +408,30 @@ function SweepTab({ expId }: { expId: string }) {
     });
   };
 
-  const sweep = analysis.data?.sweepAnalysis;
+  // Display live data or cached data
+  const sweep = analysis.data?.sweepAnalysis ?? cachedSweep;
 
+  // Re-render canvas whenever sweep data changes (runs after DOM commit)
   useEffect(() => {
     if (!sweep || !canvasRef.current) return;
-    const panelData = extractSweepPanelData(sweep);
-    renderSweepCanvas(canvasRef.current, panelData);
+    const panelData = extractSweepRenderData(sweep);
+    renderSweepPanel(canvasRef.current, panelData);
   }, [sweep]);
 
   const summaryLines = sweep
     ? extractInterpretabilitySummary(sweep.interpretabilityMap)
     : [];
-  const panelData = sweep ? extractSweepPanelData(sweep) : [];
-  const panelH = panelData.length > 0 ? HEADER_H + panelData.length * ROW_H : 200;
+  const panelData = sweep ? extractSweepRenderData(sweep) : [];
+  const panelH = panelData.length > 0 ? SWEEP_DIMENSIONS.headerHeight + panelData.length * SWEEP_DIMENSIONS.rowHeight : 200;
 
   const handleSelectCached = async (id: string) => {
     const resp = await api.getAnalysis(id);
     const cachedData = resp.analysis.data as unknown as AnalyzeResponse;
-    if (cachedData.sweepAnalysis && canvasRef.current) {
-      const pd = extractSweepPanelData(cachedData.sweepAnalysis);
-      renderSweepCanvas(canvasRef.current, pd);
+    if (cachedData.sweepAnalysis) {
+      // Reset live mutation so it doesn't shadow the cached data
+      analysis.reset();
+      // Store in state — triggers re-render → canvas mounts → useEffect renders
+      setCachedSweep(cachedData.sweepAnalysis);
     }
   };
 
@@ -461,7 +464,7 @@ function SweepTab({ expId }: { expId: string }) {
             <div className="text-xs text-gray-400 mb-1 font-mono">Gate Signal Sweep — Low vs High</div>
             <canvas
               ref={canvasRef}
-              width={PANEL_W}
+              width={SWEEP_DIMENSIONS.width}
               height={panelH}
               className="w-full rounded bg-gray-950"
               style={{ height: panelH }}
@@ -498,144 +501,4 @@ function SweepTab({ expId }: { expId: string }) {
       />
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Canvas rendering helpers (duplicated from block components to avoid
-// coupling analysis section to BlockNote block specs)
-// ---------------------------------------------------------------------------
-
-function renderHeatmapCanvas(
-  canvas: HTMLCanvasElement,
-  data: { prompts: string[]; signals: string[]; values: number[][] },
-) {
-  if (data.prompts.length === 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = HEATMAP_W * dpr;
-  canvas.height = HEATMAP_H * dpr;
-  canvas.style.width = `${HEATMAP_W}px`;
-  canvas.style.height = `${HEATMAP_H}px`;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, HEATMAP_W, HEATMAP_H);
-
-  const labelW = 180;
-  const headerH = 24;
-  const cellW = (HEATMAP_W - labelW) / data.signals.length;
-  const cellH = Math.min(24, (HEATMAP_H - headerH) / data.prompts.length);
-
-  ctx.font = "11px monospace";
-  ctx.textAlign = "center";
-  for (let j = 0; j < data.signals.length; j++) {
-    ctx.fillStyle = SIGNAL_COLORS[0];
-    ctx.fillText(data.signals[j], labelW + j * cellW + cellW / 2, headerH - 6);
-  }
-
-  for (let i = 0; i < data.prompts.length; i++) {
-    const y = headerH + i * cellH;
-    ctx.fillStyle = "#9ca3af";
-    ctx.font = "10px monospace";
-    ctx.textAlign = "right";
-    const label = data.prompts[i].length > 28 ? data.prompts[i].slice(0, 28) + "..." : data.prompts[i];
-    ctx.fillText(label, labelW - 8, y + cellH / 2 + 3);
-
-    for (let j = 0; j < data.signals.length; j++) {
-      const v = data.values[i][j];
-      const x = labelW + j * cellW;
-      const r = parseInt(SIGNAL_COLORS[0].slice(1, 3), 16);
-      const g = parseInt(SIGNAL_COLORS[0].slice(3, 5), 16);
-      const b = parseInt(SIGNAL_COLORS[0].slice(5, 7), 16);
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.15 + v * 0.85})`;
-      ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
-      ctx.fillStyle = v > 0.5 ? "#111827" : "#e5e7eb";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(v.toFixed(2), x + cellW / 2, y + cellH / 2 + 3);
-    }
-  }
-}
-
-import type { SweepSignalData } from "../reports/blocks/SweepBlock.js";
-
-function renderSweepCanvas(
-  canvas: HTMLCanvasElement,
-  data: SweepSignalData[],
-) {
-  if (data.length === 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const totalH = HEADER_H + data.length * ROW_H;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = PANEL_W * dpr;
-  canvas.height = totalH * dpr;
-  canvas.style.width = `${PANEL_W}px`;
-  canvas.style.height = `${totalH}px`;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, PANEL_W, totalH);
-
-  const labelW = 80;
-  const chartW = PANEL_W - labelW - 20;
-  const barH = 16;
-  const barGap = 4;
-
-  ctx.font = "11px monospace";
-  ctx.fillStyle = "#9ca3af";
-  ctx.textAlign = "center";
-  const propW = chartW / TEXT_PROPS.length;
-  for (let j = 0; j < TEXT_PROPS.length; j++) {
-    ctx.fillText(PROP_LABELS[TEXT_PROPS[j]] ?? TEXT_PROPS[j], labelW + j * propW + propW / 2, HEADER_H - 6);
-  }
-
-  for (let i = 0; i < data.length; i++) {
-    const y = HEADER_H + i * ROW_H;
-    const color = SIGNAL_COLORS[0];
-
-    ctx.fillStyle = color;
-    ctx.font = "11px monospace";
-    ctx.textAlign = "right";
-    ctx.fillText(data[i].signal, labelW - 8, y + ROW_H / 2 + 4);
-
-    for (let j = 0; j < data[i].properties.length; j++) {
-      const prop = data[i].properties[j];
-      const px = labelW + j * propW;
-      const barY = y + 8;
-      const maxVal = Math.max(Math.abs(prop.low), Math.abs(prop.high), 1);
-
-      const lowW = (Math.abs(prop.low) / maxVal) * (propW / 2 - 8);
-      ctx.fillStyle = `${color}66`;
-      ctx.fillRect(px + 4, barY, lowW, barH);
-      ctx.fillStyle = "#9ca3af";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(
-        typeof prop.low === "number" && prop.low % 1 !== 0 ? prop.low.toFixed(2) : String(prop.low),
-        px + 4 + lowW + 2, barY + barH - 3,
-      );
-
-      const highY = barY + barH + barGap;
-      const highW = (Math.abs(prop.high) / maxVal) * (propW / 2 - 8);
-      ctx.fillStyle = color;
-      ctx.fillRect(px + 4, highY, highW, barH);
-      ctx.fillStyle = "#e5e7eb";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(
-        typeof prop.high === "number" && prop.high % 1 !== 0 ? prop.high.toFixed(2) : String(prop.high),
-        px + 4 + highW + 2, highY + barH - 3,
-      );
-
-      const deltaY = highY + barH + 12;
-      const sign = prop.delta >= 0 ? "+" : "";
-      const deltaStr = typeof prop.delta === "number" && prop.delta % 1 !== 0
-        ? `${sign}${prop.delta.toFixed(2)}`
-        : `${sign}${prop.delta}`;
-      ctx.fillStyle = prop.delta >= 0 ? "#4ade80" : "#f87171";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(`Δ ${deltaStr}`, px + 4, deltaY);
-    }
-  }
 }
