@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock
 from plugins.tidal.GatingModulator import GatingModulator, GatingEffects, RandomGatingPolicy, FixedGatingPolicy
 from plugins.tidal.RewardComputer import RewardComputer
 from plugins.tidal.GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPolicyAgent, create_agent
-from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis
+from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis, DiversityHomeostasis
 from plugins.tidal.GatingEnvironment import GatingEnvironment
 from plugins.tidal.TransformerLM import TransformerLM
 
@@ -2220,6 +2220,251 @@ class TestAblationRewardParity(TimedTestCase):
         for i, mt in enumerate(captured_max_tokens):
             self.assertEqual(mt, episode_length,
                              f"Call {i}: max_new_tokens={mt}, expected {episode_length}")
+
+
+class TestDiversityHomeostasis(TimedTestCase):
+    """Tests for the DiversityHomeostasis closed-loop controller."""
+
+    def setUp(self):
+        self.config = {
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
+            "RL_DIVERSITY_HOMEOSTASIS_TARGET": 0.55,
+            "RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE": 0.03,
+            "RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE": 0.95,
+            "RL_DIVERSITY_WEIGHT_MIN": 0.15,
+            "RL_DIVERSITY_WEIGHT_MAX": 0.35,
+        }
+
+    def test_init_defaults(self):
+        """All attributes initialize from config."""
+        h = DiversityHomeostasis(self.config)
+        self.assertAlmostEqual(h.weight, 0.15)
+        self.assertAlmostEqual(h.baseline, 0.15)
+        self.assertAlmostEqual(h.target, 0.55)
+        self.assertAlmostEqual(h.release_rate, 0.03)
+        self.assertAlmostEqual(h.decay_rate, 0.95)
+        self.assertAlmostEqual(h.weight_min, 0.15)
+        self.assertAlmostEqual(h.weight_max, 0.35)
+
+    def test_boost_when_diversity_too_low(self):
+        """Weight increases when diversity < target."""
+        h = DiversityHomeostasis(self.config)
+        initial_weight = h.weight
+        h.step(current_diversity=0.3)  # well below target of 0.55
+        self.assertGreater(h.weight, initial_weight)
+
+    def test_no_boost_when_diversity_healthy(self):
+        """Weight decays toward baseline when diversity >= target."""
+        h = DiversityHomeostasis(self.config)
+        # First pump weight up
+        for _ in range(50):
+            h.step(current_diversity=0.3)
+        pumped_weight = h.weight
+        self.assertGreater(pumped_weight, h.baseline)
+        # Now feed healthy diversity — weight should decrease
+        h.step(current_diversity=0.7)
+        self.assertLess(h.weight, pumped_weight)
+
+    def test_decay_toward_baseline(self):
+        """After 200 healthy steps, weight converges to baseline."""
+        h = DiversityHomeostasis(self.config)
+        # First pump weight up
+        for _ in range(50):
+            h.step(current_diversity=0.3)
+        # Now let it decay with healthy diversity
+        for _ in range(200):
+            h.step(current_diversity=0.7)
+        self.assertAlmostEqual(h.weight, h.baseline, places=2)
+
+    def test_clamping_to_max(self):
+        """Aggressive release never exceeds RL_DIVERSITY_WEIGHT_MAX."""
+        config = dict(self.config)
+        config["RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE"] = 10.0  # very aggressive
+        h = DiversityHomeostasis(config)
+        for _ in range(100):
+            h.step(current_diversity=0.0)
+        self.assertLessEqual(h.weight, config["RL_DIVERSITY_WEIGHT_MAX"])
+
+    def test_clamping_to_min(self):
+        """Aggressive decay never drops below RL_DIVERSITY_WEIGHT_MIN."""
+        config = dict(self.config)
+        config["RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE"] = 0.01  # very aggressive decay
+        config["RL_REWARD_DIVERSITY_WEIGHT"] = 0.16  # start slightly above min
+        h = DiversityHomeostasis(config)
+        for _ in range(100):
+            h.step(current_diversity=1.0)  # healthy diversity, only decay
+        self.assertGreaterEqual(h.weight, config["RL_DIVERSITY_WEIGHT_MIN"])
+
+    def test_step_returns_current_weight(self):
+        """Return value of step() matches .weight."""
+        h = DiversityHomeostasis(self.config)
+        result = h.step(current_diversity=0.3)
+        self.assertAlmostEqual(result, h.weight)
+
+    def test_proportional_response(self):
+        """Larger diversity deficit produces a larger boost."""
+        config = dict(self.config)
+        config["RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE"] = 1.0  # no decay, isolate release
+        h1 = DiversityHomeostasis(config)
+        h2 = DiversityHomeostasis(config)
+
+        h1.step(current_diversity=0.50)  # small deficit (target is 0.55)
+        h2.step(current_diversity=0.20)  # large deficit
+
+        self.assertGreater(h2.weight, h1.weight)
+
+    def test_triggers_for_observed_diversity_range(self):
+        """Homeostasis triggers at 0.438 (observed collapse level).
+
+        Ablation showed the learned agent's diversity collapsing to 0.438
+        while fixed gating achieved 0.725. The controller must trigger at
+        the observed collapse level.
+        """
+        h = DiversityHomeostasis(self.config)
+        initial_weight = h.weight
+
+        h.step(current_diversity=0.438)
+        self.assertGreater(h.weight, initial_weight,
+                           "Homeostasis should trigger at diversity=0.438 (observed collapse)")
+
+
+class TestPPOTrainerDiversityHomeostasis(TimedTestCase):
+    """Tests that PPOTrainer integrates the DiversityHomeostasis controller."""
+
+    def _base_config(self):
+        return {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
+        }
+
+    def _make_trainer(self, config):
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = MagicMock()
+        env.reward_computer = MagicMock()
+        env.reward_computer.diversity_weight = config.get("RL_REWARD_DIVERSITY_WEIGHT", 0.15)
+        tmpdir = tempfile.mkdtemp()
+        return PPOTrainer(
+            agent=agent, env=env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+        ), tmpdir
+
+    def test_creates_controller_when_target_configured(self):
+        """DiversityHomeostasis created when RL_DIVERSITY_HOMEOSTASIS_TARGET in config."""
+        config = self._base_config()
+        config["RL_DIVERSITY_HOMEOSTASIS_TARGET"] = 0.55
+        config["RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE"] = 0.03
+        config["RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE"] = 0.95
+        config["RL_DIVERSITY_WEIGHT_MIN"] = 0.15
+        config["RL_DIVERSITY_WEIGHT_MAX"] = 0.35
+        trainer, _ = self._make_trainer(config)
+        self.assertIsInstance(trainer.diversity_homeostasis, DiversityHomeostasis)
+
+    def test_no_controller_when_no_config(self):
+        """diversity_homeostasis is None when key absent (backward compat)."""
+        config = self._base_config()
+        # No RL_DIVERSITY_HOMEOSTASIS_TARGET key
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.diversity_homeostasis)
+
+    def test_diversity_weight_logged_in_history(self):
+        """history['diversity_weight'] populated after train()."""
+        config = self._base_config()
+        config["RL_DIVERSITY_HOMEOSTASIS_TARGET"] = 0.55
+        config["RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE"] = 0.03
+        config["RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE"] = 0.95
+        config["RL_DIVERSITY_WEIGHT_MIN"] = 0.15
+        config["RL_DIVERSITY_WEIGHT_MAX"] = 0.35
+        config["RL_TOTAL_TIMESTEPS"] = 32
+        config["RL_ROLLOUT_STEPS"] = 16
+
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        mock_env = MagicMock()
+        mock_env.reward_computer = MagicMock()
+        mock_env.reward_computer.diversity_weight = 0.15
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {"perplexity": 0.0, "diversity": 0.0, "sampling": 0.0, "repetition": 0.0, "coherence": 0.0},
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            history = trainer.train(total_timesteps=32)
+
+            self.assertIn("diversity_weight", history)
+            self.assertEqual(len(history["diversity_weight"]), 2)  # 32 / 16 = 2 iterations
+            for w in history["diversity_weight"]:
+                self.assertGreaterEqual(w, config["RL_DIVERSITY_WEIGHT_MIN"])
+                self.assertLessEqual(w, config["RL_DIVERSITY_WEIGHT_MAX"])
+
+    def test_checkpoint_saves_and_restores_weight(self):
+        """Round-trip save/load preserves diversity homeostasis state."""
+        config = self._base_config()
+        config["RL_DIVERSITY_HOMEOSTASIS_TARGET"] = 0.55
+        config["RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE"] = 0.03
+        config["RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE"] = 0.95
+        config["RL_DIVERSITY_WEIGHT_MIN"] = 0.15
+        config["RL_DIVERSITY_WEIGHT_MAX"] = 0.35
+
+        trainer, tmpdir = self._make_trainer(config)
+
+        # Pump the weight up
+        for _ in range(20):
+            trainer.diversity_homeostasis.step(current_diversity=0.3)
+        pumped_weight = trainer.diversity_homeostasis.weight
+
+        trainer.save_checkpoint("test_checkpoint.pth")
+
+        # Create a fresh trainer and load
+        trainer2, _ = self._make_trainer(config)
+        import os
+        trainer2.load_checkpoint(os.path.join(tmpdir, "test_checkpoint.pth"))
+
+        self.assertAlmostEqual(trainer2.diversity_homeostasis.weight, pumped_weight, places=5)
+        # Verify the reward computer was synced
+        self.assertEqual(
+            trainer2.env.reward_computer.diversity_weight, pumped_weight
+        )
 
 
 if __name__ == "__main__":

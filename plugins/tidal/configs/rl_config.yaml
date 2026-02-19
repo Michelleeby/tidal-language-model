@@ -37,6 +37,15 @@ RL_ENTROPY_HOMEOSTASIS_DECAY_RATE: 0.95  # Decay rate toward baseline
 RL_ENTROPY_COEF_MIN: 0.01  # Floor for entropy coefficient
 RL_ENTROPY_COEF_MAX: 0.5  # Ceiling for entropy coefficient
 
+# Homeostatic diversity regulation (activated by presence of target key)
+# Boosts diversity reward weight when mean diversity drops below target,
+# then decays back to baseline when diversity is healthy. See ADR 0005.
+RL_DIVERSITY_HOMEOSTASIS_TARGET: 0.55  # Target diversity floor (between random 0.55 and fixed 0.72)
+RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE: 0.03  # Boost rate when diversity < target
+RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE: 0.95  # Decay rate toward baseline
+RL_DIVERSITY_WEIGHT_MIN: 0.15  # Floor for diversity weight (ADR 0003 baseline)
+RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
+
 # Training loop
 RL_ROLLOUT_STEPS: 128  # Steps per rollout before update
 RL_NUM_EPOCHS: 4  # PPO epochs per rollout
