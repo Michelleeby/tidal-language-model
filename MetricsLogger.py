@@ -60,6 +60,7 @@ class MetricsLogger:
         self._http_batch: list[dict] = []
         self._http_last_status: dict | None = None
         self._http_flush_timer: threading.Timer | None = None
+        self._upload_threads: list[threading.Thread] = []
         self._http_session: requests_lib.Session | None = None
         if self._http_enabled:
             self._http_url = self._http_url.rstrip("/")
@@ -192,12 +193,18 @@ class MetricsLogger:
             logger.warning("Checkpoint file not found for upload: %s", checkpoint_path)
             return
         filename = os.path.basename(checkpoint_path)
+        self._reap_threads()
         t = threading.Thread(
             target=self._upload_file,
             args=(checkpoint_path, filename),
             daemon=True,
         )
         t.start()
+        self._upload_threads.append(t)
+
+    def _reap_threads(self):
+        """Remove completed threads from _upload_threads to prevent unbounded growth."""
+        self._upload_threads = [t for t in self._upload_threads if t.is_alive()]
 
     def _upload_file(self, filepath: str, filename: str, retries: int = 3):
         """Stream a file to the dashboard checkpoint endpoint with retries.
@@ -443,7 +450,11 @@ class MetricsLogger:
             self._enqueue_rl_http(data_point)
 
     def finalize(self):
-        """Mark training as complete."""
+        """Mark training as complete. Waits for pending uploads to finish."""
+        for t in self._upload_threads:
+            t.join(timeout=600)
+        self._upload_threads.clear()
+
         with self.lock:
             self._update_status({
                 "status": "completed",

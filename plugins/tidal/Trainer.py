@@ -286,9 +286,11 @@ class Trainer:
         min_delta = self.config.get("MIN_DELTA", 0.0001)
 
         last_epoch_num = start_epoch
+        saved_last = False
         for epoch in range(start_epoch, max_epochs):
             epoch_num = epoch + 1
             last_epoch_num = epoch_num
+            saved_last = False
             avg_loss = self._train_epoch(data_loader)
             self.logger.info(f"{phase_name} Epoch {epoch_num}/{max_epochs} - Average Loss: {avg_loss:.4f}")
 
@@ -302,6 +304,7 @@ class Trainer:
             if (cache_freq and epoch_num % cache_freq == 0) or \
                (cache_milestones and epoch_num in cache_milestones):
                 self._save_checkpoint(epoch_num, phase_name)
+                saved_last = True
 
             if self._should_complete():
                 self.logger.info(f"Graceful completion signal received after epoch {epoch_num}.")
@@ -311,7 +314,8 @@ class Trainer:
                 self.logger.info(f"Early stopping triggered at epoch {epoch_num}.")
                 break
 
-        self._save_checkpoint(last_epoch_num, phase_name)
+        if not saved_last:
+            self._save_checkpoint(last_epoch_num, phase_name)
 
     def run(self):
         """Main function to orchestrate the model training pipeline."""

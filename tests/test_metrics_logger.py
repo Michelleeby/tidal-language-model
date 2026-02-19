@@ -3,6 +3,7 @@
 import os
 import json
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -194,6 +195,77 @@ class TestMetricsLoggerUsesRequests(unittest.TestCase):
             mock_patch.assert_called_once()
             args, kwargs = mock_patch.call_args
             self.assertIn("/experiment-id", args[0])
+
+
+class TestMetricsLoggerUploadThreadTracking(unittest.TestCase):
+    """Verify that MetricsLogger tracks and joins upload threads."""
+
+    def _make_http_logger(self, tmpdir):
+        """Create a MetricsLogger with HTTP enabled and a mock session."""
+        env = {
+            "TRAINING_API_URL": "http://example.com",
+            "TRAINING_AUTH_TOKEN": "tok123",
+            "TRAINING_JOB_ID": "job-42",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(MetricsLogger, "_init_redis"):
+                ml = MetricsLogger(tmpdir)
+                ml._redis = None
+                ml._redis_available = False
+                return ml
+
+    def test_upload_threads_tracked(self):
+        """upload_checkpoint appends thread to _upload_threads."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+
+            # Create a fake checkpoint file
+            filepath = os.path.join(tmpdir, "checkpoint.pth")
+            with open(filepath, "wb") as f:
+                f.write(b"fake data")
+
+            # Patch _upload_file to avoid real uploads
+            with patch.object(ml, "_upload_file"):
+                ml.upload_checkpoint(filepath)
+
+            self.assertEqual(len(ml._upload_threads), 1)
+            self.assertIsInstance(ml._upload_threads[0], threading.Thread)
+
+    def test_finalize_joins_upload_threads(self):
+        """finalize() calls .join() on all pending upload threads."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+
+            # Create mock threads that simulate in-progress uploads
+            mock_thread = MagicMock()
+            mock_thread.is_alive.return_value = True
+            ml._upload_threads = [mock_thread]
+
+            ml.finalize()
+
+            mock_thread.join.assert_called_once()
+
+    def test_completed_threads_reaped(self):
+        """Completed threads are removed from _upload_threads on next upload."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ml = self._make_http_logger(tmpdir)
+
+            # Add a completed (dead) thread
+            dead_thread = MagicMock()
+            dead_thread.is_alive.return_value = False
+            ml._upload_threads = [dead_thread]
+
+            # Create a fake checkpoint and trigger another upload
+            filepath = os.path.join(tmpdir, "checkpoint2.pth")
+            with open(filepath, "wb") as f:
+                f.write(b"fake data")
+
+            with patch.object(ml, "_upload_file"):
+                ml.upload_checkpoint(filepath)
+
+            # Dead thread should be reaped; only the new thread remains
+            self.assertEqual(len(ml._upload_threads), 1)
+            self.assertIsNot(ml._upload_threads[0], dead_thread)
 
 
 if __name__ == "__main__":
