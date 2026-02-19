@@ -2,7 +2,16 @@ import { useState } from "react";
 import { useActiveJob, useCreateJob } from "../../hooks/useJobs.js";
 import { useCheckpoints } from "../../hooks/useMetrics.js";
 import { usePlugin } from "../../hooks/usePlugin.js";
-import type { JobStatus } from "@tidal/shared";
+import type { CheckpointInfo, JobStatus } from "@tidal/shared";
+
+const RL_ELIGIBLE_PHASES = new Set(["foundational", "final"]);
+
+/** Filter checkpoints to those eligible as base models for RL training. */
+export function filterRLEligibleCheckpoints(
+  checkpoints: CheckpointInfo[],
+): CheckpointInfo[] {
+  return checkpoints.filter((cp) => RL_ELIGIBLE_PHASES.has(cp.phase));
+}
 
 const STATUS_COLORS: Record<string, string> = {
   running: "text-green-400",
@@ -41,9 +50,8 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
     activeJob?.type === "rl-training" &&
     !["completed", "failed", "cancelled"].includes(activeJob.status);
 
-  // Filter to foundational phase checkpoints only
-  const foundationalCheckpoints = (checkpointsData?.checkpoints ?? []).filter(
-    (cp) => cp.phase === "foundational",
+  const eligibleCheckpoints = filterRLEligibleCheckpoints(
+    checkpointsData?.checkpoints ?? [],
   );
 
   const handleStart = () => {
@@ -80,8 +88,8 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
               onChange={(e) => setSelectedCheckpoint(e.target.value)}
               className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
             >
-              <option value="">Select epoch checkpoint</option>
-              {foundationalCheckpoints.map((cp) => (
+              <option value="">Select model checkpoint</option>
+              {eligibleCheckpoints.map((cp) => (
                 <option key={cp.path} value={cp.path}>
                   {cp.filename}
                   {cp.epoch != null ? ` (epoch ${cp.epoch})` : ""}
