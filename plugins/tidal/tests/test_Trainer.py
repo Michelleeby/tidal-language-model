@@ -2,7 +2,7 @@ import ast
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import torch
 
@@ -172,6 +172,103 @@ class TestTrainerCheckpointRoundtrip(TimedTestCase):
                     torch.equal(sd_before[key], sd_after[key]),
                     f"Value mismatch in {key}",
                 )
+
+        trainer._flush_logs()
+
+
+class TestTrainingLoopCheckpointDedup(TimedTestCase):
+    """Verify _training_loop does not duplicate the final epoch checkpoint."""
+
+    def _make_trainer_with_model(self):
+        """Create a Trainer with a real (small) model initialized."""
+        with patch("plugins.tidal.Trainer.setup_logger"), \
+             patch("plugins.tidal.Trainer.SummaryWriter"), \
+             patch("plugins.tidal.Trainer.MetricsLogger"):
+
+            from plugins.tidal.Trainer import Trainer
+
+            config = {
+                "DEVICE": "cpu",
+                "BATCH_SIZE": 2,
+                "DESIRED_BATCH_SIZE": 2,
+                "MAX_GRAD_NORM": 1.0,
+                "EMBED_DIM": 32,
+                "NUM_TRANSFORMER_BLOCKS": 1,
+                "NUM_ATTENTION_HEADS": 2,
+                "FFN_HIDDEN_DIM": 64,
+                "DROPOUT": 0.0,
+                "MAX_CONTEXT_LENGTH": 16,
+                "LOG_DIRECTORY": "logs",
+                "PATIENCE": 999,
+                "NUM_EPOCHS": 3,
+                "LEARNING_RATE_SCHEDULER": {
+                    "BASE_LR": 0.001,
+                    "MIN_LR": 1e-6,
+                    "WARMUP_RATIO": 0.1,
+                },
+            }
+
+            exp_dir = tempfile.mkdtemp()
+            trainer = Trainer(config, exp_dir)
+
+        trainer._setup_model(vocab_size=100, total_foundational_steps=10)
+        return trainer
+
+    def test_training_loop_no_duplicate_save_with_cache_freq_1(self):
+        """With cache_freq=1, _save_checkpoint is called exactly N times (not N+1)."""
+        trainer = self._make_trainer_with_model()
+
+        # Mock _train_epoch to return a loss and increment epoch counter
+        def fake_train_epoch(data_loader):
+            trainer.current_epoch_num += 1
+            return 1.0
+        trainer._train_epoch = fake_train_epoch
+
+        # Mock _save_checkpoint to count calls
+        save_calls = []
+        original_save = trainer._save_checkpoint
+        def tracking_save(epoch, phase_name):
+            save_calls.append(epoch)
+        trainer._save_checkpoint = tracking_save
+
+        # Create a minimal mock data loader
+        mock_loader = MagicMock()
+
+        trainer._training_loop(
+            mock_loader, "Foundational", max_epochs=3,
+            start_epoch=0, cache_freq=1, cache_milestones=None,
+        )
+
+        # With cache_freq=1, all 3 epochs save in-loop.
+        # No duplicate post-loop save → exactly 3 calls.
+        self.assertEqual(save_calls, [1, 2, 3])
+
+        trainer._flush_logs()
+
+    def test_training_loop_saves_final_when_not_cached(self):
+        """With cache_freq=2 and 3 epochs, the uncached final epoch is saved post-loop."""
+        trainer = self._make_trainer_with_model()
+
+        def fake_train_epoch(data_loader):
+            trainer.current_epoch_num += 1
+            return 1.0
+        trainer._train_epoch = fake_train_epoch
+
+        save_calls = []
+        def tracking_save(epoch, phase_name):
+            save_calls.append(epoch)
+        trainer._save_checkpoint = tracking_save
+
+        mock_loader = MagicMock()
+
+        trainer._training_loop(
+            mock_loader, "Foundational", max_epochs=3,
+            start_epoch=0, cache_freq=2, cache_milestones=None,
+        )
+
+        # cache_freq=2: epoch 2 saved in-loop. Epoch 3 NOT cached in-loop,
+        # so the post-loop save fires for epoch 3. Total: [2, 3].
+        self.assertEqual(save_calls, [2, 3])
 
         trainer._flush_logs()
 
