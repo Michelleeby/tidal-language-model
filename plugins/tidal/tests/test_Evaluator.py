@@ -10,11 +10,12 @@ import torch
 import math
 import tempfile
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.TransformerLM import TransformerLM
 from plugins.tidal.Evaluator import Evaluator
 
 
-class TestEvaluator(unittest.TestCase):
+class TestEvaluator(TimedTestCase):
     """Tests for the Evaluator class."""
 
     @classmethod

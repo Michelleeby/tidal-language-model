@@ -4,10 +4,11 @@ import unittest
 import torch
 import torch.nn as nn
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.DynamicLRScheduler import DynamicLRScheduler
 
 
-class TestDynamicLRScheduler(unittest.TestCase):
+class TestDynamicLRScheduler(TimedTestCase):
     """Unit tests for the DynamicLRScheduler learning rate schedule."""
 
     def _make_scheduler(self, total_steps, base_lr=0.001, min_lr=1e-6, warmup_ratio=0.1):

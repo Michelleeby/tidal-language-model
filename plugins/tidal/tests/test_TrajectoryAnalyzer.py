@@ -10,6 +10,7 @@ Updated for single modulation gate (conservative-to-exploratory axis).
 import math
 import unittest
 
+from plugins.tidal.tests.timeout import TimedTestCase
 from plugins.tidal.TrajectoryAnalyzer import (
     _signal_stats,
     _split_windows,
@@ -51,7 +52,7 @@ def _make_trajectory(n_steps, modulation_fn, token_fn=None):
     }
 
 
-class TestSingleTrajectoryAnalysis(unittest.TestCase):
+class TestSingleTrajectoryAnalysis(TimedTestCase):
     """Tests for analyze_single on synthetic trajectories with known stats."""
 
     def setUp(self):
@@ -155,7 +156,7 @@ class TestSingleTrajectoryAnalysis(unittest.TestCase):
             analyze_single(empty)
 
 
-class TestSignalStatsEdgeCases(unittest.TestCase):
+class TestSignalStatsEdgeCases(TimedTestCase):
     """Tests for _signal_stats and _split_windows with small/empty inputs."""
 
     def test_signal_stats_empty_list_returns_zeroed_dict(self):
@@ -207,7 +208,7 @@ class TestSignalStatsEdgeCases(unittest.TestCase):
         self.assertIsInstance(result["crossSignalCorrelations"], dict)
 
 
-class TestBatchAnalysis(unittest.TestCase):
+class TestBatchAnalysis(TimedTestCase):
     """Tests for analyze_batch with two prompts having different signal profiles."""
 
     def setUp(self):
@@ -262,7 +263,7 @@ class TestBatchAnalysis(unittest.TestCase):
         self.assertAlmostEqual(strategy["modulation"]["globalMean"], 0.5, places=1)
 
 
-class TestSweepAnalysis(unittest.TestCase):
+class TestSweepAnalysis(TimedTestCase):
     """Tests for get_sweep_grid and analyze_sweep with single modulation gate."""
 
     def test_sweep_grid_has_3_configs(self):
@@ -341,7 +342,7 @@ class TestSweepAnalysis(unittest.TestCase):
         self.assertIn("effect", imap["modulation"])
 
 
-class TestBootstrapCI(unittest.TestCase):
+class TestBootstrapCI(TimedTestCase):
     """Tests for bootstrap_ci helper function."""
 
     def test_returns_expected_keys(self):
@@ -408,7 +409,7 @@ class TestBootstrapCI(unittest.TestCase):
         self.assertAlmostEqual(result["ci_low"], boot_means[2])
 
 
-class TestBatchAnalysisWithBootstrap(unittest.TestCase):
+class TestBatchAnalysisWithBootstrap(TimedTestCase):
     """Tests for analyze_batch with bootstrap parameter."""
 
     def setUp(self):

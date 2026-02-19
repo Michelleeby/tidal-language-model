@@ -96,6 +96,11 @@ class TinyStoriesDataset(Dataset):
         if os.path.exists(cache_path):
             logger.info(f"Loading cached chunks from {cache_path}")
             self.chunks = torch.load(cache_path, weights_only=True)
+            if self.chunks.dtype != torch.uint16:
+                raise RuntimeError(
+                    f"Stale cache at {cache_path} has dtype {self.chunks.dtype}; "
+                    "delete it to rebuild as uint16."
+                )
             return
 
         # Cache miss — build chunks from HF dataset (one-time).

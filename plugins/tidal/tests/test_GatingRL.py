@@ -8,6 +8,7 @@ import math
 import torch
 import numpy as np
 import unittest
+from plugins.tidal.tests.timeout import TimedTestCase
 
 from unittest.mock import patch, MagicMock
 
@@ -19,7 +20,7 @@ from plugins.tidal.GatingEnvironment import GatingEnvironment
 from plugins.tidal.TransformerLM import TransformerLM
 
 
-class TestGatingModulator(unittest.TestCase):
+class TestGatingModulator(TimedTestCase):
     """Tests for GatingModulator class with single modulation gate."""
 
     def setUp(self):
@@ -142,7 +143,7 @@ class TestGatingModulator(unittest.TestCase):
         self.assertAlmostEqual(action[0].item(), 0.7, places=4)
 
 
-class TestRewardComputer(unittest.TestCase):
+class TestRewardComputer(TimedTestCase):
     """Tests for RewardComputer class."""
 
     def setUp(self):
@@ -208,7 +209,7 @@ class TestRewardComputer(unittest.TestCase):
         self.assertIn("sampling", components)
 
 
-class TestLogitsEntropyDiversity(unittest.TestCase):
+class TestLogitsEntropyDiversity(TimedTestCase):
     """Tests that diversity reward uses logits entropy, not trivially-saturated distinct-n."""
 
     def setUp(self):
@@ -300,7 +301,7 @@ class TestLogitsEntropyDiversity(unittest.TestCase):
         self.assertGreater(r_low_target, r_high_target)
 
 
-class TestGatingPolicyAgent(unittest.TestCase):
+class TestGatingPolicyAgent(TimedTestCase):
     """Tests for GatingPolicyAgent class with single modulation gate."""
 
     def setUp(self):
@@ -366,7 +367,7 @@ class TestGatingPolicyAgent(unittest.TestCase):
         self.assertIsInstance(agent_gauss, GaussianGatingPolicyAgent)
 
 
-class TestIntegration(unittest.TestCase):
+class TestIntegration(TimedTestCase):
     """Integration tests for RL gating components working together."""
 
     def setUp(self):
@@ -423,7 +424,7 @@ class TestIntegration(unittest.TestCase):
         self.assertEqual(len(components["diversity"]), 10)
 
 
-class TestRolloutBuffer(unittest.TestCase):
+class TestRolloutBuffer(TimedTestCase):
     """Tests for pre-allocated RolloutBuffer."""
 
     def setUp(self):
@@ -494,7 +495,7 @@ class TestRolloutBuffer(unittest.TestCase):
             )
 
 
-class TestGatingEnvironmentPrecomputed(unittest.TestCase):
+class TestGatingEnvironmentPrecomputed(TimedTestCase):
     """Tests for _get_observation with precomputed hidden_states/logits."""
 
     @classmethod
@@ -602,7 +603,7 @@ class TestGatingEnvironmentPrecomputed(unittest.TestCase):
         self.assertEqual(obs_precomputed.shape, (64,))
 
 
-class TestExponentialMovingAverage(unittest.TestCase):
+class TestExponentialMovingAverage(TimedTestCase):
     """Tests for the EMA tracker that replaces deque-based episode stats."""
 
     def test_ema_tracker_basic(self):
@@ -669,7 +670,7 @@ class TestExponentialMovingAverage(unittest.TestCase):
         self.assertGreater(fast.value, slow.value)
 
 
-class TestBetaConcentrationCapping(unittest.TestCase):
+class TestBetaConcentrationCapping(TimedTestCase):
     """Tests that Beta distribution concentration params are capped."""
 
     def setUp(self):
@@ -716,7 +717,7 @@ class TestBetaConcentrationCapping(unittest.TestCase):
         self.assertAlmostEqual(agent.beta_concentration_max, 15.0, places=1)
 
 
-class TestEntropyCoefAnnealing(unittest.TestCase):
+class TestEntropyCoefAnnealing(TimedTestCase):
     """Tests that entropy coefficient anneals during training."""
 
     def setUp(self):
@@ -769,7 +770,7 @@ class TestEntropyCoefAnnealing(unittest.TestCase):
             self.assertLess(coef_mid, 0.1)
 
 
-class TestEnvStepRewardNormalization(unittest.TestCase):
+class TestEnvStepRewardNormalization(TimedTestCase):
     """Tests that GatingEnvironment.step() uses unnormalized rewards."""
 
     @classmethod
@@ -840,7 +841,7 @@ class TestEnvStepRewardNormalization(unittest.TestCase):
                 self.assertFalse(call_kwargs.args[3])
 
 
-class TestEnvStepPassesModifiedLogits(unittest.TestCase):
+class TestEnvStepPassesModifiedLogits(TimedTestCase):
     """Tests that env.step() passes modified logits (not raw) to compute_step_reward."""
 
     @classmethod
@@ -928,7 +929,7 @@ class TestEnvStepPassesModifiedLogits(unittest.TestCase):
         )
 
 
-class TestPPOTrainerUsesEMA(unittest.TestCase):
+class TestPPOTrainerUsesEMA(TimedTestCase):
     """Tests that PPOTrainer tracks episode stats via EMA, not deque."""
 
     def test_ppo_trainer_uses_ema(self):
@@ -978,7 +979,7 @@ class TestPPOTrainerUsesEMA(unittest.TestCase):
             self.assertNotIsInstance(trainer.episode_rewards, deque)
 
 
-class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
+class TestEpisodeTrackingPersistsAcrossRollouts(TimedTestCase):
     """Tests that episode reward/length counters survive across collect_rollouts() calls."""
 
     def setUp(self):
@@ -1107,7 +1108,7 @@ class TestEpisodeTrackingPersistsAcrossRollouts(unittest.TestCase):
                 )
 
 
-class TestBetaConcentrationCappedAt15(unittest.TestCase):
+class TestBetaConcentrationCappedAt15(TimedTestCase):
     """Tests that Beta distribution concentration is capped at 15.0."""
 
     def test_beta_concentration_capped_at_15(self):
@@ -1137,7 +1138,7 @@ class TestBetaConcentrationCappedAt15(unittest.TestCase):
             )
 
 
-class TestEntropyCoefRangeUpdated(unittest.TestCase):
+class TestEntropyCoefRangeUpdated(TimedTestCase):
     """Tests that PPOTrainer reads the recalibrated entropy coef range."""
 
     def test_entropy_coef_range_0_01_to_0_03(self):
@@ -1181,7 +1182,7 @@ class TestEntropyCoefRangeUpdated(unittest.TestCase):
             self.assertAlmostEqual(coef_end, 0.03, places=4)
 
 
-class TestEntropyFloorRemoved(unittest.TestCase):
+class TestEntropyFloorRemoved(TimedTestCase):
     """Tests that entropy floor mechanism has been removed from PPOTrainer."""
 
     def test_no_entropy_floor_attribute(self):
@@ -1258,7 +1259,7 @@ class TestEntropyFloorRemoved(unittest.TestCase):
             )
 
 
-class TestCollectRolloutsReturnsGateSignals(unittest.TestCase):
+class TestCollectRolloutsReturnsGateSignals(TimedTestCase):
     """Tests that collect_rollouts() returns mean gate signal values."""
 
     def test_rollout_stats_contain_gate_signals(self):
@@ -1321,7 +1322,7 @@ class TestCollectRolloutsReturnsGateSignals(unittest.TestCase):
             self.assertAlmostEqual(stats["mean_gate_modulation"], 0.6, places=4)
 
 
-class TestCollectRolloutsReturnsRewardComponents(unittest.TestCase):
+class TestCollectRolloutsReturnsRewardComponents(TimedTestCase):
     """Tests that collect_rollouts() returns mean reward component values."""
 
     def test_rollout_stats_contain_reward_components(self):
@@ -1390,7 +1391,7 @@ class TestCollectRolloutsReturnsRewardComponents(unittest.TestCase):
             self.assertAlmostEqual(stats["mean_reward_coherence"], 0.4, places=4)
 
 
-class TestExplainedVarianceComputation(unittest.TestCase):
+class TestExplainedVarianceComputation(TimedTestCase):
     """Tests that train() history contains explained_variance."""
 
     def test_history_contains_explained_variance(self):
@@ -1456,7 +1457,7 @@ class TestExplainedVarianceComputation(unittest.TestCase):
                 self.assertLessEqual(ev, 1.0)
 
 
-class TestEntropyHomeostasis(unittest.TestCase):
+class TestEntropyHomeostasis(TimedTestCase):
     """Tests for the EntropyHomeostasis closed-loop controller."""
 
     def setUp(self):
@@ -1548,7 +1549,7 @@ class TestEntropyHomeostasis(unittest.TestCase):
         self.assertGreater(h2.coef, h1.coef)
 
 
-class TestPPOTrainerHomeostaticSchedule(unittest.TestCase):
+class TestPPOTrainerHomeostaticSchedule(TimedTestCase):
     """Tests that PPOTrainer integrates the homeostatic entropy schedule."""
 
     def _base_config(self):
@@ -1662,7 +1663,7 @@ class TestPPOTrainerHomeostaticSchedule(unittest.TestCase):
                 self.assertLessEqual(coef, config["RL_ENTROPY_COEF_MAX"])
 
 
-class TestSamplingReward(unittest.TestCase):
+class TestSamplingReward(TimedTestCase):
     """Tests for the sampling reward component (sampling entropy)."""
 
     def setUp(self):
@@ -1716,7 +1717,7 @@ class TestSamplingReward(unittest.TestCase):
         self.assertGreater(r_low, r_high)
 
 
-class TestSamplingRewardIntegration(unittest.TestCase):
+class TestSamplingRewardIntegration(TimedTestCase):
     """Integration tests for sampling reward in compute_step_reward."""
 
     def setUp(self):
@@ -1769,7 +1770,7 @@ class TestSamplingRewardIntegration(unittest.TestCase):
         self.assertNotAlmostEqual(comps_low["sampling"], comps_high["sampling"], places=2)
 
 
-class TestNucleusSampling(unittest.TestCase):
+class TestNucleusSampling(TimedTestCase):
     """Tests for nucleus (top-p) sampling implementation."""
 
     def test_nucleus_sampling_filters_tokens(self):
@@ -1799,7 +1800,7 @@ class TestNucleusSampling(unittest.TestCase):
         self.assertTrue(torch.all(filtered > 0))
 
 
-class TestGatingEnvironmentDynamicSampling(unittest.TestCase):
+class TestGatingEnvironmentDynamicSampling(TimedTestCase):
     """Tests that GatingEnvironment.step() uses dynamic top-k and nucleus sampling."""
 
     @classmethod
@@ -1892,7 +1893,7 @@ class TestGatingEnvironmentDynamicSampling(unittest.TestCase):
         )
 
 
-class TestTrajectoryModes(unittest.TestCase):
+class TestTrajectoryModes(TimedTestCase):
     """Tests for lightweight/full/none trajectory modes in generate_with_gating."""
 
     @classmethod
@@ -2003,7 +2004,7 @@ class TestTrajectoryModes(unittest.TestCase):
         self.assertIn("effects", trajectory)
 
 
-class TestAblationRewardParity(unittest.TestCase):
+class TestAblationRewardParity(TimedTestCase):
     """
     Tests that the ablation evaluation in run_ablation_study computes rewards
     identically to the RL training loop (GatingEnvironment).

@@ -57,6 +57,11 @@ class TestTrainerInit(TimedTestCase):
                 "DROPOUT": 0.0,
                 "MAX_CONTEXT_LENGTH": 16,
                 "LOG_DIRECTORY": "logs",
+                "LEARNING_RATE_SCHEDULER": {
+                    "BASE_LR": 0.001,
+                    "MIN_LR": 1e-6,
+                    "WARMUP_RATIO": 0.1,
+                },
             }
             if config_overrides:
                 config.update(config_overrides)
@@ -120,6 +125,11 @@ class TestTrainerCheckpointRoundtrip(TimedTestCase):
                 "DROPOUT": 0.0,
                 "MAX_CONTEXT_LENGTH": 16,
                 "LOG_DIRECTORY": "logs",
+                "LEARNING_RATE_SCHEDULER": {
+                    "BASE_LR": 0.001,
+                    "MIN_LR": 1e-6,
+                    "WARMUP_RATIO": 0.1,
+                },
             }
 
             exp_dir = tempfile.mkdtemp()

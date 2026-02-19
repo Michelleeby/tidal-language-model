@@ -4,8 +4,10 @@ import subprocess
 import sys
 import unittest
 
+from plugins.tidal.tests.timeout import TimedTestCase
 
-class TestMainErrorReporting(unittest.TestCase):
+
+class TestMainErrorReporting(TimedTestCase):
     """Main.py must write tracebacks to stderr and exit non-zero on failure."""
 
     def _run_main(self, extra_args=None):

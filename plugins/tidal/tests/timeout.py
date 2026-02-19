@@ -50,21 +50,22 @@ class TimedTestCase(unittest.TestCase):
 
     Subclass this instead of unittest.TestCase to get automatic 30s timeouts.
     Override `_timeout_seconds` at the class level to change the default.
+
+    Uses `run()` wrapping so subclasses don't need to call super().setUp().
     """
 
     _timeout_seconds = 30
 
-    def setUp(self):
-        super().setUp()
-        self._old_handler = signal.signal(signal.SIGALRM, self._alarm_handler)
+    def run(self, result=None):
+        def _handler(signum, frame):
+            raise TestTimeoutError(
+                f"{self._testMethodName} timed out after {self._timeout_seconds}s"
+            )
+
+        old_handler = signal.signal(signal.SIGALRM, _handler)
         signal.alarm(self._timeout_seconds)
-
-    def tearDown(self):
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, self._old_handler)
-        super().tearDown()
-
-    def _alarm_handler(self, signum, frame):
-        raise TestTimeoutError(
-            f"{self._testMethodName} timed out after {self._timeout_seconds}s"
-        )
+        try:
+            return super().run(result)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
