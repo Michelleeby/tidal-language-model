@@ -87,6 +87,44 @@ class EntropyHomeostasis:
         return self.coef
 
 
+class DiversityHomeostasis:
+    """Closed-loop homeostatic controller for the diversity reward weight.
+
+    Monitors mean diversity reward and reactively adjusts the diversity weight
+    to prevent diversity collapse. When diversity drops below the target, the
+    weight is boosted (release). Between boosts, it decays toward a baseline.
+    Mirrors the EntropyHomeostasis pattern.
+
+    Loop:
+        1. Release: if diversity < target → weight += release_rate * (target - diversity)
+        2. Decay:   weight = decay_rate * weight + (1 - decay_rate) * baseline
+        3. Clamp:   weight = clamp(weight, min, max)
+    """
+
+    def __init__(self, config: dict):
+        self.baseline = config.get("RL_REWARD_DIVERSITY_WEIGHT", 0.15)
+        self.weight = self.baseline
+        self.target = config.get("RL_DIVERSITY_HOMEOSTASIS_TARGET", 0.55)
+        self.release_rate = config.get("RL_DIVERSITY_HOMEOSTASIS_RELEASE_RATE", 0.03)
+        self.decay_rate = config.get("RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE", 0.95)
+        self.weight_min = config.get("RL_DIVERSITY_WEIGHT_MIN", 0.15)
+        self.weight_max = config.get("RL_DIVERSITY_WEIGHT_MAX", 0.35)
+
+    def step(self, current_diversity: float) -> float:
+        """Update weight based on observed diversity. Returns new weight."""
+        # Release: boost when diversity is too low
+        if current_diversity < self.target:
+            self.weight += self.release_rate * (self.target - current_diversity)
+
+        # Decay toward baseline
+        self.weight = self.decay_rate * self.weight + (1 - self.decay_rate) * self.baseline
+
+        # Clamp
+        self.weight = max(self.weight_min, min(self.weight_max, self.weight))
+
+        return self.weight
+
+
 class RolloutBuffer:
     """Pre-allocated buffer for storing rollout data.
 
@@ -190,6 +228,11 @@ class PPOTrainer:
             self.entropy_homeostasis = EntropyHomeostasis(config)
         else:
             self.entropy_homeostasis = None
+
+        if "RL_DIVERSITY_HOMEOSTASIS_TARGET" in config:
+            self.diversity_homeostasis = DiversityHomeostasis(config)
+        else:
+            self.diversity_homeostasis = None
 
         self.global_step = 0
         ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
@@ -398,6 +441,7 @@ class PPOTrainer:
             "reward_sampling": [],
             "reward_repetition": [],
             "reward_coherence": [],
+            "diversity_weight": [],
         }
 
         num_iterations = total_timesteps // self.rollout_steps
@@ -405,6 +449,15 @@ class PPOTrainer:
 
         for iteration in range(num_iterations):
             rollout_stats = self.collect_rollouts(self.rollout_steps)
+
+            if self.diversity_homeostasis is not None:
+                current_diversity_weight = self.diversity_homeostasis.step(
+                    rollout_stats["mean_reward_diversity"]
+                )
+                self.env.reward_computer.diversity_weight = current_diversity_weight
+            else:
+                current_diversity_weight = None
+
             advantages, returns = self.compute_advantages()
 
             if self.entropy_homeostasis is not None:
@@ -443,6 +496,8 @@ class PPOTrainer:
             history["reward_sampling"].append(rollout_stats.get("mean_reward_sampling", 0.0))
             history["reward_repetition"].append(rollout_stats.get("mean_reward_repetition", 0.0))
             history["reward_coherence"].append(rollout_stats.get("mean_reward_coherence", 0.0))
+            if current_diversity_weight is not None:
+                history["diversity_weight"].append(current_diversity_weight)
 
             self.writer.add_scalar("RL/episode_reward", mean_ep_reward, self.global_step)
             self.writer.add_scalar("RL/policy_loss", update_stats["policy_loss"], self.global_step)
@@ -457,6 +512,8 @@ class PPOTrainer:
             self.writer.add_scalar("RL/reward_sampling", rollout_stats.get("mean_reward_sampling", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_repetition", rollout_stats.get("mean_reward_repetition", 0.0), self.global_step)
             self.writer.add_scalar("RL/reward_coherence", rollout_stats.get("mean_reward_coherence", 0.0), self.global_step)
+            if current_diversity_weight is not None:
+                self.writer.add_scalar("RL/diversity_weight", current_diversity_weight, self.global_step)
 
             if (iteration + 1) % 10 == 0:
                 print(
@@ -505,6 +562,8 @@ class PPOTrainer:
         }
         if self.entropy_homeostasis is not None:
             checkpoint_dict["entropy_homeostasis_coef"] = self.entropy_homeostasis.coef
+        if self.diversity_homeostasis is not None:
+            checkpoint_dict["diversity_homeostasis_weight"] = self.diversity_homeostasis.weight
         torch.save(checkpoint_dict, checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         if self.metrics_logger is not None:
@@ -517,6 +576,9 @@ class PPOTrainer:
         self.global_step = checkpoint["global_step"]
         if self.entropy_homeostasis is not None and "entropy_homeostasis_coef" in checkpoint:
             self.entropy_homeostasis.coef = checkpoint["entropy_homeostasis_coef"]
+        if self.diversity_homeostasis is not None and "diversity_homeostasis_weight" in checkpoint:
+            self.diversity_homeostasis.weight = checkpoint["diversity_homeostasis_weight"]
+            self.env.reward_computer.diversity_weight = checkpoint["diversity_homeostasis_weight"]
         print(f"Loaded checkpoint from step {self.global_step}")
 
 
