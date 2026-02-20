@@ -61,9 +61,9 @@ The system has two training phases:
 Standard cross-entropy training of `TransformerLM` on TinyStories (HuggingFace `roneneldan/TinyStories`) with GPT-2 BPE tokenization (50257 vocab). Uses gradient accumulation, mixed-precision (AMP), cosine LR annealing with warmup, and `torch.compile`. Checkpoints are raw `state_dict` files (not wrapped in metadata dicts). Experiments get unique IDs from git commit hash + config file hash.
 
 **Phase 2 — RL Gating Controller** (`plugins/tidal/train_rl.py` → `plugins/tidal/RLTrainer.py`):
-A PPO agent (`GatingPolicyAgent`) learns to control 3 gate signals — [creativity, focus, stability] — that modulate generation behavior of a **frozen** TransformerLM. The agent observes a 64D vector (token statistics, hidden state summaries, context) and outputs continuous actions in [0, 1] via a Beta distribution. The `GatingModulator` maps actions to generation parameters (temperature, repetition penalty, attention bias). The `RewardComputer` provides dense per-step rewards from perplexity, diversity, repetition, and coherence components.
+A PPO agent (`GatingPolicyAgent`) learns to control 1 gate signal — [modulation] on a conservative-to-exploratory axis — that modulates generation behavior of a **frozen** TransformerLM. The agent observes a 64D vector (token statistics, hidden state summaries, context) and outputs continuous actions in [0, 1] via a Beta distribution. The `GatingModulator` maps actions to generation parameters (temperature, repetition penalty, attention bias). The `RewardComputer` provides dense per-step rewards from perplexity, diversity, repetition, and coherence components.
 
-**Gating mechanism in the model**: Each of the 6 `GatedTransformerBlock` layers contains two `DynamicGate` modules (one for attention output, one for FFN output). These are small MLPs (3→32→embed_dim→sigmoid) that convert the 3D gate signal into per-dimension scaling factors. Initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). When `gate_signals=None`, gates produce unit scaling.
+**Gating mechanism in the model**: Each of the 6 `GatedTransformerBlock` layers contains two `DynamicGate` modules (one for attention output, one for FFN output). These are small MLPs (1→32→embed_dim→sigmoid) that convert the 1D gate signal into per-dimension scaling factors. Initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). When `gate_signals=None`, gates produce unit scaling.
 
 **Key data flow**: `plugins/tidal/DataPipeline.py` loads TinyStories, tokenizes with GPT-2 BPE, flattens all tokens, and chunks into fixed-length sequences. Each sample is `(input_ids, target_ids)` with standard causal LM shift (chunk[:-1], chunk[1:]).
 
@@ -75,8 +75,8 @@ A PPO agent (`GatingPolicyAgent`) learns to control 3 gate signals — [creativi
 - RL checkpoints (from `RLTrainer`) are dicts with keys: `agent_state_dict`, `optimizer_state_dict`, `global_step`, `config`.
 - `Evaluator.__init__` creates its own `TransformerLM` using `config.get("VOCAB_SIZE")` — this must match the checkpoint.
 - `MetricsLogger` writes to both Redis (real-time SSE) and JSONL on disk (archival). Redis is optional — gracefully degrades to disk-only if unavailable.
-- `dashboard.py` is the deprecated Streamlit dashboard. The replacement is in `dashboard/` (Fastify + React).
-- Legacy physics-based architecture lives in `legacy_research/` — do not import from there.
+- `research/legacy/dashboard.py` is the deprecated Streamlit dashboard. The replacement is in `dashboard/` (Fastify + React).
+- Legacy physics-based architecture lives in `research/legacy/` — do not import from there.
 
 ## MUST USE INSTRUCTIONS
 
