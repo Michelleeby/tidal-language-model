@@ -2567,6 +2567,43 @@ class TestCostCriticHead(TimedTestCase):
         agent = GatingPolicyAgent(config, self.device)
         self.assertFalse(hasattr(agent, "cost_critic_head"))
 
+    def test_forward_with_cost_raises_in_weighted_mode(self):
+        """forward_with_cost() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        with self.assertRaises(RuntimeError):
+            agent.forward_with_cost(obs)
+
+    def test_evaluate_actions_with_cost_raises_in_weighted_mode(self):
+        """evaluate_actions_with_cost() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        actions = torch.rand(4, 1) * 0.98 + 0.01
+        with self.assertRaises(RuntimeError):
+            agent.evaluate_actions_with_cost(obs, actions)
+
+    def test_get_cost_value_raises_in_weighted_mode(self):
+        """get_cost_value() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        with self.assertRaises(RuntimeError):
+            agent.get_cost_value(obs)
+
     def test_forward_with_cost_returns_triple(self):
         """forward_with_cost() returns (dist, value, cost_value)."""
         config = {

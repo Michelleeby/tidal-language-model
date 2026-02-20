@@ -152,6 +152,10 @@ class GatingPolicyAgent(nn.Module):
         Reuses the shared feature extractor, calling all three heads once.
         Only available when constraint_mode == 'lagrangian'.
         """
+        if self.constraint_mode != "lagrangian":
+            raise RuntimeError(
+                "forward_with_cost() requires constraint_mode='lagrangian'"
+            )
         if observation.dim() == 1:
             observation = observation.unsqueeze(0)
 
