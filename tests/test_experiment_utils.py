@@ -254,5 +254,31 @@ class TestWriteAndReadExperimentMetadata(unittest.TestCase):
             self.assertEqual(loaded["source_checkpoint"], "/path/to/model.pth")
 
 
+class TestGetPreassignedExperimentId(unittest.TestCase):
+    """Tests for get_preassigned_experiment_id()."""
+
+    def test_returns_env_var_when_set(self):
+        """Should return the TIDAL_EXPERIMENT_ID value when the env var is set."""
+        with patch.dict(os.environ, {"TIDAL_EXPERIMENT_ID": "pre-assigned-exp-123"}):
+            from experiment_utils import get_preassigned_experiment_id
+            result = get_preassigned_experiment_id()
+            self.assertEqual(result, "pre-assigned-exp-123")
+
+    def test_returns_none_when_not_set(self):
+        """Should return None when TIDAL_EXPERIMENT_ID is not in environment."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TIDAL_EXPERIMENT_ID", None)
+            from experiment_utils import get_preassigned_experiment_id
+            result = get_preassigned_experiment_id()
+            self.assertIsNone(result)
+
+    def test_returns_none_for_empty_string(self):
+        """Should return None when TIDAL_EXPERIMENT_ID is an empty string."""
+        with patch.dict(os.environ, {"TIDAL_EXPERIMENT_ID": ""}):
+            from experiment_utils import get_preassigned_experiment_id
+            result = get_preassigned_experiment_id()
+            self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

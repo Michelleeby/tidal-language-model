@@ -12,6 +12,7 @@ import { JobStore, jobStoreKeysFromManifest } from "../services/job-store.js";
 import { JobOrchestrator } from "../services/job-orchestrator.js";
 import { ExperimentArchiver, archiverConfigFromManifest } from "../services/experiment-archiver.js";
 import { JobPolicyRegistry } from "../services/job-policy.js";
+import { preCreateExperiment } from "../services/experiment-precreation.js";
 
 export default async function jobRoutes(fastify: FastifyInstance) {
   const config = fastify.serverConfig;
@@ -46,7 +47,23 @@ export default async function jobRoutes(fastify: FastifyInstance) {
   // POST /api/jobs — create a new training job
   fastify.post<{ Body: CreateJobRequest }>("/api/jobs", { preHandler: [fastify.verifyAuth] }, async (request, reply) => {
     try {
-      const job = await orchestrator.createJob(request.body);
+      // Pre-create experiment so the response includes experimentId immediately
+      let experimentId: string | undefined;
+      if (fastify.redis) {
+        try {
+          experimentId = await preCreateExperiment(
+            request.body.type,
+            request.body,
+            config.experimentsDir,
+            fastify.redis,
+            config.projectRoot,
+          );
+        } catch (err) {
+          fastify.log.warn({ err }, "Experiment pre-creation failed, continuing without");
+        }
+      }
+
+      const job = await orchestrator.createJob(request.body, experimentId);
       return reply.status(201).send({ job } satisfies CreateJobResponse);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

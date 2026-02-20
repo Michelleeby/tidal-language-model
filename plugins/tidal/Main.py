@@ -15,6 +15,7 @@ from plugins.tidal.Utils import setup_logger
 from experiment_utils import (
     get_git_commit_hash,
     get_file_hash,
+    get_preassigned_experiment_id,
     report_experiment_id_to_job,
     create_experiment_metadata,
     write_experiment_metadata,
@@ -45,20 +46,28 @@ def main():
             sys.exit(1)
         experiment_id = os.path.basename(experiment_dir)
     else:
-        timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        base_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
-        experiment_id = f"{timestamp}-{base_id}"
-        experiment_dir = os.path.join("experiments", experiment_id)
+        preassigned_id = get_preassigned_experiment_id()
+        if preassigned_id:
+            # Dashboard pre-created the experiment directory
+            experiment_id = preassigned_id
+            experiment_dir = os.path.join("experiments", experiment_id)
+        else:
+            # Standalone run: generate new ID
+            timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+            base_id = f"commit_{get_git_commit_hash()}-config_{get_file_hash(args.config)}"
+            experiment_id = f"{timestamp}-{base_id}"
+            experiment_dir = os.path.join("experiments", experiment_id)
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, "config.yaml"))
 
-    # 2a. Write experiment metadata (skip for resumed experiments that already have it)
-    if not args.resume:
+    # 2a. Write experiment metadata (skip for resumed and pre-assigned experiments)
+    if not args.resume and not get_preassigned_experiment_id():
         metadata = create_experiment_metadata("lm")
         write_experiment_metadata(experiment_dir, metadata)
 
-    # 2b. Report experiment ID to Redis job record (if launched by worker agent)
-    report_experiment_id_to_job(experiment_id)
+    # 2b. Report experiment ID to Redis job record (skip if pre-assigned)
+    if not get_preassigned_experiment_id():
+        report_experiment_id_to_job(experiment_id)
 
     # 3. Setup Logger
     logger = setup_logger("MainOrchestrator", os.path.join(experiment_dir, "main.log"), config)

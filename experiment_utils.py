@@ -90,6 +90,17 @@ def resolve_device(config: dict) -> torch.device:
     return torch.device(device_str)
 
 
+def get_preassigned_experiment_id() -> str | None:
+    """Return the pre-assigned experiment ID from the environment, or None.
+
+    When the dashboard pre-creates an experiment before spawning the training
+    subprocess, it passes the ID via the TIDAL_EXPERIMENT_ID environment
+    variable.  Training scripts should check this before generating their own.
+    """
+    value = os.environ.get("TIDAL_EXPERIMENT_ID", "")
+    return value if value else None
+
+
 def report_experiment_id_to_job(experiment_id: str) -> None:
     """Report the experiment ID back to the Redis job record.
 
