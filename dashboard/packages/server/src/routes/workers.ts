@@ -422,7 +422,10 @@ export default async function workerRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Job not found" });
       }
 
-      const expId = job.experimentId ?? request.query.expId;
+      // Prefer explicit query param: the worker passes the source experiment ID
+      // when downloading a checkpoint that lives in a different experiment
+      // (e.g. RL job downloading the base LM checkpoint).
+      const expId = request.query.expId ?? job.experimentId;
       if (!expId) {
         return reply.status(400).send({
           error:

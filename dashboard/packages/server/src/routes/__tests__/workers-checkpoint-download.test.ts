@@ -206,6 +206,32 @@ describe("GET /api/workers/:jobId/checkpoints/:filename — file streaming", () 
 
     await app.close();
   });
+
+  it("prefers query param expId over job experimentId (RL source checkpoint)", async () => {
+    const tmpDir = await freshTmpDir();
+    const app = await buildApp(tmpDir);
+    // Job has a pre-created RL experiment ID, but the checkpoint lives in the
+    // source LM experiment directory
+    seedJob(app, "job-3", { experimentId: "new-rl-exp" });
+
+    const sourceDir = path.join(tmpDir, "source-lm-exp");
+    await fsp.mkdir(sourceDir, { recursive: true });
+    const content = Buffer.from("source model weights");
+    await fsp.writeFile(
+      path.join(sourceDir, "transformer-lm_v1.0.0.pth"),
+      content,
+    );
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/workers/job-3/checkpoints/transformer-lm_v1.0.0.pth?expId=source-lm-exp",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.deepEqual(resp.rawPayload, content);
+
+    await app.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
