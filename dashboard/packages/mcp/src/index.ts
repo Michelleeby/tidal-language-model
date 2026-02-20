@@ -29,7 +29,7 @@ import { join } from "node:path";
 const CACHE_DIR = process.env.TIDAL_CACHE_DIR ?? join(homedir(), ".cache", "tidal");
 const client = new CachingTidalApiClient(new FetchTidalApiClient(BASE_URL, TOKEN), CACHE_DIR);
 
-// Register all 15 tools
+// Register all 16 tools
 registerExperimentTools(server, client);
 registerPluginTools(server, client);
 registerJobTools(server, client);

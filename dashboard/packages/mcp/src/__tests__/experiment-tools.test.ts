@@ -23,6 +23,7 @@ function mockClient(
   return {
     get: async () => getResult as ApiResult<never>,
     post: async () => (postResult ?? getResult) as ApiResult<never>,
+    put: async () => (postResult ?? getResult) as ApiResult<never>,
   };
 }
 
@@ -96,6 +97,7 @@ describe("handleGetMetrics", () => {
         return { ok: true, data, status: 200 } as ApiResult<never>;
       },
       post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     const result = await handleGetMetrics(client, {

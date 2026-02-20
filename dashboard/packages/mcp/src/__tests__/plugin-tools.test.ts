@@ -15,6 +15,7 @@ function okClient<T>(data: T): TidalApiClient {
   return {
     get: async () => ({ ok: true, data, status: 200 }) as ApiResult<never>,
     post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+    put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
   };
 }
 
@@ -22,6 +23,7 @@ function errClient(status: number, error: string): TidalApiClient {
   return {
     get: async () => ({ ok: false, error, status }) as ApiResult<never>,
     post: async () => ({ ok: false, error, status }) as ApiResult<never>,
+    put: async () => ({ ok: false, error, status }) as ApiResult<never>,
   };
 }
 
@@ -92,6 +94,7 @@ describe("handleGetPluginManifest", () => {
         return { ok: true, data: { plugin: null }, status: 200 } as ApiResult<never>;
       },
       post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     await handleGetPluginManifest(client, { pluginName: "tidal" });
@@ -106,6 +109,7 @@ describe("handleGetPluginManifest", () => {
         return { ok: true, data: { plugin: null }, status: 200 } as ApiResult<never>;
       },
       post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     await handleGetPluginManifest(client, {});
@@ -145,6 +149,7 @@ describe("handleGetConfig", () => {
         } as ApiResult<never>;
       },
       post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     await handleGetConfig(client, {

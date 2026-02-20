@@ -11,6 +11,7 @@ function okClient<T>(data: T): TidalApiClient {
   return {
     get: async () => ({ ok: true, data, status: 200 }) as ApiResult<never>,
     post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+    put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
   };
 }
 
@@ -18,6 +19,7 @@ function errClient(status: number, error: string): TidalApiClient {
   return {
     get: async () => ({ ok: false, error, status }) as ApiResult<never>,
     post: async () => ({ ok: false, error, status }) as ApiResult<never>,
+    put: async () => ({ ok: false, error, status }) as ApiResult<never>,
   };
 }
 
@@ -88,6 +90,7 @@ describe("handleGetJobLogs", () => {
         } as ApiResult<never>;
       },
       post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     await handleGetJobLogs(client, { jobId: "job-1", offset: 50, limit: 100 });

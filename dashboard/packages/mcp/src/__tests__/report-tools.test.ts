@@ -4,6 +4,7 @@ import type { TidalApiClient, ApiResult } from "../http-client.js";
 import {
   handleListPatterns,
   handleGenerateReport,
+  handleUpdateReport,
 } from "../tools/report-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -13,10 +14,12 @@ import {
 function mockClient(
   getResult: ApiResult<unknown>,
   postResult?: ApiResult<unknown>,
+  putResult?: ApiResult<unknown>,
 ): TidalApiClient {
   return {
     get: async () => getResult as ApiResult<never>,
     post: async () => (postResult ?? getResult) as ApiResult<never>,
+    put: async () => (putResult ?? postResult ?? getResult) as ApiResult<never>,
   };
 }
 
@@ -29,6 +32,22 @@ function okPostClient<T>(data: T): TidalApiClient {
 
 function errPostClient(status: number, error: string): TidalApiClient {
   return mockClient(
+    { ok: true, data: {}, status: 200 },
+    { ok: false, error, status },
+  );
+}
+
+function okPutClient<T>(data: T): TidalApiClient {
+  return mockClient(
+    { ok: true, data: {}, status: 200 },
+    { ok: true, data: {}, status: 200 },
+    { ok: true, data, status: 200 },
+  );
+}
+
+function errPutClient(status: number, error: string): TidalApiClient {
+  return mockClient(
+    { ok: true, data: {}, status: 200 },
     { ok: true, data: {}, status: 200 },
     { ok: false, error, status },
   );
@@ -116,6 +135,7 @@ describe("handleGenerateReport", () => {
           status: 201,
         } as ApiResult<never>;
       },
+      put: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
     };
 
     await handleGenerateReport(client, {
@@ -131,5 +151,99 @@ describe("handleGenerateReport", () => {
       title: "My Report",
       githubLogin: "octocat",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleUpdateReport
+// ---------------------------------------------------------------------------
+
+describe("handleUpdateReport", () => {
+  it("returns updated report on success", async () => {
+    const fakeReport = {
+      report: {
+        id: "rpt-1",
+        userId: null,
+        title: "Updated Title",
+        blocks: [{ type: "paragraph", content: "analysis" }],
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    };
+    const client = okPutClient(fakeReport);
+
+    const result = await handleUpdateReport(client, {
+      reportId: "rpt-1",
+      title: "Updated Title",
+      blocks: [{ type: "paragraph", content: "analysis" }],
+    });
+
+    assert.equal(result.isError, undefined);
+    const parsed = JSON.parse(result.content[0].text as string);
+    assert.equal(parsed.report.id, "rpt-1");
+    assert.equal(parsed.report.title, "Updated Title");
+  });
+
+  it("returns error on API failure", async () => {
+    const client = errPutClient(404, "Report not found");
+
+    const result = await handleUpdateReport(client, {
+      reportId: "missing",
+    });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text as string, /Report not found/);
+  });
+
+  it("passes reportId, title, and blocks through to API", async () => {
+    let capturedPath = "";
+    let capturedBody: unknown;
+    const client: TidalApiClient = {
+      get: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async (_path, body) => {
+        capturedPath = _path;
+        capturedBody = body;
+        return {
+          ok: true,
+          data: { report: { id: "rpt-3", blocks: [] } },
+          status: 200,
+        } as ApiResult<never>;
+      },
+    };
+
+    await handleUpdateReport(client, {
+      reportId: "rpt-3",
+      title: "New Title",
+      blocks: [{ type: "heading", content: "H1" }],
+    });
+
+    assert.equal(capturedPath, "/api/reports/rpt-3");
+    assert.deepEqual(capturedBody, {
+      title: "New Title",
+      blocks: [{ type: "heading", content: "H1" }],
+    });
+  });
+
+  it("omits undefined optional fields from request body", async () => {
+    let capturedBody: unknown;
+    const client: TidalApiClient = {
+      get: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      post: async () => ({ ok: true, data: {}, status: 200 }) as ApiResult<never>,
+      put: async (_path, body) => {
+        capturedBody = body;
+        return {
+          ok: true,
+          data: { report: { id: "rpt-4", blocks: [] } },
+          status: 200,
+        } as ApiResult<never>;
+      },
+    };
+
+    await handleUpdateReport(client, {
+      reportId: "rpt-4",
+    });
+
+    assert.deepEqual(capturedBody, {});
   });
 });
