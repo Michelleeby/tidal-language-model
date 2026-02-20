@@ -43,6 +43,12 @@ export interface StatusResponse {
   status: TrainingStatus | null;
 }
 
+/** POST /api/experiments/:expId/status/complete */
+export interface MarkCompleteResponse {
+  expId: string;
+  status: TrainingStatus;
+}
+
 /** GET /api/experiments/:expId/checkpoints */
 export interface CheckpointsResponse {
   expId: string;

@@ -220,7 +220,7 @@ export default function ExperimentNotebook() {
       <CollapsibleSection title="Overview" defaultOpen>
         <MetricCarousel>
           <MetricCards latest={latestPoint} />
-          <TrainingStatusCard status={status} />
+          <TrainingStatusCard status={status} expId={selectedExpId} />
         </MetricCarousel>
         <div className="mt-3">
           <LogTailCard jobId={activeJobId} />

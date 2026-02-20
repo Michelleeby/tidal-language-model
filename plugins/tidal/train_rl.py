@@ -305,8 +305,10 @@ def main():
     print(f"  Learning rate:   {merged_config.get('RL_LEARNING_RATE', 3e-4)}")
     print(f"{'=' * 60}\n")
 
+    training_completed = False
     try:
         history = trainer.train(total_timesteps)
+        training_completed = True
         print(f"\nTraining complete. Final checkpoint saved to {experiment_dir}")
     except KeyboardInterrupt:
         print("\n\nTraining interrupted. Saving checkpoint...")
@@ -324,6 +326,9 @@ def main():
         experiment_dir=experiment_dir,
         device=device,
     )
+
+    if training_completed:
+        metrics_logger.finalize()
 
     print("\nDone.")
 
