@@ -196,6 +196,7 @@ class WorkerAgent:
         self.process: subprocess.Popen | None = None
         self._heartbeat_stop = threading.Event()
         self._project_root = os.path.dirname(os.path.abspath(__file__))
+        self._job: dict | None = None
 
         # Ensure child process is killed if we receive SIGTERM/SIGINT
         signal.signal(signal.SIGTERM, self._handle_terminate)
@@ -304,6 +305,7 @@ class WorkerAgent:
             print(f"Job {self.job_id} not found", file=sys.stderr)
             sys.exit(1)
 
+        self._job = job
         job_type = job["config"]["type"]
         config = job["config"]
 
@@ -349,7 +351,12 @@ class WorkerAgent:
            starts).
         """
         plugin_name = config.get("plugin", "tidal")
-        extra_env = None
+        extra_env: dict[str, str] | None = None
+
+        # Pass pre-assigned experiment ID to the training subprocess
+        experiment_id = self._job.get("experimentId") if self._job else None
+        if experiment_id:
+            extra_env = {"TIDAL_EXPERIMENT_ID": experiment_id}
 
         plugin_dir_cfg = config.get("pluginDir")
         resolved = (
@@ -363,7 +370,7 @@ class WorkerAgent:
             plugin_dir = resolved
             # PYTHONPATH includes parent so `python -m <name>.Main` works
             parent = os.path.dirname(plugin_dir)
-            extra_env = {"PYTHONPATH": parent}
+            extra_env = {**(extra_env or {}), "PYTHONPATH": parent}
         else:
             # System plugin or remote user plugin (already at plugins/<name>/)
             plugin_dir = os.path.join(self._project_root, "plugins", plugin_name)

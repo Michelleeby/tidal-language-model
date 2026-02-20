@@ -74,7 +74,7 @@ export class JobOrchestrator {
     this.healthMonitor.start();
   }
 
-  async createJob(request: CreateJobRequest): Promise<TrainingJob> {
+  async createJob(request: CreateJobRequest, experimentId?: string): Promise<TrainingJob> {
     // Enforce per-type concurrency via policy
     const policy = this.policyRegistry.get(request.type);
     if (policy) {
@@ -106,6 +106,10 @@ export class JobOrchestrator {
       createdAt: now,
       updatedAt: now,
     };
+
+    if (experimentId) {
+      job.experimentId = experimentId;
+    }
 
     await this.store.create(job);
     this.log.info({ jobId: job.jobId, type: job.type }, "Job created");

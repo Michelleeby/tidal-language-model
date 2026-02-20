@@ -50,6 +50,7 @@ from MetricsLogger import MetricsLogger
 from experiment_utils import (
     get_git_commit_hash,
     get_file_hash,
+    get_preassigned_experiment_id,
     resolve_device,
     report_experiment_id_to_job,
     create_experiment_metadata,
@@ -207,13 +208,23 @@ def main():
             sys.exit(1)
         experiment_id = os.path.basename(experiment_dir)
     else:
-        # Always create a new independent experiment directory
-        experiment_dir, experiment_id = create_rl_experiment_dir(
-            checkpoint_path=args.checkpoint,
-            rl_config_path=args.rl_config,
-            base_config_path=args.config,
-        )
-        report_experiment_id_to_job(experiment_id)
+        preassigned_id = get_preassigned_experiment_id()
+        if preassigned_id:
+            # Dashboard pre-created the experiment directory
+            experiment_id = preassigned_id
+            experiment_dir = os.path.join("experiments", experiment_id)
+            os.makedirs(experiment_dir, exist_ok=True)
+            # Copy configs into the pre-created directory
+            shutil.copy(args.config, os.path.join(experiment_dir, "base_config.yaml"))
+            shutil.copy(args.rl_config, os.path.join(experiment_dir, "rl_config.yaml"))
+        else:
+            # Standalone run: create a new independent experiment directory
+            experiment_dir, experiment_id = create_rl_experiment_dir(
+                checkpoint_path=args.checkpoint,
+                rl_config_path=args.rl_config,
+                base_config_path=args.config,
+            )
+            report_experiment_id_to_job(experiment_id)
 
     print(f"Experiment: {experiment_id}")
     print(f"Output dir: {experiment_dir}")
