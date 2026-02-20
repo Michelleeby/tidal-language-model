@@ -16,15 +16,29 @@ function statusColor(exp: ExperimentSummary): string {
   }
 }
 
-function phaseBadges(exp: ExperimentSummary): string[] {
-  const badges: string[] = [];
-  const hasFoundational = exp.checkpoints.some((c) =>
-    c.startsWith("checkpoint_foundational"),
-  );
-  const hasRL = exp.checkpoints.some((c) => c.startsWith("rl_checkpoint"));
-  if (hasFoundational) badges.push("LM");
-  if (hasRL) badges.push("RL");
-  if (exp.hasEvaluation) badges.push("Eval");
+interface TypeBadge {
+  label: string;
+  color: string;
+}
+
+function typeBadges(exp: ExperimentSummary): TypeBadge[] {
+  const badges: TypeBadge[] = [];
+
+  if (exp.experimentType === "rl") {
+    badges.push({ label: "RL", color: "bg-purple-700 text-purple-200" });
+  } else if (exp.experimentType === "lm") {
+    badges.push({ label: "LM", color: "bg-blue-700 text-blue-200" });
+  } else {
+    // Legacy/unknown — infer from checkpoints
+    const hasFoundational = exp.checkpoints.some((c) =>
+      c.startsWith("checkpoint_foundational"),
+    );
+    const hasRL = exp.checkpoints.some((c) => c.startsWith("rl_checkpoint"));
+    if (hasFoundational) badges.push({ label: "LM", color: "bg-blue-700 text-blue-200" });
+    if (hasRL) badges.push({ label: "RL", color: "bg-purple-700 text-purple-200" });
+  }
+
+  if (exp.hasEvaluation) badges.push({ label: "Eval", color: "bg-gray-700 text-gray-300" });
   return badges;
 }
 
@@ -125,15 +139,22 @@ export default function ExperimentSidebar() {
                       <span className="text-xs text-gray-500">
                         {exp.checkpoints.length} ckpt{exp.checkpoints.length !== 1 ? "s" : ""}
                       </span>
-                      {phaseBadges(exp).map((badge) => (
+                      {typeBadges(exp).map((badge) => (
                         <span
-                          key={badge}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-300"
+                          key={badge.label}
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${badge.color}`}
                         >
-                          {badge}
+                          {badge.label}
                         </span>
                       ))}
                     </div>
+                    {exp.experimentType === "rl" && exp.sourceExperimentId && (
+                      <div className="ml-4 mt-0.5">
+                        <span className="text-[10px] text-gray-600 truncate block">
+                          from {exp.sourceExperimentId.slice(0, 16)}...
+                        </span>
+                      </div>
+                    )}
                   </button>
                 </li>
               ))}

@@ -46,6 +46,12 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
+    // 0. Dev mode bypass — auto-authenticate as synthetic user
+    if (fastify.serverConfig.devMode) {
+      request.user = { type: "jwt", userId: "dev", githubLogin: "dev" };
+      return;
+    }
+
     // 1. Try JWT cookie first
     if (jwtKey) {
       const cookieToken =

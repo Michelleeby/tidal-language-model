@@ -64,6 +64,9 @@ export interface GeneratedSample {
   top_k?: number;
 }
 
+/** Experiment type: LM pretraining, RL gating, or unknown (legacy). */
+export type ExperimentType = "lm" | "rl" | "unknown";
+
 /** Experiment summary for listing. */
 export interface ExperimentSummary {
   id: string;
@@ -75,6 +78,9 @@ export interface ExperimentSummary {
   hasGpuInstance: boolean;
   status: TrainingStatus | null;
   checkpoints: string[];
+  experimentType: ExperimentType;
+  sourceExperimentId: string | null;
+  sourceCheckpoint: string | null;
 }
 
 /** Checkpoint file info. */

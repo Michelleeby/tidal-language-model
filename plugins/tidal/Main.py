@@ -12,7 +12,13 @@ yaml = YAML(typ="safe")
 from plugins.tidal.Trainer import Trainer
 from plugins.tidal.Evaluator import Evaluator
 from plugins.tidal.Utils import setup_logger
-from experiment_utils import get_git_commit_hash, get_file_hash, report_experiment_id_to_job
+from experiment_utils import (
+    get_git_commit_hash,
+    get_file_hash,
+    report_experiment_id_to_job,
+    create_experiment_metadata,
+    write_experiment_metadata,
+)
 
 
 def main():
@@ -45,6 +51,11 @@ def main():
         experiment_dir = os.path.join("experiments", experiment_id)
     os.makedirs(os.path.join(experiment_dir, "results"), exist_ok=True)
     shutil.copy(args.config, os.path.join(experiment_dir, "config.yaml"))
+
+    # 2a. Write experiment metadata (skip for resumed experiments that already have it)
+    if not args.resume:
+        metadata = create_experiment_metadata("lm")
+        write_experiment_metadata(experiment_dir, metadata)
 
     # 2b. Report experiment ID to Redis job record (if launched by worker agent)
     report_experiment_id_to_job(experiment_id)

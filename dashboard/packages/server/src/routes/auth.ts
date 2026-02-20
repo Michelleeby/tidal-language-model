@@ -155,6 +155,19 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // -----------------------------------------------------------------------
 
   fastify.get("/api/auth/me", async (request) => {
+    if (fastify.serverConfig.devMode) {
+      return {
+        user: {
+          id: "dev",
+          githubId: 0,
+          githubLogin: "dev",
+          githubAvatarUrl: null,
+          createdAt: Date.now(),
+          lastLoginAt: Date.now(),
+        },
+      };
+    }
+
     if (!jwtKey) {
       return { user: null };
     }

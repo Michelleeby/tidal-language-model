@@ -4,6 +4,7 @@ import type {
   RLMetricsResponse,
   StatusResponse,
   CheckpointsResponse,
+  AllCheckpointsResponse,
   EvaluationResponse,
   AblationResponse,
   GenerateRequest,
@@ -81,6 +82,9 @@ export const api = {
 
   getAblation: (expId: string) =>
     fetchJson<AblationResponse>(`${BASE}/experiments/${expId}/ablation`),
+
+  getAllCheckpoints: () =>
+    fetchJson<AllCheckpointsResponse>(`${BASE}/checkpoints`),
 
   generate: (body: GenerateRequest) =>
     fetchJson<GenerateResponse>(`${BASE}/generate`, {

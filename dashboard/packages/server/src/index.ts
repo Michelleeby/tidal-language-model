@@ -31,6 +31,7 @@ import authRoutes from "./routes/auth.js";
 import modelSourceRoutes from "./routes/model-source.js";
 import analyzeRoutes from "./routes/analyze.js";
 import analysesRoutes from "./routes/analyses.js";
+import allCheckpointsRoutes from "./routes/all-checkpoints.js";
 import adminRoutes from "./routes/admin.js";
 
 declare module "fastify" {
@@ -54,6 +55,12 @@ async function main() {
   }
   if (issues.some((i) => i.level === "error")) {
     process.exit(1);
+  }
+
+  if (config.devMode) {
+    console.warn(
+      "⚠ TIDAL_DEV_MODE is enabled — authentication is bypassed. Do not use in production.",
+    );
   }
 
   const fastify = Fastify({
@@ -136,6 +143,7 @@ async function main() {
   await fastify.register(modelSourceRoutes);
   await fastify.register(analyzeRoutes);
   await fastify.register(analysesRoutes);
+  await fastify.register(allCheckpointsRoutes);
   await fastify.register(adminRoutes);
 
   // Serve built client in production

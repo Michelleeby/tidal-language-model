@@ -96,6 +96,7 @@ export interface ServerConfig {
   repoUrl: string | null;
   dashboardUrl: string | null;
   githubAdminUser: string | null;
+  devMode: boolean;
 }
 
 export function loadConfig(): ServerConfig {
@@ -138,5 +139,6 @@ export function loadConfig(): ServerConfig {
         ? `http://${process.env.TIDAL_DROPLET_IP}`
         : null),
     githubAdminUser: process.env.GITHUB_ADMIN_USER ?? null,
+    devMode: process.env.TIDAL_DEV_MODE === "true",
   };
 }

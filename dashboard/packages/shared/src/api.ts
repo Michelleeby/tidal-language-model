@@ -61,6 +61,16 @@ export interface AblationResponse {
   results: AblationResults | null;
 }
 
+/** GET /api/checkpoints — RL-eligible checkpoints from all LM experiments. */
+export interface AllCheckpointsGroup {
+  experimentId: string;
+  checkpoints: CheckpointInfo[];
+}
+
+export interface AllCheckpointsResponse {
+  groups: AllCheckpointsGroup[];
+}
+
 /** POST /api/generate */
 export interface GenerateRequest {
   checkpoint: string;
