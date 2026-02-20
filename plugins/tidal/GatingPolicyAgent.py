@@ -66,6 +66,14 @@ class GatingPolicyAgent(nn.Module):
             nn.Linear(32, 1),
         )
 
+        self.constraint_mode = config.get("RL_CONSTRAINT_MODE", "weighted")
+        if self.constraint_mode == "lagrangian":
+            self.cost_critic_head = nn.Sequential(
+                nn.Linear(64, 32),
+                nn.Tanh(),
+                nn.Linear(32, 1),
+            )
+
         self._initialize_weights()
         self.to(self.device)
 
@@ -76,7 +84,10 @@ class GatingPolicyAgent(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-        for layer in [self.actor_head[-1], self.critic_head[-1]]:
+        output_heads = [self.actor_head[-1], self.critic_head[-1]]
+        if self.constraint_mode == "lagrangian":
+            output_heads.append(self.cost_critic_head[-1])
+        for layer in output_heads:
             nn.init.orthogonal_(layer.weight, gain=0.01)
 
     def forward(
@@ -132,6 +143,52 @@ class GatingPolicyAgent(nn.Module):
         with torch.no_grad():
             _, value = self.forward(observation)
         return value.squeeze(-1)
+
+    def forward_with_cost(
+        self, observation: torch.Tensor,
+    ) -> Tuple[torch.distributions.Distribution, torch.Tensor, torch.Tensor]:
+        """Forward pass returning action distribution, value, and cost value.
+
+        Reuses the shared feature extractor, calling all three heads once.
+        Only available when constraint_mode == 'lagrangian'.
+        """
+        if observation.dim() == 1:
+            observation = observation.unsqueeze(0)
+
+        features = self.feature_extractor(observation)
+
+        actor_output = self.actor_head(features)
+        alpha = F.softplus(actor_output[:, :self.action_dim]) + 1.0
+        beta = F.softplus(actor_output[:, self.action_dim:]) + 1.0
+        alpha = alpha.clamp(max=self.beta_concentration_max)
+        beta = beta.clamp(max=self.beta_concentration_max)
+        action_dist = Beta(alpha, beta)
+
+        value = self.critic_head(features)
+        cost_value = self.cost_critic_head(features)
+
+        return action_dist, value, cost_value
+
+    def evaluate_actions_with_cost(
+        self, observations: torch.Tensor, actions: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate actions returning log_probs, values, entropy, and cost values.
+
+        Only available when constraint_mode == 'lagrangian'.
+        """
+        action_dist, value, cost_value = self.forward_with_cost(observations)
+
+        actions = actions.clamp(0.001, 0.999)
+        log_probs = action_dist.log_prob(actions).sum(dim=-1)
+        entropy = action_dist.entropy().sum(dim=-1)
+
+        return log_probs, value.squeeze(-1), entropy, cost_value.squeeze(-1)
+
+    def get_cost_value(self, observation: torch.Tensor) -> torch.Tensor:
+        """Get cost value estimate for an observation."""
+        with torch.no_grad():
+            _, _, cost_value = self.forward_with_cost(observation)
+        return cost_value.squeeze(-1)
 
 
 class GaussianGatingPolicyAgent(nn.Module):

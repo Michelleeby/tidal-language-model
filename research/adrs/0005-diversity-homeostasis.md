@@ -1,7 +1,7 @@
 # 0005. Diversity Homeostasis for RL Gating Agent
 
 **Date:** 2026-02-19
-**Status:** Accepted
+**Status:** Superseded by [0006](0006-ppo-lagrangian-diversity-constraint.md) for diversity enforcement. Retained for `"weighted"` constraint mode.
 
 ## Context
 

@@ -249,6 +249,7 @@ Design decisions are documented in [`research/adrs/`](research/adrs/):
 | [0003](research/adrs/0003-recalibrate-entropy-homeostasis-and-reward-weights.md) | Recalibrate entropy homeostasis and reward weights for 1D gate |
 | [0004](research/adrs/0004-lazy-disk-cache-for-mcp-http-client.md) | Lazy disk cache for MCP HTTP client |
 | [0005](research/adrs/0005-diversity-homeostasis.md) | Diversity homeostasis for RL gating agent |
+| [0006](research/adrs/0006-ppo-lagrangian-diversity-constraint.md) | PPO-Lagrangian diversity constraint |
 
 ## Legacy
 
