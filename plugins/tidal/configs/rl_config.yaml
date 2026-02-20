@@ -55,7 +55,7 @@ RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
 # multiplier automatically scales the penalty for constraint violations.
 # Overrides DiversityHomeostasis when active.
 #
-RL_CONSTRAINT_MODE: "lagrangian"      # Options: "weighted" (default), "lagrangian"
+RL_CONSTRAINT_MODE: "weighted"         # Options: "weighted" (default), "lagrangian"
 RL_DIVERSITY_CONSTRAINT_THRESHOLD: 0.55  # Minimum diversity reward (constraint floor)
 RL_LAGRANGE_MULTIPLIER_LR: 0.05         # Learning rate for dual variable
 RL_LAGRANGE_MULTIPLIER_INIT: 1.0        # Initial Lagrange multiplier value
@@ -113,11 +113,14 @@ RL_MODULATION_TOP_K_MAX: 100  # At modulation=1: wide sampling (top 100 tokens)
 # ============================================================================
 
 # Multi-component reward: reward = sum(weight_i * component_i)
-RL_REWARD_PERPLEXITY_WEIGHT: 0.35  # Lower perplexity = better (quality)
-RL_REWARD_DIVERSITY_WEIGHT: 0.15   # Higher diversity = better (raw logits entropy)
-RL_REWARD_SAMPLING_WEIGHT: 0.15    # Sampling entropy of post-filtered distribution
-RL_REWARD_REPETITION_WEIGHT: 0.20  # Lower repetition = better
-RL_REWARD_COHERENCE_WEIGHT: 0.15   # Higher coherence = better (quality)
+# Experiment: weighted mode + zero repetition (repetition reward is dead weight;
+# GatingModulator's logit-level penalty handles repetition pre-sampling).
+# Renormalized from 0.35/0.15/0.15/0.20/0.15 with repetition zeroed (÷ 0.80).
+RL_REWARD_PERPLEXITY_WEIGHT: 0.4375  # Lower perplexity = better (quality)
+RL_REWARD_DIVERSITY_WEIGHT: 0.1875   # Higher diversity = better (raw logits entropy)
+RL_REWARD_SAMPLING_WEIGHT: 0.1875    # Sampling entropy of post-filtered distribution
+RL_REWARD_REPETITION_WEIGHT: 0.0     # Zeroed: logit-level penalty handles repetition
+RL_REWARD_COHERENCE_WEIGHT: 0.1875   # Higher coherence = better (quality)
 
 # Reward normalization
 RL_PERPLEXITY_CLIP: 100.0  # Max perplexity before clipping
