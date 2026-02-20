@@ -2788,12 +2788,23 @@ class TestPPOTrainerLagrangian(TimedTestCase):
         trainer, _ = self._make_trainer(config)
         self.assertIsNone(trainer.diversity_homeostasis)
 
-    def test_lagrangian_zeros_diversity_weight(self):
-        """In lagrangian mode, env.reward_computer.diversity_weight == 0."""
+    def test_lagrangian_zeros_diversity_and_repetition_weights(self):
+        """In lagrangian mode, diversity_weight and repetition_weight are both 0."""
         config = self._base_config()
         config["RL_CONSTRAINT_MODE"] = "lagrangian"
         trainer, _ = self._make_trainer(config)
         self.assertAlmostEqual(trainer.env.reward_computer.diversity_weight, 0.0, places=5)
+        self.assertAlmostEqual(trainer.env.reward_computer.repetition_weight, 0.0, places=5)
+
+    def test_lagrangian_preserves_sampling_weight(self):
+        """In lagrangian mode, sampling_weight > 0 and remaining weights sum to 1."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        trainer, _ = self._make_trainer(config)
+        rc = trainer.env.reward_computer
+        self.assertGreater(rc.sampling_weight, 0.0)
+        total = rc.perplexity_weight + rc.sampling_weight + rc.coherence_weight
+        self.assertAlmostEqual(total, 1.0, places=5)
 
     def test_collect_rollouts_stores_costs(self):
         """buffer.costs has non-trivial values after collect_rollouts in lagrangian mode."""

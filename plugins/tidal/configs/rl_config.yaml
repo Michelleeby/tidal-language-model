@@ -50,7 +50,7 @@ RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
 # CONSTRAINED PPO (PPO-LAGRANGIAN)
 # ============================================================================
 # When RL_CONSTRAINT_MODE is "lagrangian", diversity is enforced as a hard
-# constraint instead of a weighted reward component. The diversity and sampling
+# constraint instead of a weighted reward component. The diversity and repetition
 # weights are zeroed and remaining weights renormalized. A learned Lagrange
 # multiplier automatically scales the penalty for constraint violations.
 # Overrides DiversityHomeostasis when active.
