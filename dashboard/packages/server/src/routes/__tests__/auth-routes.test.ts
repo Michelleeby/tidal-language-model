@@ -39,6 +39,7 @@ async function buildApp(opts?: {
   githubClientId?: string | null;
   githubClientSecret?: string | null;
   jwtSecret?: string | null;
+  devMode?: boolean;
 }): Promise<{ app: FastifyInstance; db: Database }> {
   const dir = await freshTmpDir();
   const db = new Database(path.join(dir, "test.db"));
@@ -50,6 +51,7 @@ async function buildApp(opts?: {
     githubClientId: opts?.githubClientId !== undefined ? opts.githubClientId : GITHUB_CLIENT_ID,
     githubClientSecret: opts?.githubClientSecret !== undefined ? opts.githubClientSecret : GITHUB_CLIENT_SECRET,
     publicUrl: "http://localhost:4400",
+    devMode: opts?.devMode ?? false,
   } as unknown as ServerConfig);
   app.decorate("db", db);
 
@@ -364,6 +366,70 @@ describe("POST /api/auth/logout", () => {
     assert.ok(
       new Date(sessionCookie.expires!).getTime() <= Date.now(),
     );
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dev mode — /api/auth/me returns synthetic user
+// ---------------------------------------------------------------------------
+
+describe("GET /api/auth/me — dev mode", () => {
+  it("returns synthetic dev user when devMode is true", async () => {
+    const { app } = await buildApp({
+      jwtSecret: null,
+      githubClientId: null,
+      githubClientSecret: null,
+      devMode: true,
+    });
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.equal(body.user.id, "dev");
+    assert.equal(body.user.githubId, 0);
+    assert.equal(body.user.githubLogin, "dev");
+    assert.equal(body.user.githubAvatarUrl, null);
+    assert.ok(typeof body.user.createdAt === "number");
+    assert.ok(typeof body.user.lastLoginAt === "number");
+
+    await app.close();
+  });
+
+  it("returns synthetic dev user even with no cookies", async () => {
+    const { app } = await buildApp({ devMode: true });
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().user.githubLogin, "dev");
+
+    await app.close();
+  });
+
+  it("does not return synthetic user when devMode is false", async () => {
+    const { app } = await buildApp({
+      jwtSecret: null,
+      githubClientId: null,
+      githubClientSecret: null,
+      devMode: false,
+    });
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().user, null);
 
     await app.close();
   });

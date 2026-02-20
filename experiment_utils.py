@@ -5,9 +5,60 @@ import json
 import os
 import subprocess
 import time
+from datetime import datetime, timezone
 
 import torch
 import redis as redis_lib
+
+VALID_EXPERIMENT_TYPES = ("lm", "rl")
+
+
+def create_experiment_metadata(
+    experiment_type: str,
+    source_experiment_id: str | None = None,
+    source_checkpoint: str | None = None,
+) -> dict:
+    """Create a metadata dict for a new experiment.
+
+    Args:
+        experiment_type: "lm" or "rl".
+        source_experiment_id: For RL experiments, the ID of the source LM experiment.
+        source_checkpoint: For RL experiments, the path to the source LM checkpoint.
+
+    Returns:
+        A dict suitable for writing to metadata.json.
+    """
+    if experiment_type not in VALID_EXPERIMENT_TYPES:
+        raise ValueError(
+            f"Invalid experiment type '{experiment_type}'. Must be one of {VALID_EXPERIMENT_TYPES}"
+        )
+
+    return {
+        "type": experiment_type,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_experiment_id": source_experiment_id,
+        "source_checkpoint": source_checkpoint,
+    }
+
+
+def write_experiment_metadata(experiment_dir: str, metadata: dict) -> None:
+    """Write metadata.json into an experiment directory."""
+    path = os.path.join(experiment_dir, "metadata.json")
+    with open(path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def read_experiment_metadata(experiment_dir: str) -> dict | None:
+    """Read metadata.json from an experiment directory.
+
+    Returns None if the file doesn't exist or is invalid JSON.
+    """
+    path = os.path.join(experiment_dir, "metadata.json")
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def get_git_commit_hash() -> str:

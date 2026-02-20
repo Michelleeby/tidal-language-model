@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useActiveJob, useCreateJob } from "../../hooks/useJobs.js";
-import { useCheckpoints } from "../../hooks/useMetrics.js";
+import { useAllLMCheckpoints } from "../../hooks/useMetrics.js";
 import { usePlugin } from "../../hooks/usePlugin.js";
-import type { CheckpointInfo, JobStatus } from "@tidal/shared";
+import type { CheckpointInfo } from "@tidal/shared";
 
 const RL_ELIGIBLE_PHASES = new Set(["foundational", "final"]);
 
@@ -25,7 +25,7 @@ interface Props {
 }
 
 export default function RLTrainingTrigger({ selectedExpId }: Props) {
-  const { data: checkpointsData } = useCheckpoints(selectedExpId);
+  const { data: allCheckpointsData } = useAllLMCheckpoints();
   const { data: activeData } = useActiveJob();
   const createJob = useCreateJob();
   const { manifest } = usePlugin();
@@ -50,18 +50,21 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
     activeJob?.type === "rl-training" &&
     !["completed", "failed", "cancelled"].includes(activeJob.status);
 
-  const eligibleCheckpoints = filterRLEligibleCheckpoints(
-    checkpointsData?.checkpoints ?? [],
-  );
+  const groups = allCheckpointsData?.groups ?? [];
+
+  // Default to current experiment's final checkpoint if available
+  const currentExpGroup = groups.find((g) => g.experimentId === selectedExpId);
+  const defaultCheckpoint = currentExpGroup?.checkpoints.at(-1)?.path ?? "";
 
   const handleStart = () => {
-    if (!selectedCheckpoint) return;
+    const checkpoint = selectedCheckpoint || defaultCheckpoint;
+    if (!checkpoint) return;
     createJob.mutate({
       type: "rl-training",
       plugin: manifest?.name ?? "tidal",
       configPath,
       rlConfigPath,
-      checkpoint: selectedCheckpoint,
+      checkpoint,
       timesteps: timesteps ? parseInt(timesteps, 10) : undefined,
     });
   };
@@ -84,16 +87,23 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
         ) : (
           <>
             <select
-              value={selectedCheckpoint}
+              value={selectedCheckpoint || defaultCheckpoint}
               onChange={(e) => setSelectedCheckpoint(e.target.value)}
               className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
             >
               <option value="">Select model checkpoint</option>
-              {eligibleCheckpoints.map((cp) => (
-                <option key={cp.path} value={cp.path}>
-                  {cp.filename}
-                  {cp.epoch != null ? ` (epoch ${cp.epoch})` : ""}
-                </option>
+              {groups.map((group) => (
+                <optgroup
+                  key={group.experimentId}
+                  label={group.experimentId}
+                >
+                  {group.checkpoints.map((cp) => (
+                    <option key={cp.path} value={cp.path}>
+                      {cp.filename}
+                      {cp.epoch != null ? ` (epoch ${cp.epoch})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
 
@@ -122,7 +132,7 @@ export default function RLTrainingTrigger({ selectedExpId }: Props) {
             <button
               onClick={handleStart}
               disabled={
-                !selectedCheckpoint || createJob.isPending || hasActiveRLJob
+                (!selectedCheckpoint && !defaultCheckpoint) || createJob.isPending || hasActiveRLJob
               }
               className="px-3 py-1.5 text-sm rounded bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >

@@ -13,6 +13,9 @@ from experiment_utils import (
     get_file_hash,
     resolve_device,
     report_experiment_id_to_job,
+    create_experiment_metadata,
+    write_experiment_metadata,
+    read_experiment_metadata,
 )
 
 
@@ -170,6 +173,85 @@ class TestReportExperimentIdToJob(unittest.TestCase):
             report_experiment_id_to_job("exp-000")
 
         mock_r.hset.assert_not_called()
+
+
+class TestCreateExperimentMetadata(unittest.TestCase):
+    """Tests for create_experiment_metadata()."""
+
+    def test_lm_metadata_has_required_fields(self):
+        meta = create_experiment_metadata("lm")
+        self.assertEqual(meta["type"], "lm")
+        self.assertIn("created_at", meta)
+        self.assertIsNone(meta.get("source_experiment_id"))
+        self.assertIsNone(meta.get("source_checkpoint"))
+
+    def test_rl_metadata_includes_source_fields(self):
+        meta = create_experiment_metadata(
+            "rl",
+            source_experiment_id="20250101-commit_abc-config_def",
+            source_checkpoint="experiments/20250101-commit_abc-config_def/model.pth",
+        )
+        self.assertEqual(meta["type"], "rl")
+        self.assertEqual(meta["source_experiment_id"], "20250101-commit_abc-config_def")
+        self.assertEqual(
+            meta["source_checkpoint"],
+            "experiments/20250101-commit_abc-config_def/model.pth",
+        )
+        self.assertIn("created_at", meta)
+
+    def test_created_at_is_iso_string(self):
+        meta = create_experiment_metadata("lm")
+        # Should be parseable as an ISO timestamp
+        from datetime import datetime
+        datetime.fromisoformat(meta["created_at"])
+
+    def test_rejects_invalid_type(self):
+        with self.assertRaises(ValueError):
+            create_experiment_metadata("invalid")
+
+
+class TestWriteAndReadExperimentMetadata(unittest.TestCase):
+    """Tests for write_experiment_metadata() and read_experiment_metadata()."""
+
+    def test_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta = create_experiment_metadata("lm")
+            write_experiment_metadata(tmpdir, meta)
+            loaded = read_experiment_metadata(tmpdir)
+            self.assertEqual(loaded, meta)
+
+    def test_writes_metadata_json_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta = create_experiment_metadata("rl", source_experiment_id="src-exp")
+            write_experiment_metadata(tmpdir, meta)
+            metadata_path = os.path.join(tmpdir, "metadata.json")
+            self.assertTrue(os.path.exists(metadata_path))
+
+    def test_read_returns_none_for_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = read_experiment_metadata(tmpdir)
+            self.assertIsNone(result)
+
+    def test_read_returns_none_for_invalid_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_path = os.path.join(tmpdir, "metadata.json")
+            with open(bad_path, "w") as f:
+                f.write("not valid json {{{")
+            result = read_experiment_metadata(tmpdir)
+            self.assertIsNone(result)
+
+    def test_rl_metadata_round_trip_preserves_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta = create_experiment_metadata(
+                "rl",
+                source_experiment_id="exp-abc",
+                source_checkpoint="/path/to/model.pth",
+            )
+            write_experiment_metadata(tmpdir, meta)
+            loaded = read_experiment_metadata(tmpdir)
+            self.assertEqual(loaded["type"], "rl")
+            self.assertEqual(loaded["source_experiment_id"], "exp-abc")
+            self.assertEqual(loaded["source_checkpoint"], "/path/to/model.pth")
 
 
 if __name__ == "__main__":

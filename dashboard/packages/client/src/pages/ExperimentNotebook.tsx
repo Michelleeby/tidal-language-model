@@ -4,7 +4,6 @@ import {
   useFullMetrics,
   useRLMetrics,
   useCheckpoints,
-  useEvaluation,
   useAblation,
 } from "../hooks/useMetrics.js";
 import { useSSE } from "../hooks/useSSE.js";
@@ -25,7 +24,6 @@ import CheckpointBrowser from "../components/charts/CheckpointBrowser.js";
 import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
 import MetricCards from "../components/status/MetricCards.js";
 import MetricCarousel from "../components/status/MetricCarousel.js";
-import SamplePreviews from "../components/samples/SamplePreviews.js";
 import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
 import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
 import LogTailCard from "../components/logs/LogTailCard.js";
@@ -36,7 +34,7 @@ import ChartExportButton from "../components/charts/ChartExportButton.js";
 import { lttbDownsample } from "../utils/downsample.js";
 import { useReportData } from "../hooks/useReportData.js";
 import { generateHTMLReport, generateMarkdownReport } from "../utils/report.js";
-import type { MetricPoint, TrainingStatus } from "@tidal/shared";
+import type { MetricPoint, ExperimentType, TrainingStatus } from "@tidal/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client.js";
 import { useActiveJob } from "../hooks/useJobs.js";
@@ -52,10 +50,15 @@ export default function ExperimentNotebook() {
   const { data: metricsData } = useFullMetrics(selectedExpId);
   const { data: rlData } = useRLMetrics(selectedExpId);
   const { data: checkpointsData } = useCheckpoints(selectedExpId);
-  const { data: evalData } = useEvaluation(selectedExpId);
   const { data: ablationData } = useAblation(selectedExpId);
   const { data: activeJobData } = useActiveJob();
   const activeJobId = activeJobData?.job?.jobId;
+
+  // Derive experiment type from the experiments list
+  const selectedExperiment = expData?.experiments?.find((e) => e.id === selectedExpId) ?? null;
+  const experimentType: ExperimentType = selectedExperiment?.experimentType ?? "unknown";
+  const isRL = experimentType === "rl";
+  const isLM = experimentType === "lm" || experimentType === "unknown";
 
   useSSE(selectedExpId);
   useJobSSE();
@@ -172,6 +175,17 @@ export default function ExperimentNotebook() {
           <h2 className="text-lg font-semibold font-mono text-gray-100">
             {selectedExpId}
           </h2>
+          {isRL && selectedExperiment?.sourceExperimentId && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              Source LM:{" "}
+              <button
+                onClick={() => setSelectedExpId(selectedExperiment.sourceExperimentId!)}
+                className="text-blue-400 hover:text-blue-300 underline"
+              >
+                {selectedExperiment.sourceExperimentId}
+              </button>
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <TrainingControlBar />
@@ -213,176 +227,189 @@ export default function ExperimentNotebook() {
         </div>
       </CollapsibleSection>
 
-      {/* 2. Monitor */}
+      {/* 2. Monitor — layout depends on experiment type */}
       <CollapsibleSection title="Monitor" defaultOpen>
         <div className="space-y-6">
-          {/* Language Model Training */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              Language Model Training
-            </h4>
-            <LossCurves
-              points={points}
-              syncKey={CHART_SYNC_KEY}
-              actions={
-                <ChartExportButton
-                  data={{
-                    headers: ["step", "loss", "smoothed_loss"],
-                    rows: points.map((p) => [
-                      p.step,
-                      (p["Losses/Total"] as number) ?? 0,
-                      (p["Losses/Total"] as number) ?? 0,
-                    ]),
-                  }}
-                  filename="loss_curves"
-                />
-              }
-            />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <LearningRateChart
+          {/* LM Training charts (only for LM / unknown experiments) */}
+          {isLM && (
+            <div className="space-y-4">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Language Model Training
+              </h4>
+              <LossCurves
                 points={points}
                 syncKey={CHART_SYNC_KEY}
                 actions={
                   <ChartExportButton
                     data={{
-                      headers: ["step", "learning_rate"],
+                      headers: ["step", "loss", "smoothed_loss"],
                       rows: points.map((p) => [
                         p.step,
-                        (p["Learning Rate"] as number) ?? 0,
+                        (p["Losses/Total"] as number) ?? 0,
+                        (p["Losses/Total"] as number) ?? 0,
                       ]),
                     }}
-                    filename="learning_rate"
+                    filename="loss_curves"
                   />
                 }
               />
-              <PerplexityChart
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <LearningRateChart
+                  points={points}
+                  syncKey={CHART_SYNC_KEY}
+                  actions={
+                    <ChartExportButton
+                      data={{
+                        headers: ["step", "learning_rate"],
+                        rows: points.map((p) => [
+                          p.step,
+                          (p["Learning Rate"] as number) ?? 0,
+                        ]),
+                      }}
+                      filename="learning_rate"
+                    />
+                  }
+                />
+                <PerplexityChart
+                  points={points}
+                  syncKey={CHART_SYNC_KEY}
+                  actions={
+                    <ChartExportButton
+                      data={{
+                        headers: ["step", "perplexity"],
+                        rows: points.map((p) => [
+                          p.step,
+                          Math.exp((p["Losses/Total"] as number) ?? 0),
+                        ]),
+                      }}
+                      filename="perplexity"
+                    />
+                  }
+                />
+              </div>
+              <ThroughputChart
                 points={points}
                 syncKey={CHART_SYNC_KEY}
                 actions={
                   <ChartExportButton
                     data={{
-                      headers: ["step", "perplexity"],
-                      rows: points.map((p) => [
-                        p.step,
-                        Math.exp((p["Losses/Total"] as number) ?? 0),
-                      ]),
+                      headers: ["step", "iterations_per_second"],
+                      rows: points
+                        .filter((p) => p["Iterations/Second"] != null)
+                        .map((p) => [
+                          p.step,
+                          (p["Iterations/Second"] as number) ?? 0,
+                        ]),
                     }}
-                    filename="perplexity"
+                    filename="throughput"
                   />
                 }
               />
             </div>
-            <ThroughputChart
-              points={points}
-              syncKey={CHART_SYNC_KEY}
-              actions={
-                <ChartExportButton
-                  data={{
-                    headers: ["step", "iterations_per_second"],
-                    rows: points
-                      .filter((p) => p["Iterations/Second"] != null)
-                      .map((p) => [
-                        p.step,
-                        (p["Iterations/Second"] as number) ?? 0,
-                      ]),
-                  }}
-                  filename="throughput"
-                />
-              }
-            />
-          </div>
+          )}
 
-          {/* RL Gating */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              RL Gating
-            </h4>
-            <RLTrainingTrigger selectedExpId={selectedExpId} />
-            {hasRLData && (
-              <>
-                <RLRewardCurve
-                  history={rlHistory}
-                  actions={
-                    <ChartExportButton
-                      data={{
-                        headers: ["episode", "mean_reward"],
-                        rows: rlHistory!.episode_rewards.map((r, i) => [i, r]),
-                      }}
-                      filename="rl_rewards"
-                    />
-                  }
-                />
-                <RLLossChart
-                  history={rlHistory}
-                  actions={
-                    <ChartExportButton
-                      data={{
-                        headers: [
-                          "step",
-                          "policy_loss",
-                          "value_loss",
-                          "entropy",
-                        ],
-                        rows: rlHistory!.policy_loss.map((_, i) => [
-                          i,
-                          rlHistory!.policy_loss[i],
-                          rlHistory!.value_loss[i],
-                          rlHistory!.entropy[i],
-                        ]),
-                      }}
-                      filename="rl_losses"
-                    />
-                  }
-                />
-                <RLGateSignalsChart
-                  history={rlHistory}
-                  actions={
-                    <ChartExportButton
-                      data={{
-                        headers: ["step", "modulation"],
-                        rows: (rlHistory!.gate_modulation ?? []).map((_, i) => [
-                          i,
-                          rlHistory!.gate_modulation?.[i] ?? 0,
-                        ]),
-                      }}
-                      filename="rl_gate_signals"
-                    />
-                  }
-                />
-                <RLRewardComponentsChart
-                  history={rlHistory}
-                  actions={
-                    <ChartExportButton
-                      data={{
-                        headers: ["step", "perplexity", "diversity", "repetition", "coherence"],
-                        rows: (rlHistory!.reward_perplexity ?? []).map((_, i) => [
-                          i,
-                          rlHistory!.reward_perplexity?.[i] ?? 0,
-                          rlHistory!.reward_diversity?.[i] ?? 0,
-                          rlHistory!.reward_repetition?.[i] ?? 0,
-                          rlHistory!.reward_coherence?.[i] ?? 0,
-                        ]),
-                      }}
-                      filename="rl_reward_components"
-                    />
-                  }
-                />
-                <RLExplainedVarianceChart
-                  history={rlHistory}
-                  actions={
-                    <ChartExportButton
-                      data={{
-                        headers: ["step", "explained_variance"],
-                        rows: (rlHistory!.explained_variance ?? []).map((v, i) => [i, v]),
-                      }}
-                      filename="rl_explained_variance"
-                    />
-                  }
-                />
-              </>
-            )}
-            <AblationComparison results={ablationData?.results ?? null} />
-          </div>
+          {/* RL Training Trigger (only for LM experiments) */}
+          {isLM && (
+            <div className="space-y-4">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                RL Gating
+              </h4>
+              <RLTrainingTrigger selectedExpId={selectedExpId} />
+            </div>
+          )}
+
+          {/* RL Monitor charts (for RL experiments, or LM experiments with co-located RL data) */}
+          {hasRLData && (
+            <div className="space-y-4">
+              {isRL && (
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  RL Gating Monitor
+                </h4>
+              )}
+              <RLRewardCurve
+                history={rlHistory}
+                actions={
+                  <ChartExportButton
+                    data={{
+                      headers: ["episode", "mean_reward"],
+                      rows: rlHistory!.episode_rewards.map((r, i) => [i, r]),
+                    }}
+                    filename="rl_rewards"
+                  />
+                }
+              />
+              <RLLossChart
+                history={rlHistory}
+                actions={
+                  <ChartExportButton
+                    data={{
+                      headers: [
+                        "step",
+                        "policy_loss",
+                        "value_loss",
+                        "entropy",
+                      ],
+                      rows: rlHistory!.policy_loss.map((_, i) => [
+                        i,
+                        rlHistory!.policy_loss[i],
+                        rlHistory!.value_loss[i],
+                        rlHistory!.entropy[i],
+                      ]),
+                    }}
+                    filename="rl_losses"
+                  />
+                }
+              />
+              <RLGateSignalsChart
+                history={rlHistory}
+                actions={
+                  <ChartExportButton
+                    data={{
+                      headers: ["step", "modulation"],
+                      rows: (rlHistory!.gate_modulation ?? []).map((_, i) => [
+                        i,
+                        rlHistory!.gate_modulation?.[i] ?? 0,
+                      ]),
+                    }}
+                    filename="rl_gate_signals"
+                  />
+                }
+              />
+              <RLRewardComponentsChart
+                history={rlHistory}
+                actions={
+                  <ChartExportButton
+                    data={{
+                      headers: ["step", "perplexity", "diversity", "repetition", "coherence"],
+                      rows: (rlHistory!.reward_perplexity ?? []).map((_, i) => [
+                        i,
+                        rlHistory!.reward_perplexity?.[i] ?? 0,
+                        rlHistory!.reward_diversity?.[i] ?? 0,
+                        rlHistory!.reward_repetition?.[i] ?? 0,
+                        rlHistory!.reward_coherence?.[i] ?? 0,
+                      ]),
+                    }}
+                    filename="rl_reward_components"
+                  />
+                }
+              />
+              <RLExplainedVarianceChart
+                history={rlHistory}
+                actions={
+                  <ChartExportButton
+                    data={{
+                      headers: ["step", "explained_variance"],
+                      rows: (rlHistory!.explained_variance ?? []).map((v, i) => [i, v]),
+                    }}
+                    filename="rl_explained_variance"
+                  />
+                }
+              />
+            </div>
+          )}
+
+          {/* Ablation (for RL experiments, or LM experiments with ablation data) */}
+          <AblationComparison results={ablationData?.results ?? null} />
         </div>
       </CollapsibleSection>
 
@@ -404,11 +431,6 @@ export default function ExperimentNotebook() {
       {/* 6. Analysis */}
       <CollapsibleSection title="Analysis">
         <AnalysisSection expId={selectedExpId} />
-      </CollapsibleSection>
-
-      {/* 7. Samples */}
-      <CollapsibleSection title="Samples">
-        <SamplePreviews results={evalData?.results ?? null} />
       </CollapsibleSection>
     </div>
   );

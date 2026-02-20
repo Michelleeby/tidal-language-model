@@ -17,12 +17,14 @@ const JWT_SECRET = "test-jwt-secret-at-least-32-chars-long!";
 async function buildApp(opts: {
   authToken?: string | null;
   jwtSecret?: string | null;
+  devMode?: boolean;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   app.decorate("serverConfig", {
     authToken: opts.authToken ?? null,
     jwtSecret: opts.jwtSecret ?? null,
+    devMode: opts.devMode ?? false,
   } as unknown as ServerConfig);
 
   await app.register(cookie);
@@ -217,6 +219,62 @@ describe("Auth plugin — dual auth", () => {
 describe("Auth plugin — no auth configured", () => {
   it("returns 401 when no auth methods are configured", async () => {
     const app = await buildApp({ authToken: null, jwtSecret: null });
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/test",
+    });
+
+    assert.equal(resp.statusCode, 401);
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dev mode bypass
+// ---------------------------------------------------------------------------
+
+describe("Auth plugin — dev mode", () => {
+  it("bypasses auth and sets dev user when devMode is true", async () => {
+    const app = await buildApp({ authToken: null, jwtSecret: null, devMode: true });
+
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/test",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.equal(body.user.type, "jwt");
+    assert.equal(body.user.userId, "dev");
+    assert.equal(body.user.githubLogin, "dev");
+
+    await app.close();
+  });
+
+  it("bypasses auth even when Bearer and JWT are configured", async () => {
+    const app = await buildApp({
+      authToken: TEST_TOKEN,
+      jwtSecret: JWT_SECRET,
+      devMode: true,
+    });
+
+    // No credentials provided — should still pass
+    const resp = await app.inject({
+      method: "GET",
+      url: "/api/test",
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().user.type, "jwt");
+    assert.equal(resp.json().user.userId, "dev");
+
+    await app.close();
+  });
+
+  it("does not bypass auth when devMode is false", async () => {
+    const app = await buildApp({ authToken: null, jwtSecret: null, devMode: false });
 
     const resp = await app.inject({
       method: "GET",

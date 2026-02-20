@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type Redis from "ioredis";
-import type { ExperimentSummary, TrainingStatus } from "@tidal/shared";
+import type { ExperimentSummary, ExperimentType, TrainingStatus } from "@tidal/shared";
 
 export interface ExperimentDiscoveryConfig {
   /** Redis key prefix, e.g. "tidal" */
@@ -118,6 +118,31 @@ export class ExperimentDiscovery {
         }
       }
 
+      // Read experiment metadata (type, lineage)
+      let experimentType: ExperimentType = "unknown";
+      let sourceExperimentId: string | null = null;
+      let sourceCheckpoint: string | null = null;
+
+      const metadataPath = path.join(expPath, "metadata.json");
+      try {
+        const metaRaw = await fsp.readFile(metadataPath, "utf-8");
+        const meta = JSON.parse(metaRaw);
+        if (meta.type === "lm" || meta.type === "rl") {
+          experimentType = meta.type;
+        }
+        sourceExperimentId = meta.source_experiment_id ?? null;
+        sourceCheckpoint = meta.source_checkpoint ?? null;
+      } catch {
+        // No metadata.json — infer type from directory contents
+        const hasFoundational = entries.some((f) =>
+          f.startsWith("checkpoint_foundational"),
+        );
+        const hasOnlyRL =
+          !hasFoundational &&
+          entries.some((f) => f.startsWith("rl_checkpoint"));
+        experimentType = hasOnlyRL ? "rl" : hasFoundational ? "lm" : "unknown";
+      }
+
       return {
         id,
         path: expPath,
@@ -128,6 +153,9 @@ export class ExperimentDiscovery {
         hasGpuInstance,
         status,
         checkpoints,
+        experimentType,
+        sourceExperimentId,
+        sourceCheckpoint,
       };
     } catch {
       // No local directory -- try Redis (remote experiment)
@@ -164,6 +192,9 @@ export class ExperimentDiscovery {
         hasGpuInstance: false,
         status,
         checkpoints: [],
+        experimentType: "unknown",
+        sourceExperimentId: null,
+        sourceCheckpoint: null,
       };
     } catch {
       return null;

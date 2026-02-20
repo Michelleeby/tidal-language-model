@@ -54,3 +54,11 @@ export function useAblation(expId: string | null) {
     enabled: !!expId,
   });
 }
+
+export function useAllLMCheckpoints() {
+  return useQuery({
+    queryKey: ["all-checkpoints"],
+    queryFn: () => api.getAllCheckpoints(),
+    staleTime: 30_000,
+  });
+}
