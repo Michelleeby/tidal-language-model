@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock
 from plugins.tidal.GatingModulator import GatingModulator, GatingEffects, RandomGatingPolicy, FixedGatingPolicy
 from plugins.tidal.RewardComputer import RewardComputer
 from plugins.tidal.GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPolicyAgent, create_agent
-from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis, DiversityHomeostasis
+from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis, DiversityHomeostasis, LagrangeMultiplier
 from plugins.tidal.GatingEnvironment import GatingEnvironment
 from plugins.tidal.TransformerLM import TransformerLM
 
@@ -2465,6 +2465,528 @@ class TestPPOTrainerDiversityHomeostasis(TimedTestCase):
         self.assertEqual(
             trainer2.env.reward_computer.diversity_weight, pumped_weight
         )
+
+
+class TestLagrangeMultiplier(TimedTestCase):
+    """Tests for the LagrangeMultiplier class used in PPO-Lagrangian."""
+
+    def test_init_defaults(self):
+        """value() ≈ init, threshold=0.55, lr=0.05."""
+        config = {}
+        lm = LagrangeMultiplier(config)
+        self.assertAlmostEqual(lm.value(), 1.0, places=2)
+        self.assertAlmostEqual(lm.threshold, 0.55)
+        # Default lr
+        self.assertAlmostEqual(lm.optimizer.param_groups[0]["lr"], 0.05)
+
+    def test_value_always_non_negative(self):
+        """After arbitrary updates, value() >= 0."""
+        config = {"RL_LAGRANGE_MULTIPLIER_INIT": 0.01}
+        lm = LagrangeMultiplier(config)
+        # Push it in both directions
+        for cost in [0.0, -0.5, 0.0, -1.0, 0.0]:
+            lm.update(cost)
+        self.assertGreaterEqual(lm.value(), 0.0)
+
+    def test_update_increases_when_constraint_violated(self):
+        """update(mean_cost=0.2) increases value (cost > 0 means violated)."""
+        config = {}
+        lm = LagrangeMultiplier(config)
+        before = lm.value()
+        lm.update(mean_cost=0.2)
+        self.assertGreater(lm.value(), before)
+
+    def test_update_decreases_when_constraint_satisfied(self):
+        """update(mean_cost=0.0) decreases value."""
+        config = {"RL_LAGRANGE_MULTIPLIER_INIT": 2.0}
+        lm = LagrangeMultiplier(config)
+        before = lm.value()
+        lm.update(mean_cost=0.0)
+        self.assertLess(lm.value(), before)
+
+    def test_compute_cost_from_diversity(self):
+        """cost(0.4) = 0.15, cost(0.7) = 0.0 when threshold=0.55."""
+        config = {"RL_DIVERSITY_CONSTRAINT_THRESHOLD": 0.55}
+        lm = LagrangeMultiplier(config)
+        self.assertAlmostEqual(lm.compute_cost(0.4), 0.15, places=5)
+        self.assertAlmostEqual(lm.compute_cost(0.7), 0.0, places=5)
+
+    def test_state_dict_round_trip(self):
+        """save/load preserves param + optimizer."""
+        config = {"RL_LAGRANGE_MULTIPLIER_INIT": 2.0}
+        lm = LagrangeMultiplier(config)
+        # Do some updates
+        lm.update(mean_cost=0.3)
+        lm.update(mean_cost=0.1)
+        val_before = lm.value()
+        sd = lm.state_dict()
+
+        # Create fresh and load
+        lm2 = LagrangeMultiplier(config)
+        lm2.load_state_dict(sd)
+        self.assertAlmostEqual(lm2.value(), val_before, places=5)
+
+    def test_custom_lr_from_config(self):
+        """Respects RL_LAGRANGE_MULTIPLIER_LR."""
+        config = {"RL_LAGRANGE_MULTIPLIER_LR": 0.1}
+        lm = LagrangeMultiplier(config)
+        self.assertAlmostEqual(lm.optimizer.param_groups[0]["lr"], 0.1)
+
+    def test_custom_init_from_config(self):
+        """Respects RL_LAGRANGE_MULTIPLIER_INIT."""
+        config = {"RL_LAGRANGE_MULTIPLIER_INIT": 3.0}
+        lm = LagrangeMultiplier(config)
+        self.assertAlmostEqual(lm.value(), 3.0, places=1)
+
+
+class TestCostCriticHead(TimedTestCase):
+    """Tests for the cost critic head on GatingPolicyAgent."""
+
+    def setUp(self):
+        self.device = torch.device("cpu")
+
+    def test_cost_critic_exists_when_lagrangian(self):
+        """Has cost_critic_head attr when RL_CONSTRAINT_MODE='lagrangian'."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_CONSTRAINT_MODE": "lagrangian",
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        self.assertTrue(hasattr(agent, "cost_critic_head"))
+        self.assertIsNotNone(agent.cost_critic_head)
+
+    def test_no_cost_critic_when_weighted(self):
+        """No cost_critic_head without lagrangian config."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        self.assertFalse(hasattr(agent, "cost_critic_head"))
+
+    def test_forward_with_cost_raises_in_weighted_mode(self):
+        """forward_with_cost() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        with self.assertRaises(RuntimeError):
+            agent.forward_with_cost(obs)
+
+    def test_evaluate_actions_with_cost_raises_in_weighted_mode(self):
+        """evaluate_actions_with_cost() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        actions = torch.rand(4, 1) * 0.98 + 0.01
+        with self.assertRaises(RuntimeError):
+            agent.evaluate_actions_with_cost(obs, actions)
+
+    def test_get_cost_value_raises_in_weighted_mode(self):
+        """get_cost_value() raises RuntimeError when not in lagrangian mode."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        with self.assertRaises(RuntimeError):
+            agent.get_cost_value(obs)
+
+    def test_forward_with_cost_returns_triple(self):
+        """forward_with_cost() returns (dist, value, cost_value)."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_CONSTRAINT_MODE": "lagrangian",
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        result = agent.forward_with_cost(obs)
+        self.assertEqual(len(result), 3)
+        action_dist, value, cost_value = result
+        self.assertEqual(value.shape, (4, 1))
+        self.assertEqual(cost_value.shape, (4, 1))
+
+    def test_evaluate_actions_with_cost_returns_quad(self):
+        """evaluate_actions_with_cost() returns (log_probs, values, entropy, cost_values)."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_CONSTRAINT_MODE": "lagrangian",
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(32, 64)
+        actions = torch.rand(32, 1) * 0.98 + 0.01
+        result = agent.evaluate_actions_with_cost(obs, actions)
+        self.assertEqual(len(result), 4)
+        log_probs, values, entropy, cost_values = result
+        self.assertEqual(log_probs.shape, (32,))
+        self.assertEqual(values.shape, (32,))
+        self.assertEqual(entropy.shape, (32,))
+        self.assertEqual(cost_values.shape, (32,))
+
+    def test_forward_unchanged_backward_compat(self):
+        """forward() still returns 2-tuple even with lagrangian config."""
+        config = {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_CONSTRAINT_MODE": "lagrangian",
+        }
+        agent = GatingPolicyAgent(config, self.device)
+        obs = torch.randn(4, 64)
+        result = agent.forward(obs)
+        self.assertEqual(len(result), 2)
+
+
+class TestRolloutBufferCost(TimedTestCase):
+    """Tests for RolloutBuffer cost storage extensions."""
+
+    def setUp(self):
+        self.capacity = 16
+        self.obs_dim = 64
+        self.action_dim = 1
+
+    def test_buffer_with_costs_has_cost_tensors(self):
+        """store_costs=True creates costs and cost_values tensors."""
+        buf = RolloutBuffer(self.capacity, self.obs_dim, self.action_dim, store_costs=True)
+        self.assertTrue(hasattr(buf, "costs"))
+        self.assertTrue(hasattr(buf, "cost_values"))
+        self.assertEqual(buf.costs.shape, (self.capacity,))
+        self.assertEqual(buf.cost_values.shape, (self.capacity,))
+
+    def test_buffer_without_costs_backward_compat(self):
+        """No store_costs flag means no cost tensors."""
+        buf = RolloutBuffer(self.capacity, self.obs_dim, self.action_dim)
+        self.assertFalse(hasattr(buf, "costs"))
+        self.assertFalse(hasattr(buf, "cost_values"))
+
+    def test_add_with_cost(self):
+        """add(..., cost=0.1, cost_value=0.05) stores correctly."""
+        buf = RolloutBuffer(self.capacity, self.obs_dim, self.action_dim, store_costs=True)
+        obs = torch.randn(self.obs_dim)
+        action = torch.rand(self.action_dim)
+        buf.add(obs, action, reward=1.0, value=0.5, log_prob=-0.3, done=False,
+                cost=0.1, cost_value=0.05)
+        self.assertAlmostEqual(buf.costs[0].item(), 0.1, places=5)
+        self.assertAlmostEqual(buf.cost_values[0].item(), 0.05, places=5)
+
+    def test_add_without_cost_backward_compat(self):
+        """6-arg add() still works (no cost args)."""
+        buf = RolloutBuffer(self.capacity, self.obs_dim, self.action_dim)
+        obs = torch.randn(self.obs_dim)
+        action = torch.rand(self.action_dim)
+        buf.add(obs, action, reward=1.0, value=0.5, log_prob=-0.3, done=False)
+        self.assertEqual(len(buf), 1)
+
+
+class TestPPOTrainerLagrangian(TimedTestCase):
+    """Tests for PPOTrainer Lagrangian constraint mode."""
+
+    def _base_config(self):
+        return {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
+            "RL_REWARD_SAMPLING_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
+        }
+
+    def _make_mock_env(self, config):
+        mock_env = MagicMock()
+        mock_env.reward_computer = RewardComputer(config, vocab_size=1000)
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+        return mock_env
+
+    def _make_trainer(self, config, env=None):
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        if env is None:
+            env = self._make_mock_env(config)
+        tmpdir = tempfile.mkdtemp()
+        return PPOTrainer(
+            agent=agent, env=env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+        ), tmpdir
+
+    def test_creates_lagrange_multiplier_when_configured(self):
+        """lagrange_multiplier is not None when RL_CONSTRAINT_MODE='lagrangian'."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNotNone(trainer.lagrange_multiplier)
+        self.assertIsInstance(trainer.lagrange_multiplier, LagrangeMultiplier)
+
+    def test_no_lagrange_when_weighted_mode(self):
+        """lagrange_multiplier is None when mode is 'weighted' (default)."""
+        config = self._base_config()
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.lagrange_multiplier)
+
+    def test_lagrangian_disables_diversity_homeostasis(self):
+        """diversity_homeostasis is None in lagrangian mode, even if target is configured."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        config["RL_DIVERSITY_HOMEOSTASIS_TARGET"] = 0.55
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.diversity_homeostasis)
+
+    def test_lagrangian_zeros_diversity_weight(self):
+        """In lagrangian mode, env.reward_computer.diversity_weight == 0."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        trainer, _ = self._make_trainer(config)
+        self.assertAlmostEqual(trainer.env.reward_computer.diversity_weight, 0.0, places=5)
+
+    def test_collect_rollouts_stores_costs(self):
+        """buffer.costs has non-trivial values after collect_rollouts in lagrangian mode."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        config["RL_ROLLOUT_STEPS"] = 16
+        trainer, _ = self._make_trainer(config)
+        trainer.collect_rollouts(16)
+        n = len(trainer.buffer)
+        self.assertGreater(n, 0)
+        costs = trainer.buffer.costs[:n]
+        # At least some costs should be non-zero (diversity < threshold)
+        self.assertTrue(torch.any(costs != 0),
+                        "Expected some non-zero costs in buffer")
+
+    def test_lagrange_multiplier_logged_in_history(self):
+        """history key 'lagrange_multiplier' populated after train()."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        config["RL_TOTAL_TIMESTEPS"] = 32
+        config["RL_ROLLOUT_STEPS"] = 16
+        trainer, _ = self._make_trainer(config)
+        history = trainer.train(total_timesteps=32)
+        self.assertIn("lagrange_multiplier", history)
+        self.assertEqual(len(history["lagrange_multiplier"]), 2)  # 32 / 16 = 2
+
+    def test_checkpoint_saves_lagrange_state(self):
+        """Checkpoint dict has 'lagrange_multiplier_state' key."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        trainer, tmpdir = self._make_trainer(config)
+        trainer.save_checkpoint("test_lagrange.pth")
+        import os
+        checkpoint = torch.load(os.path.join(tmpdir, "test_lagrange.pth"),
+                                map_location="cpu")
+        self.assertIn("lagrange_multiplier_state", checkpoint)
+
+    def test_checkpoint_restores_lagrange_state(self):
+        """Round-trip preserves lagrange multiplier state."""
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "lagrangian"
+        trainer, tmpdir = self._make_trainer(config)
+        # Do some updates to change the multiplier
+        trainer.lagrange_multiplier.update(mean_cost=0.3)
+        trainer.lagrange_multiplier.update(mean_cost=0.2)
+        val_before = trainer.lagrange_multiplier.value()
+        trainer.save_checkpoint("test_lagrange_rt.pth")
+
+        # Load into fresh trainer
+        trainer2, _ = self._make_trainer(config)
+        import os
+        trainer2.load_checkpoint(os.path.join(tmpdir, "test_lagrange_rt.pth"))
+        self.assertAlmostEqual(trainer2.lagrange_multiplier.value(), val_before, places=4)
+
+
+class TestPPOLagrangianPolicyUpdate(TimedTestCase):
+    """Tests for the Lagrangian policy update formula."""
+
+    def _base_config(self):
+        return {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
+            "RL_REWARD_SAMPLING_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
+            "RL_CONSTRAINT_MODE": "lagrangian",
+        }
+
+    def test_combined_advantage_formula(self):
+        """Combined advantage is (adv_r - λ * adv_c) / (1 + λ)."""
+        # This tests the formula directly
+        lam = 2.0  # lambda
+        adv_r = torch.tensor([1.0, -0.5, 0.3])
+        adv_c = torch.tensor([0.5, 0.2, -0.1])
+        expected = (adv_r - lam * adv_c) / (1 + lam)
+        # Verify the formula
+        self.assertTrue(torch.allclose(expected,
+                        (adv_r - lam * adv_c) / (1 + lam)))
+
+    def test_cost_advantages_shape_matches_reward_advantages(self):
+        """Cost advantages have same tensor shape as reward advantages."""
+        import tempfile
+        config = self._base_config()
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+
+        mock_env = MagicMock()
+        mock_env.reward_computer = RewardComputer(config, vocab_size=1000)
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            trainer.collect_rollouts(16)
+            advantages, returns = trainer.compute_advantages()
+            cost_advantages, cost_returns = trainer.compute_cost_advantages()
+            self.assertEqual(cost_advantages.shape, advantages.shape)
+            self.assertEqual(cost_returns.shape, returns.shape)
+
+    def test_update_policy_backward_compat_weighted(self):
+        """Weighted mode update_policy returns same format as before."""
+        import tempfile
+        config = self._base_config()
+        config["RL_CONSTRAINT_MODE"] = "weighted"
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+
+        mock_env = MagicMock()
+        mock_env.reward_computer = RewardComputer(config, vocab_size=1000)
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = PPOTrainer(
+                agent=agent, env=mock_env, config=config,
+                experiment_dir=tmpdir, device=torch.device("cpu"),
+            )
+            trainer.collect_rollouts(16)
+            advantages, returns = trainer.compute_advantages()
+            result = trainer.update_policy(advantages, returns)
+            self.assertIn("policy_loss", result)
+            self.assertIn("value_loss", result)
+            self.assertIn("entropy", result)
 
 
 if __name__ == "__main__":

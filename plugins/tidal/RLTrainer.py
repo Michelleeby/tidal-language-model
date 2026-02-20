@@ -14,6 +14,7 @@ The trainer keeps the language model frozen and only trains the RL agent
 to control gate signal levels for improved generation quality.
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -125,6 +126,62 @@ class DiversityHomeostasis:
         return self.weight
 
 
+class LagrangeMultiplier:
+    """Learned Lagrange multiplier for PPO-Lagrangian.
+
+    Parameterized via softplus for non-negativity.
+    Updated by gradient ascent on the dual variable:
+        λ ← λ + lr * mean_cost
+
+    The cost is max(0, threshold - diversity_reward), so positive cost
+    means the diversity constraint is violated (diversity too low).
+    """
+
+    def __init__(self, config: dict):
+        self.threshold = config.get("RL_DIVERSITY_CONSTRAINT_THRESHOLD", 0.55)
+        init_val = config.get("RL_LAGRANGE_MULTIPLIER_INIT", 1.0)
+        lr = config.get("RL_LAGRANGE_MULTIPLIER_LR", 0.05)
+        # Inverse softplus: raw = log(exp(val) - 1)
+        raw_init = math.log(math.exp(init_val) - 1) if init_val > 0 else 0.0
+        self.raw_param = torch.nn.Parameter(torch.tensor(raw_init))
+        # Weight decay pulls λ toward 0 when constraint is satisfied (gradient=0)
+        self.optimizer = optim.Adam([self.raw_param], lr=lr, weight_decay=0.01)
+
+    def value(self) -> float:
+        """Current multiplier value (non-negative via softplus)."""
+        return torch.nn.functional.softplus(self.raw_param).item()
+
+    def compute_cost(self, diversity_reward: float) -> float:
+        """Per-step cost: max(0, threshold - diversity_reward)."""
+        return max(0.0, self.threshold - diversity_reward)
+
+    def update(self, mean_cost: float):
+        """Dual gradient ascent: increase λ when constraint is violated.
+
+        We maximize λ * (mean_cost - 0) = λ * mean_cost, which means
+        gradient ascent on the raw parameter with loss = -λ * mean_cost.
+        When mean_cost > 0 (violated), λ increases.
+        When mean_cost = 0 (satisfied), λ decreases toward 0.
+        """
+        self.optimizer.zero_grad()
+        lam = torch.nn.functional.softplus(self.raw_param)
+        # Dual loss: we want to maximize λ * mean_cost
+        # So we minimize -λ * mean_cost
+        dual_loss = -lam * mean_cost
+        dual_loss.backward()
+        self.optimizer.step()
+
+    def state_dict(self) -> dict:
+        return {
+            "raw_param": self.raw_param.data.clone(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict):
+        self.raw_param.data.copy_(state["raw_param"])
+        self.optimizer.load_state_dict(state["optimizer_state_dict"])
+
+
 class RolloutBuffer:
     """Pre-allocated buffer for storing rollout data.
 
@@ -132,7 +189,8 @@ class RolloutBuffer:
     ``clear()`` resets the write position without reallocating.
     """
 
-    def __init__(self, capacity: int, obs_dim: int = 64, action_dim: int = 1):
+    def __init__(self, capacity: int, obs_dim: int = 64, action_dim: int = 1,
+                 store_costs: bool = False):
         self.capacity = capacity
         self.observations = torch.zeros(capacity, obs_dim)
         self.actions = torch.zeros(capacity, action_dim)
@@ -140,6 +198,9 @@ class RolloutBuffer:
         self.values = torch.zeros(capacity)
         self.log_probs = torch.zeros(capacity)
         self.dones = torch.zeros(capacity)
+        if store_costs:
+            self.costs = torch.zeros(capacity)
+            self.cost_values = torch.zeros(capacity)
         self._pos = 0
 
     def clear(self):
@@ -153,6 +214,8 @@ class RolloutBuffer:
         value: float,
         log_prob: float,
         done: bool,
+        cost: float = None,
+        cost_value: float = None,
     ):
         if self._pos >= self.capacity:
             raise RuntimeError(
@@ -164,6 +227,10 @@ class RolloutBuffer:
         self.values[self._pos] = value
         self.log_probs[self._pos] = log_prob
         self.dones[self._pos] = float(done)
+        if cost is not None and hasattr(self, "costs"):
+            self.costs[self._pos] = cost
+        if cost_value is not None and hasattr(self, "cost_values"):
+            self.cost_values[self._pos] = cost_value
         self._pos += 1
 
     def __len__(self):
@@ -229,17 +296,40 @@ class PPOTrainer:
         else:
             self.entropy_homeostasis = None
 
-        if "RL_DIVERSITY_HOMEOSTASIS_TARGET" in config:
-            self.diversity_homeostasis = DiversityHomeostasis(config)
-        else:
+        # Constraint mode: "weighted" (default) or "lagrangian"
+        self.constraint_mode = config.get("RL_CONSTRAINT_MODE", "weighted")
+
+        if self.constraint_mode == "lagrangian":
+            self.lagrange_multiplier = LagrangeMultiplier(config)
+            # Lagrangian mode supersedes diversity homeostasis
             self.diversity_homeostasis = None
+            # Zero out diversity and sampling weights; renormalize remaining
+            self.env.reward_computer.diversity_weight = 0.0
+            self.env.reward_computer.sampling_weight = 0.0
+            remaining = (
+                self.env.reward_computer.perplexity_weight
+                + self.env.reward_computer.repetition_weight
+                + self.env.reward_computer.coherence_weight
+            )
+            if remaining > 0:
+                self.env.reward_computer.perplexity_weight /= remaining
+                self.env.reward_computer.repetition_weight /= remaining
+                self.env.reward_computer.coherence_weight /= remaining
+        else:
+            self.lagrange_multiplier = None
+            if "RL_DIVERSITY_HOMEOSTASIS_TARGET" in config:
+                self.diversity_homeostasis = DiversityHomeostasis(config)
+            else:
+                self.diversity_homeostasis = None
 
         self.global_step = 0
         ema_alpha = config.get("RL_EMA_ALPHA", 0.05)
         self.episode_rewards = ExponentialMovingAverage(alpha=ema_alpha)
         obs_dim = config.get("RL_OBSERVATION_DIM", 64)
         action_dim = config.get("RL_ACTION_DIM", 1)
-        self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim)
+        store_costs = (self.constraint_mode == "lagrangian")
+        self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim,
+                                    store_costs=store_costs)
 
         # Persist episode counters across rollout boundaries so episodes
         # that span two collect_rollouts() calls get their true length.
@@ -264,6 +354,7 @@ class PPOTrainer:
 
         rollout_rewards = []
         rollout_values = []
+        rollout_costs = []
 
         gate_signals_sum = {"modulation": 0.0}
         reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "sampling": 0.0, "repetition": 0.0, "coherence": 0.0}
@@ -271,15 +362,32 @@ class PPOTrainer:
         for step in range(num_steps):
             with torch.no_grad():
                 obs_tensor = obs.to(self.device)
-                action_dist, value = self.agent.forward(obs_tensor)
+
+                if self.constraint_mode == "lagrangian":
+                    action_dist, value, cost_value = self.agent.forward_with_cost(obs_tensor)
+                else:
+                    action_dist, value = self.agent.forward(obs_tensor)
+                    cost_value = None
+
                 action = action_dist.sample()
                 log_prob = action_dist.log_prob(action).sum()
 
                 if obs_tensor.dim() == 1:
                     action = action.squeeze(0)
                     value = value.squeeze()
+                    if cost_value is not None:
+                        cost_value = cost_value.squeeze()
 
             next_obs, reward, done, info = self.env.step(action)
+
+            # Compute per-step cost for Lagrangian mode
+            step_cost = None
+            step_cost_value = None
+            if self.constraint_mode == "lagrangian" and self.lagrange_multiplier is not None:
+                diversity_reward = info.get("reward_components", {}).get("diversity", 0.0)
+                step_cost = self.lagrange_multiplier.compute_cost(diversity_reward)
+                step_cost_value = cost_value.item() if isinstance(cost_value, torch.Tensor) else cost_value
+                rollout_costs.append(step_cost)
 
             self.buffer.add(
                 observation=obs_tensor.cpu(),
@@ -288,6 +396,8 @@ class PPOTrainer:
                 value=value.item() if isinstance(value, torch.Tensor) else value,
                 log_prob=log_prob.item() if isinstance(log_prob, torch.Tensor) else log_prob,
                 done=done,
+                cost=step_cost,
+                cost_value=step_cost_value,
             )
 
             rollout_rewards.append(reward)
@@ -315,7 +425,7 @@ class PPOTrainer:
 
         self.agent.train()
 
-        return {
+        stats = {
             "mean_reward": np.mean(rollout_rewards),
             "mean_value": np.mean(rollout_values),
             "std_reward": np.std(rollout_rewards),
@@ -326,6 +436,9 @@ class PPOTrainer:
             "mean_reward_repetition": reward_components_sum["repetition"] / num_steps,
             "mean_reward_coherence": reward_components_sum["coherence"] / num_steps,
         }
+        if rollout_costs:
+            stats["mean_cost"] = np.mean(rollout_costs)
+        return stats
 
     def compute_advantages(self) -> Tuple[torch.Tensor, torch.Tensor]:
         n = len(self.buffer)
@@ -356,9 +469,39 @@ class PPOTrainer:
 
         return advantages, returns
 
+    def compute_cost_advantages(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """GAE-Lambda over cost values. Does NOT normalize cost advantages."""
+        n = len(self.buffer)
+        costs = self.buffer.costs[:n]
+        cost_values = self.buffer.cost_values[:n]
+        dones = self.buffer.dones[:n]
+
+        with torch.no_grad():
+            last_obs = self.buffer.observations[n - 1].to(self.device)
+            last_cost_value = self.agent.get_cost_value(last_obs).cpu()
+
+        advantages = torch.zeros_like(costs)
+        last_gae = 0.0
+
+        for t in reversed(range(len(costs))):
+            if t == len(costs) - 1:
+                next_value = last_cost_value
+            else:
+                next_value = cost_values[t + 1]
+
+            delta = costs[t] + self.gamma * next_value * (1 - dones[t]) - cost_values[t]
+            last_gae = delta + self.gamma * self.gae_lambda * (1 - dones[t]) * last_gae
+            advantages[t] = last_gae
+
+        returns = advantages + cost_values
+        # Cost advantages are NOT normalized (different from reward advantages)
+        return advantages, returns
+
     def update_policy(
         self, advantages: torch.Tensor, returns: torch.Tensor,
         current_entropy_coef: float = None,
+        cost_advantages: torch.Tensor = None,
+        cost_returns: torch.Tensor = None,
     ) -> Dict[str, float]:
         n = len(self.buffer)
         observations = self.buffer.observations[:n].to(self.device)
@@ -367,6 +510,14 @@ class PPOTrainer:
         advantages = advantages.to(self.device)
         returns = returns.to(self.device)
 
+        lagrangian = (self.constraint_mode == "lagrangian"
+                      and cost_advantages is not None
+                      and cost_returns is not None)
+        if lagrangian:
+            cost_advantages = cost_advantages.to(self.device)
+            cost_returns = cost_returns.to(self.device)
+            lam = self.lagrange_multiplier.value()
+
         entropy_coef = current_entropy_coef if current_entropy_coef is not None else self.entropy_coef
 
         num_samples = len(self.buffer)
@@ -374,6 +525,7 @@ class PPOTrainer:
 
         total_policy_loss = 0.0
         total_value_loss = 0.0
+        total_cost_value_loss = 0.0
         total_entropy = 0.0
         num_updates = 0
 
@@ -390,13 +542,25 @@ class PPOTrainer:
                 batch_advantages = advantages[batch_indices]
                 batch_returns = returns[batch_indices]
 
-                log_probs, values, entropy = self.agent.evaluate_actions(
-                    batch_obs, batch_actions,
-                )
+                if lagrangian:
+                    log_probs, values, entropy, cost_values = (
+                        self.agent.evaluate_actions_with_cost(batch_obs, batch_actions)
+                    )
+                    batch_cost_advantages = cost_advantages[batch_indices]
+                    batch_cost_returns = cost_returns[batch_indices]
+                    # Combined advantage: (A_r - λ * A_c) / (1 + λ)
+                    combined_advantages = (
+                        (batch_advantages - lam * batch_cost_advantages) / (1 + lam)
+                    )
+                else:
+                    log_probs, values, entropy = self.agent.evaluate_actions(
+                        batch_obs, batch_actions,
+                    )
+                    combined_advantages = batch_advantages
 
                 ratio = torch.exp(log_probs - batch_old_log_probs)
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
+                surr1 = ratio * combined_advantages
+                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * combined_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
 
                 value_loss = nn.functional.mse_loss(values, batch_returns)
@@ -408,6 +572,11 @@ class PPOTrainer:
                     + entropy_coef * entropy_loss
                 )
 
+                if lagrangian:
+                    cost_value_loss = nn.functional.mse_loss(cost_values, batch_cost_returns)
+                    loss = loss + self.value_coef * cost_value_loss
+                    total_cost_value_loss += cost_value_loss.item()
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
@@ -418,11 +587,14 @@ class PPOTrainer:
                 total_entropy += entropy.mean().item()
                 num_updates += 1
 
-        return {
+        result = {
             "policy_loss": total_policy_loss / num_updates,
             "value_loss": total_value_loss / num_updates,
             "entropy": total_entropy / num_updates,
         }
+        if lagrangian:
+            result["cost_value_loss"] = total_cost_value_loss / num_updates
+        return result
 
     def train(self, total_timesteps: int = None) -> Dict[str, List[float]]:
         if total_timesteps is None:
@@ -442,6 +614,9 @@ class PPOTrainer:
             "reward_repetition": [],
             "reward_coherence": [],
             "diversity_weight": [],
+            "lagrange_multiplier": [],
+            "mean_cost": [],
+            "cost_value_loss": [],
         }
 
         num_iterations = total_timesteps // self.rollout_steps
@@ -460,12 +635,23 @@ class PPOTrainer:
 
             advantages, returns = self.compute_advantages()
 
+            # Lagrangian: compute cost advantages and update dual variable
+            cost_adv = None
+            cost_ret = None
+            if self.constraint_mode == "lagrangian" and self.lagrange_multiplier is not None:
+                cost_adv, cost_ret = self.compute_cost_advantages()
+                mean_cost = rollout_stats.get("mean_cost", 0.0)
+                self.lagrange_multiplier.update(mean_cost)
+
             if self.entropy_homeostasis is not None:
                 current_entropy_coef = self.entropy_homeostasis.coef
             else:
                 current_entropy_coef = self.get_entropy_coef(iteration, num_iterations)
 
-            update_stats = self.update_policy(advantages, returns, current_entropy_coef)
+            update_stats = self.update_policy(
+                advantages, returns, current_entropy_coef,
+                cost_advantages=cost_adv, cost_returns=cost_ret,
+            )
 
             if self.entropy_homeostasis is not None:
                 current_entropy_coef = self.entropy_homeostasis.step(update_stats["entropy"])
@@ -498,6 +684,10 @@ class PPOTrainer:
             history["reward_coherence"].append(rollout_stats.get("mean_reward_coherence", 0.0))
             if current_diversity_weight is not None:
                 history["diversity_weight"].append(current_diversity_weight)
+            if self.lagrange_multiplier is not None:
+                history["lagrange_multiplier"].append(self.lagrange_multiplier.value())
+                history["mean_cost"].append(rollout_stats.get("mean_cost", 0.0))
+                history["cost_value_loss"].append(update_stats.get("cost_value_loss", 0.0))
 
             self.writer.add_scalar("RL/episode_reward", mean_ep_reward, self.global_step)
             self.writer.add_scalar("RL/policy_loss", update_stats["policy_loss"], self.global_step)
@@ -514,6 +704,11 @@ class PPOTrainer:
             self.writer.add_scalar("RL/reward_coherence", rollout_stats.get("mean_reward_coherence", 0.0), self.global_step)
             if current_diversity_weight is not None:
                 self.writer.add_scalar("RL/diversity_weight", current_diversity_weight, self.global_step)
+            if self.lagrange_multiplier is not None:
+                self.writer.add_scalar("RL/lagrange_multiplier", self.lagrange_multiplier.value(), self.global_step)
+                self.writer.add_scalar("RL/mean_cost", rollout_stats.get("mean_cost", 0.0), self.global_step)
+                if "cost_value_loss" in update_stats:
+                    self.writer.add_scalar("RL/cost_value_loss", update_stats["cost_value_loss"], self.global_step)
 
             if (iteration + 1) % 10 == 0:
                 print(
@@ -564,6 +759,8 @@ class PPOTrainer:
             checkpoint_dict["entropy_homeostasis_coef"] = self.entropy_homeostasis.coef
         if self.diversity_homeostasis is not None:
             checkpoint_dict["diversity_homeostasis_weight"] = self.diversity_homeostasis.weight
+        if self.lagrange_multiplier is not None:
+            checkpoint_dict["lagrange_multiplier_state"] = self.lagrange_multiplier.state_dict()
         torch.save(checkpoint_dict, checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         if self.metrics_logger is not None:
@@ -579,6 +776,8 @@ class PPOTrainer:
         if self.diversity_homeostasis is not None and "diversity_homeostasis_weight" in checkpoint:
             self.diversity_homeostasis.weight = checkpoint["diversity_homeostasis_weight"]
             self.env.reward_computer.diversity_weight = checkpoint["diversity_homeostasis_weight"]
+        if self.lagrange_multiplier is not None and "lagrange_multiplier_state" in checkpoint:
+            self.lagrange_multiplier.load_state_dict(checkpoint["lagrange_multiplier_state"])
         print(f"Loaded checkpoint from step {self.global_step}")
 
 

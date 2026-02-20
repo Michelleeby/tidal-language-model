@@ -46,6 +46,20 @@ RL_DIVERSITY_HOMEOSTASIS_DECAY_RATE: 0.95  # Decay rate toward baseline
 RL_DIVERSITY_WEIGHT_MIN: 0.15  # Floor for diversity weight (ADR 0003 baseline)
 RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
 
+# ============================================================================
+# CONSTRAINED PPO (PPO-LAGRANGIAN)
+# ============================================================================
+# When RL_CONSTRAINT_MODE is "lagrangian", diversity is enforced as a hard
+# constraint instead of a weighted reward component. The diversity and sampling
+# weights are zeroed and remaining weights renormalized. A learned Lagrange
+# multiplier automatically scales the penalty for constraint violations.
+# Overrides DiversityHomeostasis when active.
+#
+# RL_CONSTRAINT_MODE: "lagrangian"      # Options: "weighted" (default), "lagrangian"
+RL_DIVERSITY_CONSTRAINT_THRESHOLD: 0.55  # Minimum diversity reward (constraint floor)
+RL_LAGRANGE_MULTIPLIER_LR: 0.05         # Learning rate for dual variable
+RL_LAGRANGE_MULTIPLIER_INIT: 1.0        # Initial Lagrange multiplier value
+
 # Training loop
 RL_ROLLOUT_STEPS: 128  # Steps per rollout before update
 RL_NUM_EPOCHS: 4  # PPO epochs per rollout
