@@ -55,7 +55,7 @@ RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
 # multiplier automatically scales the penalty for constraint violations.
 # Overrides DiversityHomeostasis when active.
 #
-# RL_CONSTRAINT_MODE: "lagrangian"      # Options: "weighted" (default), "lagrangian"
+RL_CONSTRAINT_MODE: "lagrangian"      # Options: "weighted" (default), "lagrangian"
 RL_DIVERSITY_CONSTRAINT_THRESHOLD: 0.55  # Minimum diversity reward (constraint floor)
 RL_LAGRANGE_MULTIPLIER_LR: 0.05         # Learning rate for dual variable
 RL_LAGRANGE_MULTIPLIER_INIT: 1.0        # Initial Lagrange multiplier value
