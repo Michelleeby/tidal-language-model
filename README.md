@@ -248,6 +248,7 @@ Design decisions are documented in [`research/adrs/`](research/adrs/):
 | [0002](research/adrs/0002-uint16-data-cache.md) | Use uint16 for tokenized data cache (4x size reduction) |
 | [0003](research/adrs/0003-recalibrate-entropy-homeostasis-and-reward-weights.md) | Recalibrate entropy homeostasis and reward weights for 1D gate |
 | [0004](research/adrs/0004-lazy-disk-cache-for-mcp-http-client.md) | Lazy disk cache for MCP HTTP client |
+| [0005](research/adrs/0005-diversity-homeostasis.md) | Diversity homeostasis for RL gating agent |
 
 ## Legacy
 
