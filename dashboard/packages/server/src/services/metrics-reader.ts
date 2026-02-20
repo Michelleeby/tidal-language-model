@@ -204,6 +204,32 @@ export class MetricsReader {
     }
   }
 
+  /** Write (overwrite) training status to disk and Redis. */
+  async writeStatus(expId: string, status: TrainingStatus): Promise<void> {
+    const dirPath = path.join(
+      this.experimentsDir,
+      expId,
+      this.mc.lmDirectory,
+    );
+    await fsp.mkdir(dirPath, { recursive: true });
+
+    const filePath = path.join(dirPath, this.mc.lmStatusFile);
+    await fsp.writeFile(filePath, JSON.stringify(status, null, 2), "utf-8");
+
+    if (this.redis) {
+      try {
+        await this.redis.set(
+          `${this.mc.redisPrefix}:status:${expId}`,
+          JSON.stringify(status),
+          "EX",
+          900,
+        );
+      } catch {
+        // Redis write failure is non-fatal
+      }
+    }
+  }
+
   /** Read tail of JSONL file. */
   private async readJsonlTail(
     expId: string,

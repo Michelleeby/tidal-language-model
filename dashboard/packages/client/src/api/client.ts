@@ -34,6 +34,7 @@ import type {
   CreateAnalysisRequest,
   CreateAnalysisResponse,
   DeleteAnalysisResponse,
+  MarkCompleteResponse,
 } from "@tidal/shared";
 
 const BASE = "/api";
@@ -55,7 +56,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`Rate limited. Try again in ${retryAfter} seconds.`);
   }
 
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // Try to extract a JSON error body (e.g. { error: "..." })
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) message = body.error;
+    } catch { /* no JSON body */ }
+    throw new Error(message);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -73,6 +82,12 @@ export const api = {
 
   getStatus: (expId: string) =>
     fetchJson<StatusResponse>(`${BASE}/experiments/${expId}/status`),
+
+  markComplete: (expId: string) =>
+    fetchJson<MarkCompleteResponse>(
+      `${BASE}/experiments/${expId}/status/complete`,
+      { method: "POST" },
+    ),
 
   getCheckpoints: (expId: string) =>
     fetchJson<CheckpointsResponse>(`${BASE}/experiments/${expId}/checkpoints`),

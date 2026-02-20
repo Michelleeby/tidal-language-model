@@ -307,6 +307,7 @@ def main():
 
     try:
         history = trainer.train(total_timesteps)
+        metrics_logger.finalize()
         print(f"\nTraining complete. Final checkpoint saved to {experiment_dir}")
     except KeyboardInterrupt:
         print("\n\nTraining interrupted. Saving checkpoint...")
