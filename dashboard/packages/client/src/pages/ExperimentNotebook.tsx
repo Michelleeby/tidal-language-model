@@ -25,7 +25,7 @@ import TrainingStatusCard from "../components/status/TrainingStatusCard.js";
 import MetricCards from "../components/status/MetricCards.js";
 import MetricCarousel from "../components/status/MetricCarousel.js";
 import TrainingControlBar from "../components/jobs/TrainingControlBar.js";
-import RLTrainingTrigger from "../components/jobs/RLTrainingTrigger.js";
+import NewExperimentPanel from "../components/jobs/NewExperimentPanel.js";
 import LogTailCard from "../components/logs/LogTailCard.js";
 import ConfigViewer from "../components/config/ConfigViewer.js";
 import GenerationSection from "../components/generation/GenerationSection.js";
@@ -159,7 +159,7 @@ export default function ExperimentNotebook() {
               </p>
             </div>
             <div className="w-full bg-gray-900 border border-gray-800 rounded-lg p-6 space-y-4">
-              <TrainingControlBar />
+              <NewExperimentPanel />
             </div>
           </>
         )}
@@ -308,24 +308,12 @@ export default function ExperimentNotebook() {
             </div>
           )}
 
-          {/* RL Training Trigger (only for LM experiments) */}
-          {isLM && (
+          {/* RL Monitor charts (RL experiments only) */}
+          {isRL && hasRLData && (
             <div className="space-y-4">
               <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                RL Gating
+                RL Gating Monitor
               </h4>
-              <RLTrainingTrigger selectedExpId={selectedExpId} />
-            </div>
-          )}
-
-          {/* RL Monitor charts (for RL experiments, or LM experiments with co-located RL data) */}
-          {hasRLData && (
-            <div className="space-y-4">
-              {isRL && (
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  RL Gating Monitor
-                </h4>
-              )}
               <RLRewardCurve
                 history={rlHistory}
                 actions={
@@ -408,8 +396,10 @@ export default function ExperimentNotebook() {
             </div>
           )}
 
-          {/* Ablation (for RL experiments, or LM experiments with ablation data) */}
-          <AblationComparison results={ablationData?.results ?? null} />
+          {/* Ablation (RL experiments only) */}
+          {isRL && (
+            <AblationComparison results={ablationData?.results ?? null} />
+          )}
         </div>
       </CollapsibleSection>
 
@@ -428,10 +418,12 @@ export default function ExperimentNotebook() {
         <GenerationSection expId={selectedExpId} />
       </CollapsibleSection>
 
-      {/* 6. Analysis */}
-      <CollapsibleSection title="Analysis">
-        <AnalysisSection expId={selectedExpId} />
-      </CollapsibleSection>
+      {/* 6. Analysis (RL experiments only) */}
+      {isRL && (
+        <CollapsibleSection title="Analysis">
+          <AnalysisSection expId={selectedExpId} />
+        </CollapsibleSection>
+      )}
     </div>
   );
 }
