@@ -3,14 +3,16 @@
 The bug: train_rl.py never called metrics_logger.finalize() after training,
 so RL experiments never reached "completed" status. This broke MCP caching
 which only caches completed experiments.
+
+Ordering: finalize() must be called AFTER run_ablation_study() completes,
+so the MCP cache doesn't lock in incomplete data.
 """
 
-import json
 import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 
 class TestTrainRLFinalize(unittest.TestCase):
@@ -19,7 +21,8 @@ class TestTrainRLFinalize(unittest.TestCase):
     def _run_main_with_mocked_training(self, train_side_effect=None):
         """Run train_rl.main() with all heavy dependencies mocked.
 
-        Returns (mock_metrics_logger, mock_trainer) for assertions.
+        Returns (mock_metrics_logger, mock_trainer, mock_ablation, call_order)
+        for assertions. call_order tracks the sequence of key function calls.
         """
         # Pre-populate sys.modules so train_rl.py's imports resolve without
         # loading transformers / torch / etc.
@@ -48,16 +51,28 @@ class TestTrainRLFinalize(unittest.TestCase):
 
             import plugins.tidal.train_rl as train_rl_mod
 
+            # Track call order across mocks
+            call_order = []
+
             mock_logger = MagicMock()
+            mock_logger.finalize.side_effect = lambda: call_order.append("finalize")
+
             mock_trainer = MagicMock()
             if train_side_effect:
                 mock_trainer.train.side_effect = train_side_effect
             else:
-                mock_trainer.train.return_value = {"rewards": [1.0]}
+                def train_side(*a, **kw):
+                    call_order.append("train")
+                    return {"rewards": [1.0]}
+                mock_trainer.train.side_effect = train_side
 
             mock_model = MagicMock()
             mock_model.vocab_size = 50257
             mock_model.parameters.return_value = []
+
+            mock_ablation = MagicMock(
+                side_effect=lambda **kw: (call_order.append("ablation"), {})[1]
+            )
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 exp_dir = os.path.join(tmpdir, "fake_exp")
@@ -86,7 +101,7 @@ class TestTrainRLFinalize(unittest.TestCase):
                     patch.object(train_rl_mod, "report_experiment_id_to_job"),
                     patch.object(train_rl_mod, "MetricsLogger", return_value=mock_logger),
                     patch.object(train_rl_mod, "PPOTrainer", return_value=mock_trainer),
-                    patch.object(train_rl_mod, "run_ablation_study", return_value={}),
+                    patch.object(train_rl_mod, "run_ablation_study", mock_ablation),
                     patch.object(train_rl_mod, "GatingModulator", return_value=MagicMock()),
                     patch.object(train_rl_mod, "RewardComputer", return_value=MagicMock()),
                     patch.object(train_rl_mod, "GatingEnvironment", return_value=MagicMock()),
@@ -101,7 +116,7 @@ class TestTrainRLFinalize(unittest.TestCase):
                 ):
                     train_rl_mod.main()
 
-            return mock_logger, mock_trainer
+            return mock_logger, mock_trainer, mock_ablation, call_order
 
         finally:
             # Clean up stub modules
@@ -113,14 +128,14 @@ class TestTrainRLFinalize(unittest.TestCase):
 
     def test_finalize_called_after_successful_training(self):
         """finalize() must be called after trainer.train() completes."""
-        mock_logger, mock_trainer = self._run_main_with_mocked_training()
+        mock_logger, mock_trainer, _, _ = self._run_main_with_mocked_training()
 
         mock_trainer.train.assert_called_once()
         mock_logger.finalize.assert_called_once()
 
     def test_finalize_not_called_on_keyboard_interrupt(self):
         """finalize() must NOT be called when training is interrupted."""
-        mock_logger, mock_trainer = self._run_main_with_mocked_training(
+        mock_logger, mock_trainer, _, _ = self._run_main_with_mocked_training(
             train_side_effect=KeyboardInterrupt(),
         )
 
@@ -129,6 +144,27 @@ class TestTrainRLFinalize(unittest.TestCase):
         # But interrupted checkpoint should have been saved
         mock_trainer.save_checkpoint.assert_called_once_with(
             "rl_checkpoint_interrupted.pth"
+        )
+
+    def test_finalize_called_after_ablation_study(self):
+        """finalize() must be called AFTER run_ablation_study().
+
+        If finalize() runs first, the MCP cache sees "completed" status
+        and caches the experiment before ablation results are written.
+        """
+        _, _, mock_ablation, call_order = self._run_main_with_mocked_training()
+
+        # Both must have been called
+        mock_ablation.assert_called_once()
+        self.assertIn("finalize", call_order)
+        self.assertIn("ablation", call_order)
+
+        # finalize must come AFTER ablation
+        ablation_idx = call_order.index("ablation")
+        finalize_idx = call_order.index("finalize")
+        self.assertGreater(
+            finalize_idx, ablation_idx,
+            f"finalize() called before ablation study. Order: {call_order}"
         )
 
 

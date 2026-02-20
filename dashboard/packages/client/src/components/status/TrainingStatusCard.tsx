@@ -1,7 +1,5 @@
-import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import type { TrainingStatus } from "@tidal/shared";
-import { api } from "../../api/client.js";
+import { useMarkComplete } from "../../hooks/useMarkComplete.js";
 
 interface TrainingStatusCardProps {
   status: TrainingStatus | null;
@@ -12,9 +10,7 @@ export default function TrainingStatusCard({
   status,
   expId,
 }: TrainingStatusCardProps) {
-  const queryClient = useQueryClient();
-  const [marking, setMarking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { mutate, isPending, error } = useMarkComplete();
 
   if (!status) {
     return (
@@ -29,21 +25,6 @@ export default function TrainingStatusCard({
     training: "text-blue-400",
     completed: "text-green-400",
   }[status.status];
-
-  const handleMarkComplete = async () => {
-    if (!expId || marking) return;
-    setMarking(true);
-    setError(null);
-    try {
-      await api.markComplete(expId);
-      await queryClient.invalidateQueries({ queryKey: ["status", expId] });
-      await queryClient.invalidateQueries({ queryKey: ["experiments"] });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to mark complete");
-    } finally {
-      setMarking(false);
-    }
-  };
 
   return (
     <div className="snap-center flex-shrink-0 w-full md:w-auto bg-gray-900 rounded-lg p-4 space-y-2">
@@ -70,15 +51,17 @@ export default function TrainingStatusCard({
       {expId && status.status !== "completed" && (
         <button
           type="button"
-          onClick={handleMarkComplete}
-          disabled={marking}
+          onClick={() => mutate(expId)}
+          disabled={isPending}
           className="mt-1 text-xs text-gray-500 hover:text-gray-300 border border-gray-700 hover:border-gray-500 rounded px-2 py-0.5 transition-colors disabled:opacity-50"
         >
-          {marking ? "Marking..." : "Mark Complete"}
+          {isPending ? "Marking..." : "Mark Complete"}
         </button>
       )}
       {error && (
-        <div className="text-xs text-red-400 mt-1">{error}</div>
+        <div className="text-xs text-red-400 mt-1">
+          {error instanceof Error ? error.message : "Failed to mark complete"}
+        </div>
       )}
     </div>
   );
