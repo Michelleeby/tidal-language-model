@@ -225,6 +225,78 @@ describe("FetchTidalApiClient", () => {
     });
   });
 
+  // ── PUT ────────────────────────────────────────────────────────────
+
+  describe("put()", () => {
+    it("sends JSON body with PUT method", async () => {
+      const responseData = { report: { id: "rpt-1" } };
+      mockFetch.mock.mockImplementation(async () =>
+        jsonResponse(responseData),
+      );
+      const client = new FetchTidalApiClient("http://localhost:4400");
+
+      const body = { title: "Updated", blocks: [{ type: "heading" }] };
+      await client.put("/api/reports/rpt-1", body);
+
+      assert.equal(mockFetch.mock.callCount(), 1);
+      const [url, init] = mockFetch.mock.calls[0].arguments;
+      assert.equal(url, "http://localhost:4400/api/reports/rpt-1");
+      assert.equal(init?.method, "PUT");
+      assert.equal(
+        (init?.headers as Record<string, string>)["Content-Type"],
+        "application/json",
+      );
+      assert.equal(init?.body, JSON.stringify(body));
+    });
+
+    it("returns ok result with data on 2xx", async () => {
+      const data = { report: { id: "rpt-1", title: "Updated" } };
+      mockFetch.mock.mockImplementation(async () => jsonResponse(data));
+      const client = new FetchTidalApiClient("http://localhost:4400");
+
+      const result = await client.put("/api/reports/rpt-1", {
+        title: "Updated",
+      });
+
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        assert.deepEqual(result.data, data);
+      }
+    });
+
+    it("returns error result on 4xx", async () => {
+      mockFetch.mock.mockImplementation(async () =>
+        errorResponse(404, "Report not found"),
+      );
+      const client = new FetchTidalApiClient("http://localhost:4400");
+
+      const result = await client.put("/api/reports/missing", {
+        title: "x",
+      });
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(result.status, 404);
+        assert.match(result.error, /Report not found/);
+      }
+    });
+
+    it("returns network error on fetch failure", async () => {
+      mockFetch.mock.mockImplementation(async () => {
+        throw new TypeError("fetch failed");
+      });
+      const client = new FetchTidalApiClient("http://localhost:4400");
+
+      const result = await client.put("/api/reports/rpt-1", {});
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(result.status, 0);
+        assert.match(result.error, /Network error/);
+      }
+    });
+  });
+
   // ── Auth ───────────────────────────────────────────────────────────
 
   describe("auth token", () => {
@@ -266,13 +338,15 @@ describe("FetchTidalApiClient", () => {
 /** Creates a spy client that records calls and returns path-specific responses. */
 function spyClient(
   responses: Map<string, ApiResult<unknown>>,
-): TidalApiClient & { getCalls: string[]; postCalls: string[] } {
+): TidalApiClient & { getCalls: string[]; postCalls: string[]; putCalls: string[] } {
   const getCalls: string[] = [];
   const postCalls: string[] = [];
+  const putCalls: string[] = [];
 
   return {
     getCalls,
     postCalls,
+    putCalls,
     async get<T>(
       path: string,
       query?: Record<string, string | number | undefined>,
@@ -297,6 +371,14 @@ function spyClient(
     },
     async post<T>(path: string, _body: unknown): Promise<ApiResult<T>> {
       postCalls.push(path);
+      const response = responses.get(path);
+      if (!response) {
+        return { ok: false, error: "No mock for " + path, status: 404 } as ApiResult<T>;
+      }
+      return response as ApiResult<T>;
+    },
+    async put<T>(path: string, _body: unknown): Promise<ApiResult<T>> {
+      putCalls.push(path);
       const response = responses.get(path);
       if (!response) {
         return { ok: false, error: "No mock for " + path, status: 404 } as ApiResult<T>;
@@ -330,6 +412,25 @@ describe("CachingTidalApiClient", () => {
     await client.post("/api/generate", { prompt: "a" });
 
     assert.equal(inner.postCalls.length, 2);
+    // No cache files written
+    const files = await readdir(cacheDir, { recursive: true });
+    const jsonFiles = files.filter((f: string) => f.endsWith(".json"));
+    assert.equal(jsonFiles.length, 0);
+  });
+
+  // ── 1b. put() always delegates, never caches ───────────────────────
+
+  it("put() always delegates and never caches", async () => {
+    const responses = new Map<string, ApiResult<unknown>>([
+      ["/api/reports/rpt-1", { ok: true, data: { report: { id: "rpt-1" } }, status: 200 }],
+    ]);
+    const inner = spyClient(responses);
+    const client = new CachingTidalApiClient(inner, cacheDir);
+
+    await client.put("/api/reports/rpt-1", { title: "a" });
+    await client.put("/api/reports/rpt-1", { title: "b" });
+
+    assert.equal(inner.putCalls.length, 2);
     // No cache files written
     const files = await readdir(cacheDir, { recursive: true });
     const jsonFiles = files.filter((f: string) => f.endsWith(".json"));

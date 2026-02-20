@@ -31,6 +31,11 @@ export interface RLTrainingHistory {
   reward_repetition?: number[];
   reward_coherence?: number[];
   explained_variance?: number[];
+  entropy_coef?: number[];
+  diversity_weight?: number[];
+  lagrange_multiplier?: number[];
+  mean_cost?: number[];
+  cost_value_loss?: number[];
 }
 
 /** RL metrics snapshot from Redis / disk. */

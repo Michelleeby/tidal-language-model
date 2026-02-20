@@ -27,6 +27,8 @@ export interface TidalApiClient {
   ): Promise<ApiResult<T>>;
 
   post<T>(path: string, body: unknown): Promise<ApiResult<T>>;
+
+  put<T>(path: string, body: unknown): Promise<ApiResult<T>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +89,10 @@ export class CachingTidalApiClient implements TidalApiClient {
 
   async post<T>(path: string, body: unknown): Promise<ApiResult<T>> {
     return this.inner.post<T>(path, body);
+  }
+
+  async put<T>(path: string, body: unknown): Promise<ApiResult<T>> {
+    return this.inner.put<T>(path, body);
   }
 
   // ── Cache key ─────────────────────────────────────────────────────
@@ -229,6 +235,15 @@ export class FetchTidalApiClient implements TidalApiClient {
     const url = `${this.baseUrl}${path}`;
     return this.execute<T>(url, {
       method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async put<T>(path: string, body: unknown): Promise<ApiResult<T>> {
+    const url = `${this.baseUrl}${path}`;
+    return this.execute<T>(url, {
+      method: "PUT",
       headers: { ...this.headers(), "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
