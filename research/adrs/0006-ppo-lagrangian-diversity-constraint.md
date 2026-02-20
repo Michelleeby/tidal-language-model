@@ -32,8 +32,8 @@ a hard constraint that must be satisfied.
 Replace weighted diversity reward with **PPO-Lagrangian** constrained
 optimization:
 
-- **Primary reward** (maximize): perplexity + coherence + repetition (diversity
-  and sampling weights zeroed, remaining weights renormalized to sum to 1.0)
+- **Primary reward** (maximize): perplexity + sampling + coherence (diversity
+  and repetition weights zeroed, remaining weights renormalized to sum to 1.0)
 - **Hard constraint** (enforce): `diversity_reward >= 0.55` (configurable)
 - **Learned Lagrange multiplier**: automatically scales penalty for constraint
   violations via dual gradient ascent
@@ -73,16 +73,16 @@ mode, avoiding fragile variable-length tuple unpacking.
 
 ### Reward split
 
-In Lagrangian mode, `diversity_weight` and `sampling_weight` are set to 0 on
+In Lagrangian mode, `diversity_weight` and `repetition_weight` are set to 0 on
 the reward computer. Remaining weights are renormalized:
 
 | Component | Weighted Mode | Lagrangian Mode |
 |---|---|---|
-| Perplexity | 0.35 | 0.50 (0.35/0.70) |
-| Repetition | 0.20 | 0.29 (0.20/0.70) |
-| Coherence | 0.15 | 0.21 (0.15/0.70) |
+| Perplexity | 0.35 | 0.54 (0.35/0.65) |
+| Sampling | 0.15 | 0.23 (0.15/0.65) |
+| Coherence | 0.15 | 0.23 (0.15/0.65) |
 | Diversity | 0.15 | 0 (via constraint) |
-| Sampling | 0.15 | 0 |
+| Repetition | 0.20 | 0 |
 
 ### Combined advantage formula
 
@@ -181,3 +181,18 @@ specifying the diversity threshold.
 - Config: `plugins/tidal/configs/rl_config.yaml`
 - Tests: `plugins/tidal/tests/test_GatingRL.py`
 - Literature: Stooke, Edwards, Ray (2020) — "Responsive Safety in Reinforcement Learning by PID Lagrangian Methods"
+
+## Addendum (2026-02-20): Replace repetition with sampling in reward split
+
+The first PPO-Lagrangian run (`20260220-152730-commit_121f3bc-rl_7a31e05920`)
+revealed that `reward_repetition` is effectively zero (mean -0.0002) despite
+receiving 29% of the renormalized reward weight. The GatingModulator's
+logit-level repetition penalty already prevents repetition before sampling,
+making the RewardComputer's repetition measurement redundant. Meanwhile,
+sampling entropy (which had real signal at ~0.66 in weighted mode) was zeroed
+alongside diversity.
+
+**Fix**: Zero repetition instead of sampling so the Lagrangian reward has three
+components with real gradient signal (perplexity, sampling, coherence).
+Renormalized weights: 0.54 / 0.23 / 0.23. The reward split table and decision
+summary above have been updated to reflect this change.

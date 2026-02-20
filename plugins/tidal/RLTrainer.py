@@ -303,17 +303,17 @@ class PPOTrainer:
             self.lagrange_multiplier = LagrangeMultiplier(config)
             # Lagrangian mode supersedes diversity homeostasis
             self.diversity_homeostasis = None
-            # Zero out diversity and sampling weights; renormalize remaining
+            # Zero out diversity and repetition weights; renormalize remaining
             self.env.reward_computer.diversity_weight = 0.0
-            self.env.reward_computer.sampling_weight = 0.0
+            self.env.reward_computer.repetition_weight = 0.0
             remaining = (
                 self.env.reward_computer.perplexity_weight
-                + self.env.reward_computer.repetition_weight
+                + self.env.reward_computer.sampling_weight
                 + self.env.reward_computer.coherence_weight
             )
             if remaining > 0:
                 self.env.reward_computer.perplexity_weight /= remaining
-                self.env.reward_computer.repetition_weight /= remaining
+                self.env.reward_computer.sampling_weight /= remaining
                 self.env.reward_computer.coherence_weight /= remaining
         else:
             self.lagrange_multiplier = None
