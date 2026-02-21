@@ -18,6 +18,7 @@ from plugins.tidal.GatingPolicyAgent import GatingPolicyAgent, GaussianGatingPol
 from plugins.tidal.RLTrainer import RolloutBuffer, PPOTrainer, ExponentialMovingAverage, EntropyHomeostasis, DiversityHomeostasis, LagrangeMultiplier
 from plugins.tidal.GatingEnvironment import GatingEnvironment
 from plugins.tidal.TransformerLM import TransformerLM
+from plugins.tidal.train_rl import unfreeze_dynamic_gates
 
 
 class TestGatingModulator(TimedTestCase):
@@ -2998,6 +2999,375 @@ class TestPPOLagrangianPolicyUpdate(TimedTestCase):
             self.assertIn("policy_loss", result)
             self.assertIn("value_loss", result)
             self.assertIn("entropy", result)
+
+
+class TestDynamicGateUnfreezing(TimedTestCase):
+    """Tests for Experiment 3: unfreezing DynamicGate MLPs during RL training."""
+
+    def _make_frozen_model(self):
+        """Create a small TransformerLM with all params frozen (simulates load_model)."""
+        config = {
+            "EMBED_DIM": 64,
+            "NUM_HEADS": 2,
+            "FFN_HIDDEN_DIM": 128,
+            "NUM_LAYERS": 6,
+            "MAX_CONTEXT_LENGTH": 64,
+            "DROPOUT": 0.0,
+        }
+        model = TransformerLM(vocab_size=256, config=config)
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad = False
+        return model, config
+
+    def _base_config(self):
+        return {
+            "RL_OBSERVATION_DIM": 64,
+            "RL_ACTION_DIM": 1,
+            "RL_HIDDEN_DIM": 128,
+            "RL_LEARNING_RATE": 3e-4,
+            "RL_GAMMA": 0.99,
+            "RL_GAE_LAMBDA": 0.95,
+            "RL_CLIP_EPSILON": 0.2,
+            "RL_ENTROPY_COEF": 0.01,
+            "RL_ENTROPY_COEF_FINAL": 0.03,
+            "RL_VALUE_COEF": 0.5,
+            "RL_MAX_GRAD_NORM": 0.5,
+            "RL_ROLLOUT_STEPS": 16,
+            "RL_NUM_EPOCHS": 1,
+            "RL_BATCH_SIZE": 16,
+            "RL_TOTAL_TIMESTEPS": 100000,
+            "RL_REWARD_PERPLEXITY_WEIGHT": 0.35,
+            "RL_REWARD_DIVERSITY_WEIGHT": 0.15,
+            "RL_REWARD_SAMPLING_WEIGHT": 0.15,
+            "RL_REWARD_REPETITION_WEIGHT": 0.20,
+            "RL_REWARD_COHERENCE_WEIGHT": 0.15,
+        }
+
+    def _make_mock_env(self, config):
+        mock_env = MagicMock()
+        mock_env.reward_computer = RewardComputer(config, vocab_size=256)
+        step_counter = [0]
+
+        def mock_reset():
+            step_counter[0] = 0
+            mock_env.done = False
+            mock_env.generated_tokens = [1]
+            return torch.randn(64)
+
+        def mock_step(action):
+            step_counter[0] += 1
+            done = step_counter[0] >= 50
+            if done:
+                step_counter[0] = 0
+                mock_env.done = True
+            else:
+                mock_env.generated_tokens = list(range(step_counter[0]))
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+            }
+
+        mock_env.reset.side_effect = mock_reset
+        mock_env.step.side_effect = mock_step
+        mock_env._get_observation = lambda: torch.randn(64)
+        mock_env.done = False
+        mock_env.generated_tokens = []
+        mock_env.gate_training = False
+        mock_env.last_logits = None
+        return mock_env
+
+    def _make_trainer(self, config, gate_params=None):
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        env = self._make_mock_env(config)
+        tmpdir = tempfile.mkdtemp()
+        return PPOTrainer(
+            agent=agent, env=env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+            gate_params=gate_params,
+        ), tmpdir
+
+    # ------------------------------------------------------------------
+    # Test 1: unfreeze_dynamic_gates sets requires_grad on gate params
+    # ------------------------------------------------------------------
+    def test_unfreeze_dynamic_gates_sets_requires_grad(self):
+        """After calling unfreeze_dynamic_gates(model), all attn_gate/ffn_gate params have requires_grad=True."""
+        model, _ = self._make_frozen_model()
+        unfreeze_dynamic_gates(model)
+        for name, param in model.named_parameters():
+            if "attn_gate" in name or "ffn_gate" in name:
+                self.assertTrue(param.requires_grad,
+                                f"Gate param {name} should have requires_grad=True")
+
+    # ------------------------------------------------------------------
+    # Test 2: unfreeze keeps non-gate params frozen
+    # ------------------------------------------------------------------
+    def test_unfreeze_keeps_other_params_frozen(self):
+        """Non-gate params remain requires_grad=False after unfreezing gates."""
+        model, _ = self._make_frozen_model()
+        unfreeze_dynamic_gates(model)
+        for name, param in model.named_parameters():
+            if "attn_gate" not in name and "ffn_gate" not in name:
+                self.assertFalse(param.requires_grad,
+                                 f"Non-gate param {name} should remain frozen")
+
+    # ------------------------------------------------------------------
+    # Test 3: exactly 12 gate modules with ~24K params
+    # ------------------------------------------------------------------
+    def test_unfreeze_gate_count(self):
+        """Exactly 12 DynamicGate modules unfrozen (2 per block x 6 blocks), ~24K params."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+
+        # Count unique gate module prefixes
+        gate_modules = set()
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                # Extract module path e.g. "blocks.0.attn_gate"
+                parts = name.rsplit(".", 2)  # e.g. ['blocks.0.attn_gate', 'net', '0']
+                gate_modules.add(parts[0] if len(parts) >= 2 else name)
+
+        # Should be 12 gate modules total
+        self.assertEqual(len(gate_modules), 12,
+                         f"Expected 12 gate modules, got {len(gate_modules)}: {gate_modules}")
+
+        # Verify returned list is non-empty and param count is reasonable
+        total_gate_params = sum(p.numel() for p in gate_params)
+        self.assertGreater(total_gate_params, 0)
+        # With embed_dim=64, hidden=32: each DynamicGate has 1*32+32 + 32*64+64 = 2144 params
+        # 12 * 2144 = 25728
+        self.assertGreater(total_gate_params, 20000, "Expected ~24K gate params")
+        self.assertLess(total_gate_params, 30000, "Expected ~24K gate params")
+
+    # ------------------------------------------------------------------
+    # Test 4: gate_optimizer created when RL_UNFREEZE_DYNAMIC_GATES=True
+    # ------------------------------------------------------------------
+    def test_gate_optimizer_created_when_enabled(self):
+        """PPOTrainer creates self.gate_optimizer (Adam) when gate_params provided."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        trainer, _ = self._make_trainer(config, gate_params=gate_params)
+        self.assertIsNotNone(trainer.gate_optimizer)
+        self.assertIsInstance(trainer.gate_optimizer, torch.optim.Adam)
+
+    # ------------------------------------------------------------------
+    # Test 5: no gate_optimizer when disabled
+    # ------------------------------------------------------------------
+    def test_no_gate_optimizer_when_disabled(self):
+        """self.gate_optimizer is None when gate_params not provided."""
+        config = self._base_config()
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.gate_optimizer)
+
+    # ------------------------------------------------------------------
+    # Test 6: gate_optimizer only contains gate params
+    # ------------------------------------------------------------------
+    def test_gate_optimizer_only_contains_gate_params(self):
+        """Gate optimizer param groups contain only gate parameters."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        trainer, _ = self._make_trainer(config, gate_params=gate_params)
+
+        optimizer_params = []
+        for group in trainer.gate_optimizer.param_groups:
+            optimizer_params.extend(group["params"])
+
+        # All optimizer params should be gate params
+        gate_param_ids = {id(p) for p in gate_params}
+        for p in optimizer_params:
+            self.assertIn(id(p), gate_param_ids,
+                          "Gate optimizer should only contain gate parameters")
+        self.assertEqual(len(optimizer_params), len(gate_params))
+
+    # ------------------------------------------------------------------
+    # Test 7: gate_entropy_loss computed during rollout
+    # ------------------------------------------------------------------
+    def test_gate_loss_computed_during_rollout(self):
+        """After collect_rollouts with gate_params, self.gate_entropy_loss is a non-None tensor."""
+        model, model_config = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+
+        # Use a mock env that returns logits on last_logits
+        mock_env = self._make_mock_env(config)
+        vocab_size = 256
+
+        def mock_step_with_logits(action):
+            mock_env.generated_tokens.append(1)
+            done = len(mock_env.generated_tokens) >= 50
+            if done:
+                mock_env.done = True
+            mock_env.last_logits = torch.randn(1, 1, vocab_size)
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+            }
+
+        mock_env.step.side_effect = mock_step_with_logits
+
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        tmpdir = tempfile.mkdtemp()
+        trainer = PPOTrainer(
+            agent=agent, env=mock_env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+            gate_params=gate_params,
+        )
+        trainer.collect_rollouts(16)
+        self.assertIsNotNone(trainer.gate_entropy_loss)
+        self.assertIsInstance(trainer.gate_entropy_loss, torch.Tensor)
+
+    # ------------------------------------------------------------------
+    # Test 8: gate_signals passed to model when gate_training=True
+    # ------------------------------------------------------------------
+    def test_gate_signals_passed_when_gate_training(self):
+        """When gate_training=True, env passes gate_signals to model (not None)."""
+        model, model_config = self._make_frozen_model()
+        model_config["VOCAB_SIZE"] = 256
+        modulator = GatingModulator(self._base_config())
+        reward_computer = RewardComputer(self._base_config(), vocab_size=256)
+
+        env = GatingEnvironment(
+            model=model, modulator=modulator, reward_computer=reward_computer,
+            prompt_tokens=[[1, 2, 3, 4, 5]] * 10,
+            config={**model_config, **self._base_config()},
+            device=torch.device("cpu"),
+        )
+        env.gate_training = True
+        env.reset()
+
+        # Patch forward_with_hidden to capture whether gate_signals is passed
+        original_fwh = model.forward_with_hidden
+        captured_kwargs = {}
+
+        def capturing_fwh(input_ids, gate_signals=None):
+            captured_kwargs["gate_signals"] = gate_signals
+            return original_fwh(input_ids, gate_signals=gate_signals)
+
+        model.forward_with_hidden = capturing_fwh
+        action = torch.tensor([0.5])
+        env.step(action)
+
+        self.assertIn("gate_signals", captured_kwargs)
+        self.assertIsNotNone(captured_kwargs["gate_signals"],
+                             "gate_signals should not be None when gate_training=True")
+
+    # ------------------------------------------------------------------
+    # Test 9: last_logits stored on env after step
+    # ------------------------------------------------------------------
+    def test_last_logits_stored_on_env(self):
+        """After env.step() with gate_training=True, env.last_logits is a tensor with correct shape."""
+        model, model_config = self._make_frozen_model()
+        model_config["VOCAB_SIZE"] = 256
+        modulator = GatingModulator(self._base_config())
+        reward_computer = RewardComputer(self._base_config(), vocab_size=256)
+
+        env = GatingEnvironment(
+            model=model, modulator=modulator, reward_computer=reward_computer,
+            prompt_tokens=[[1, 2, 3, 4, 5]] * 10,
+            config={**model_config, **self._base_config()},
+            device=torch.device("cpu"),
+        )
+        env.gate_training = True
+        env.reset()
+        action = torch.tensor([0.5])
+        env.step(action)
+
+        self.assertIsNotNone(env.last_logits)
+        self.assertIsInstance(env.last_logits, torch.Tensor)
+        # Should be (batch=1, seq_len, vocab_size=256)
+        self.assertEqual(env.last_logits.shape[0], 1)
+        self.assertEqual(env.last_logits.shape[2], 256)
+
+    # ------------------------------------------------------------------
+    # Test 10: checkpoint saves gate state
+    # ------------------------------------------------------------------
+    def test_checkpoint_saves_gate_state(self):
+        """Saved checkpoint dict contains gate_state_dict and gate_optimizer_state_dict keys."""
+        import os
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        trainer, tmpdir = self._make_trainer(config, gate_params=gate_params)
+        trainer.save_checkpoint("test_gate_ckpt.pth")
+
+        checkpoint = torch.load(os.path.join(tmpdir, "test_gate_ckpt.pth"),
+                                map_location="cpu")
+        self.assertIn("gate_state_dict", checkpoint)
+        self.assertIn("gate_optimizer_state_dict", checkpoint)
+
+    # ------------------------------------------------------------------
+    # Test 11: checkpoint round-trip restores gate params
+    # ------------------------------------------------------------------
+    def test_checkpoint_loads_gate_state(self):
+        """Round-trip save/load restores gate parameters exactly."""
+        import os
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+
+        # Modify gate params to non-initial values
+        with torch.no_grad():
+            for p in gate_params:
+                p.add_(torch.randn_like(p) * 0.1)
+
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        trainer, tmpdir = self._make_trainer(config, gate_params=gate_params)
+
+        # Capture values before save
+        gate_values_before = {name: p.clone() for name, p in model.named_parameters()
+                              if "attn_gate" in name or "ffn_gate" in name}
+
+        trainer.save_checkpoint("test_gate_rt.pth")
+
+        # Create fresh model and trainer, then load
+        model2, _ = self._make_frozen_model()
+        gate_params2 = unfreeze_dynamic_gates(model2)
+        trainer2, _ = self._make_trainer(config, gate_params=gate_params2)
+        trainer2.load_checkpoint(os.path.join(tmpdir, "test_gate_rt.pth"))
+
+        # Verify gate params match
+        for name, param in model2.named_parameters():
+            if "attn_gate" in name or "ffn_gate" in name:
+                self.assertTrue(
+                    torch.allclose(param, gate_values_before[name], atol=1e-6),
+                    f"Gate param {name} not restored correctly"
+                )
+
+    # ------------------------------------------------------------------
+    # Test 12: gate training disabled by default
+    # ------------------------------------------------------------------
+    def test_gate_training_disabled_by_default(self):
+        """Default config produces gate_optimizer=None and gate_training=False."""
+        config = self._base_config()
+        # No RL_UNFREEZE_DYNAMIC_GATES key
+        trainer, _ = self._make_trainer(config)
+        self.assertIsNone(trainer.gate_optimizer)
+
+        # Verify env defaults
+        model, model_config = self._make_frozen_model()
+        modulator = GatingModulator(config)
+        reward_computer = RewardComputer(config, vocab_size=256)
+        env = GatingEnvironment(
+            model=model, modulator=modulator, reward_computer=reward_computer,
+            prompt_tokens=[[1, 2, 3, 4, 5]] * 10,
+            config={**model_config, **config},
+            device=torch.device("cpu"),
+        )
+        self.assertFalse(env.gate_training)
 
 
 if __name__ == "__main__":
