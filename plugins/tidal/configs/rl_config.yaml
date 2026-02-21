@@ -55,7 +55,7 @@ RL_DIVERSITY_WEIGHT_MAX: 0.35  # Ceiling for diversity weight
 # multiplier automatically scales the penalty for constraint violations.
 # Overrides DiversityHomeostasis when active.
 #
-RL_CONSTRAINT_MODE: "lagrangian"       # Options: "weighted" (default), "lagrangian"
+RL_CONSTRAINT_MODE: "weighted"          # Options: "weighted" (default), "lagrangian"
 RL_DIVERSITY_CONSTRAINT_THRESHOLD: 0.40  # Lowered from 0.55 — diagnostic: slack constraint
 RL_LAGRANGE_MULTIPLIER_LR: 0.05         # Learning rate for dual variable
 RL_LAGRANGE_MULTIPLIER_INIT: 1.0        # Initial Lagrange multiplier value
@@ -109,13 +109,23 @@ RL_MODULATION_TOP_K_MIN: 5    # At modulation=0: sharp sampling (only top 5 toke
 RL_MODULATION_TOP_K_MAX: 100  # At modulation=1: wide sampling (top 100 tokens)
 
 # ============================================================================
+# DYNAMIC GATE TRAINING (EXPERIMENT 3)
+# ============================================================================
+# When enabled, selectively unfreezes DynamicGate MLPs (~24K params) in the
+# frozen TransformerLM. A separate optimizer trains gates to maximize logit
+# entropy (diversity) while the PPO agent controls the modulation signal.
+
+RL_UNFREEZE_DYNAMIC_GATES: true
+RL_GATE_LR: 1.0e-4           # Learning rate for gate optimizer
+RL_GATE_ENTROPY_WEIGHT: 0.1  # Weight for auxiliary logit entropy loss
+
+# ============================================================================
 # REWARD FUNCTION WEIGHTS
 # ============================================================================
 
 # Multi-component reward: reward = sum(weight_i * component_i)
-# Experiment: Lagrangian mode with lowered threshold (0.40). Tests whether
-# a slack constraint lets the agent learn a useful policy without the
-# Lagrangian penalty dominating. Weights overridden by RLTrainer in this mode.
+# Experiment 3: Weighted mode with zero repetition + unfrozen DynamicGates.
+# Tests whether unfreezing gate MLPs breaks the monotonic trade-off.
 RL_REWARD_PERPLEXITY_WEIGHT: 0.4375  # Lower perplexity = better (quality)
 RL_REWARD_DIVERSITY_WEIGHT: 0.1875   # Higher diversity = better (raw logits entropy)
 RL_REWARD_SAMPLING_WEIGHT: 0.1875    # Sampling entropy of post-filtered distribution

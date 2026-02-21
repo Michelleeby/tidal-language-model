@@ -253,6 +253,7 @@ class PPOTrainer:
         experiment_dir: str,
         device: torch.device = None,
         metrics_logger=None,
+        gate_params: list = None,
     ):
         self.agent = agent
         self.env = env
@@ -331,6 +332,19 @@ class PPOTrainer:
         self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim,
                                     store_costs=store_costs)
 
+        # DynamicGate training (Experiment 3)
+        self.gate_params = gate_params or []
+        if gate_params is not None and len(gate_params) > 0:
+            self.gate_optimizer = optim.Adam(
+                gate_params, lr=config.get("RL_GATE_LR", 1e-4)
+            )
+            self.gate_entropy_weight = config.get("RL_GATE_ENTROPY_WEIGHT", 0.1)
+            self.env.gate_training = True
+        else:
+            self.gate_optimizer = None
+            self.gate_entropy_weight = 0.0
+        self.gate_entropy_loss = None
+
         # Persist episode counters across rollout boundaries so episodes
         # that span two collect_rollouts() calls get their true length.
         self._episode_reward = 0.0
@@ -359,6 +373,8 @@ class PPOTrainer:
         gate_signals_sum = {"modulation": 0.0}
         reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "sampling": 0.0, "repetition": 0.0, "coherence": 0.0}
 
+        gate_entropy_accum = torch.tensor(0.0, device=self.device) if self.gate_optimizer is not None else None
+
         for step in range(num_steps):
             with torch.no_grad():
                 obs_tensor = obs.to(self.device)
@@ -379,6 +395,13 @@ class PPOTrainer:
                         cost_value = cost_value.squeeze()
 
             next_obs, reward, done, info = self.env.step(action)
+
+            # Accumulate logit entropy for DynamicGate training
+            if gate_entropy_accum is not None and self.env.last_logits is not None:
+                step_logits = self.env.last_logits[0, -1, :]  # (vocab_size,)
+                step_probs = torch.nn.functional.softmax(step_logits, dim=-1)
+                step_entropy = -(step_probs * torch.log(step_probs + 1e-10)).sum()
+                gate_entropy_accum = gate_entropy_accum + step_entropy
 
             # Compute per-step cost for Lagrangian mode
             step_cost = None
@@ -424,6 +447,9 @@ class PPOTrainer:
             self.global_step += 1
 
         self.agent.train()
+
+        if gate_entropy_accum is not None:
+            self.gate_entropy_loss = gate_entropy_accum / num_steps
 
         stats = {
             "mean_reward": np.mean(rollout_rewards),
@@ -653,6 +679,14 @@ class PPOTrainer:
                 cost_advantages=cost_adv, cost_returns=cost_ret,
             )
 
+            # DynamicGate training step
+            if self.gate_optimizer is not None and self.gate_entropy_loss is not None:
+                gate_loss = -self.gate_entropy_weight * self.gate_entropy_loss
+                gate_loss.backward()
+                self.gate_optimizer.step()
+                self.gate_optimizer.zero_grad()
+                update_stats["gate_loss"] = gate_loss.item()
+
             if self.entropy_homeostasis is not None:
                 current_entropy_coef = self.entropy_homeostasis.step(update_stats["entropy"])
 
@@ -709,6 +743,8 @@ class PPOTrainer:
                 self.writer.add_scalar("RL/mean_cost", rollout_stats.get("mean_cost", 0.0), self.global_step)
                 if "cost_value_loss" in update_stats:
                     self.writer.add_scalar("RL/cost_value_loss", update_stats["cost_value_loss"], self.global_step)
+            if "gate_loss" in update_stats:
+                self.writer.add_scalar("RL/gate_loss", update_stats["gate_loss"], self.global_step)
 
             if (iteration + 1) % 10 == 0:
                 print(
@@ -761,6 +797,13 @@ class PPOTrainer:
             checkpoint_dict["diversity_homeostasis_weight"] = self.diversity_homeostasis.weight
         if self.lagrange_multiplier is not None:
             checkpoint_dict["lagrange_multiplier_state"] = self.lagrange_multiplier.state_dict()
+        if self.gate_optimizer is not None and len(self.gate_params) > 0:
+            gate_state = {
+                str(i): param.data.clone()
+                for i, param in enumerate(self.gate_params)
+            }
+            checkpoint_dict["gate_state_dict"] = gate_state
+            checkpoint_dict["gate_optimizer_state_dict"] = self.gate_optimizer.state_dict()
         torch.save(checkpoint_dict, checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         if self.metrics_logger is not None:
@@ -778,6 +821,14 @@ class PPOTrainer:
             self.env.reward_computer.diversity_weight = checkpoint["diversity_homeostasis_weight"]
         if self.lagrange_multiplier is not None and "lagrange_multiplier_state" in checkpoint:
             self.lagrange_multiplier.load_state_dict(checkpoint["lagrange_multiplier_state"])
+        if self.gate_optimizer is not None and "gate_state_dict" in checkpoint:
+            gate_state = checkpoint["gate_state_dict"]
+            for i, param in enumerate(self.gate_params):
+                key = str(i)
+                if key in gate_state:
+                    param.data.copy_(gate_state[key])
+        if self.gate_optimizer is not None and "gate_optimizer_state_dict" in checkpoint:
+            self.gate_optimizer.load_state_dict(checkpoint["gate_optimizer_state_dict"])
         print(f"Loaded checkpoint from step {self.global_step}")
 
 

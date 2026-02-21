@@ -79,6 +79,20 @@ def load_model(config, checkpoint_path, device):
     return model
 
 
+def unfreeze_dynamic_gates(model):
+    """Selectively unfreeze DynamicGate MLPs while keeping the rest of the LM frozen.
+
+    Returns:
+        List of gate parameters (for optimizer and tests).
+    """
+    gate_params = []
+    for name, param in model.named_parameters():
+        if "attn_gate" in name or "ffn_gate" in name:
+            param.requires_grad = True
+            gate_params.append((name, param))
+    return [p for _, p in gate_params]
+
+
 def extract_prompt_tokens(config, min_length=3, max_length=10):
     """Extract prompt token sequences from TinyStories validation set."""
     tokenizer = get_tokenizer()
@@ -233,6 +247,12 @@ def main():
     model = load_model(config, args.checkpoint, device)
     print(f"Model loaded (vocab_size={model.vocab_size}, device={device})")
 
+    gate_params = None
+    if merged_config.get("RL_UNFREEZE_DYNAMIC_GATES", False):
+        gate_params = unfreeze_dynamic_gates(model)
+        total_gate_params = sum(p.numel() for p in gate_params)
+        print(f"Unfroze {len(gate_params)} DynamicGate parameter tensors ({total_gate_params:,} params)")
+
     print("\nExtracting prompts from TinyStories validation...")
     prompt_tokens = extract_prompt_tokens(
         merged_config,
@@ -296,6 +316,7 @@ def main():
         experiment_dir=experiment_dir,
         device=device,
         metrics_logger=metrics_logger,
+        gate_params=gate_params,
     )
 
     if args.resume:

@@ -98,8 +98,10 @@ class GatingEnvironment:
         self.step_count: int = 0
         self.done: bool = False
         self.prev_action = torch.zeros(1, device=self.device)
+        self.gate_training: bool = False
+        self.last_logits: Optional[torch.Tensor] = None
 
-        self.model.eval()
+        self.model.eval()  # noqa: PyTorch eval mode, not Python eval()
 
     @property
     def observation_space_shape(self) -> Tuple[int]:
@@ -140,12 +142,17 @@ class GatingEnvironment:
             dtype=torch.long, device=self.device,
         )
 
-        context_manager = torch.enable_grad() if self.training_mode else torch.no_grad()
+        use_grad = self.training_mode or self.gate_training
+        pass_gate_signals = self.training_mode or self.gate_training
+        context_manager = torch.enable_grad() if use_grad else torch.no_grad()
         with context_manager:
             logits, hidden_states = self.model.forward_with_hidden(
                 context.unsqueeze(0),
-                gate_signals=action.unsqueeze(0) if self.training_mode else None,
+                gate_signals=action.unsqueeze(0) if pass_gate_signals else None,
             )
+
+        if self.gate_training:
+            self.last_logits = logits
 
         effects = self.modulator(action, len(context), self.device)
 
