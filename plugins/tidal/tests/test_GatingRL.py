@@ -3213,6 +3213,7 @@ class TestDynamicGateUnfreezing(TimedTestCase):
                     "perplexity": 0.1, "diversity": 0.4,
                     "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
                 },
+                "new_token": 5,
             }
 
         mock_env.step.side_effect = mock_step_with_logits
@@ -3295,25 +3296,33 @@ class TestDynamicGateUnfreezing(TimedTestCase):
     # Test 10: checkpoint saves gate state
     # ------------------------------------------------------------------
     def test_checkpoint_saves_gate_state(self):
-        """Saved checkpoint dict contains gate_state_dict and gate_optimizer_state_dict keys."""
+        """Saved checkpoint dict contains gate_state_dict, gate_optimizer_state_dict, and baseline keys."""
         import os
         model, _ = self._make_frozen_model()
         gate_params = unfreeze_dynamic_gates(model)
         config = self._base_config()
         config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        config["RL_GATE_TRAINING_MODE"] = "coupled"
+        config["RL_GATE_REWARD_BASELINE_ALPHA"] = 0.05
         trainer, tmpdir = self._make_trainer(config, gate_params=gate_params)
+
+        # Set baseline to known value before save
+        trainer.gate_reward_baseline.value = 1.5
+
         trainer.save_checkpoint("test_gate_ckpt.pth")
 
         checkpoint = torch.load(os.path.join(tmpdir, "test_gate_ckpt.pth"),
                                 map_location="cpu")
         self.assertIn("gate_state_dict", checkpoint)
         self.assertIn("gate_optimizer_state_dict", checkpoint)
+        self.assertIn("gate_reward_baseline_value", checkpoint)
+        self.assertAlmostEqual(checkpoint["gate_reward_baseline_value"], 1.5, places=5)
 
     # ------------------------------------------------------------------
     # Test 11: checkpoint round-trip restores gate params
     # ------------------------------------------------------------------
     def test_checkpoint_loads_gate_state(self):
-        """Round-trip save/load restores gate parameters exactly."""
+        """Round-trip save/load restores gate parameters and baseline exactly."""
         import os
         model, _ = self._make_frozen_model()
         gate_params = unfreeze_dynamic_gates(model)
@@ -3325,7 +3334,12 @@ class TestDynamicGateUnfreezing(TimedTestCase):
 
         config = self._base_config()
         config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        config["RL_GATE_TRAINING_MODE"] = "coupled"
+        config["RL_GATE_REWARD_BASELINE_ALPHA"] = 0.05
         trainer, tmpdir = self._make_trainer(config, gate_params=gate_params)
+
+        # Set baseline to known value before save
+        trainer.gate_reward_baseline.value = 2.5
 
         # Capture values before save
         gate_values_before = {name: p.clone() for name, p in model.named_parameters()
@@ -3346,6 +3360,91 @@ class TestDynamicGateUnfreezing(TimedTestCase):
                     torch.allclose(param, gate_values_before[name], atol=1e-6),
                     f"Gate param {name} not restored correctly"
                 )
+
+        # Verify baseline restored
+        self.assertAlmostEqual(trainer2.gate_reward_baseline.value, 2.5, places=5)
+
+    # ------------------------------------------------------------------
+    # Test 13: gate_reward_baseline created in coupled mode
+    # ------------------------------------------------------------------
+    def test_gate_reward_baseline_created_in_coupled_mode(self):
+        """In coupled mode, trainer.gate_reward_baseline is an ExponentialMovingAverage with correct alpha."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        config["RL_GATE_TRAINING_MODE"] = "coupled"
+        config["RL_GATE_REWARD_BASELINE_ALPHA"] = 0.05
+        trainer, _ = self._make_trainer(config, gate_params=gate_params)
+
+        self.assertIsInstance(trainer.gate_reward_baseline, ExponentialMovingAverage)
+        self.assertAlmostEqual(trainer.gate_reward_baseline.alpha, 0.05, places=5)
+
+    # ------------------------------------------------------------------
+    # Test 14: auxiliary mode backward compatibility
+    # ------------------------------------------------------------------
+    def test_gate_auxiliary_mode_backward_compat(self):
+        """Auxiliary mode retains entropy weight and has no reward baseline."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        config["RL_GATE_TRAINING_MODE"] = "auxiliary"
+        config["RL_GATE_ENTROPY_WEIGHT"] = 0.2
+        trainer, _ = self._make_trainer(config, gate_params=gate_params)
+
+        self.assertIsNone(trainer.gate_reward_baseline)
+        self.assertEqual(trainer.gate_training_mode, "auxiliary")
+        self.assertAlmostEqual(trainer.gate_entropy_weight, 0.2, places=5)
+
+    # ------------------------------------------------------------------
+    # Test 15: coupled mode uses token log_prob with REINFORCE
+    # ------------------------------------------------------------------
+    def test_coupled_mode_uses_token_log_prob(self):
+        """Coupled mode computes gate loss via REINFORCE (token log_prob * reward) and updates baseline."""
+        model, _ = self._make_frozen_model()
+        gate_params = unfreeze_dynamic_gates(model)
+        config = self._base_config()
+        config["RL_UNFREEZE_DYNAMIC_GATES"] = True
+        config["RL_GATE_TRAINING_MODE"] = "coupled"
+        config["RL_GATE_REWARD_BASELINE_ALPHA"] = 0.05
+
+        mock_env = self._make_mock_env(config)
+        vocab_size = 256
+
+        def mock_step_with_logits(action):
+            mock_env.generated_tokens.append(1)
+            done = len(mock_env.generated_tokens) >= 50
+            if done:
+                mock_env.done = True
+            # Logits with requires_grad to simulate differentiable gate path
+            mock_env.last_logits = torch.randn(1, 1, vocab_size, requires_grad=True)
+            return torch.randn(64), 1.0, done, {
+                "gate_signals": {"modulation": 0.5},
+                "reward_components": {
+                    "perplexity": 0.1, "diversity": 0.4,
+                    "sampling": 0.3, "repetition": 0.2, "coherence": 0.3,
+                },
+                "new_token": 42,
+            }
+
+        mock_env.step.side_effect = mock_step_with_logits
+
+        import tempfile
+        agent = GatingPolicyAgent(config, torch.device("cpu"))
+        tmpdir = tempfile.mkdtemp()
+        trainer = PPOTrainer(
+            agent=agent, env=mock_env, config=config,
+            experiment_dir=tmpdir, device=torch.device("cpu"),
+            gate_params=gate_params,
+        )
+
+        trainer.collect_rollouts(16)
+
+        self.assertIsNotNone(trainer.gate_entropy_loss)
+        self.assertIsInstance(trainer.gate_entropy_loss, float)
+        self.assertIsNotNone(trainer.gate_reward_baseline.value,
+                             "Baseline should have been updated during rollout")
 
     # ------------------------------------------------------------------
     # Test 12: gate training disabled by default

@@ -332,16 +332,25 @@ class PPOTrainer:
         self.buffer = RolloutBuffer(self.rollout_steps, obs_dim, action_dim,
                                     store_costs=store_costs)
 
-        # DynamicGate training (Experiment 3)
+        # DynamicGate training (Experiment 3 → ADR 0007)
         self.gate_params = gate_params or []
         if gate_params is not None and len(gate_params) > 0:
             self.gate_optimizer = optim.Adam(
                 gate_params, lr=config.get("RL_GATE_LR", 1e-4)
             )
-            self.gate_entropy_weight = config.get("RL_GATE_ENTROPY_WEIGHT", 0.1)
+            self.gate_training_mode = config.get("RL_GATE_TRAINING_MODE", "auxiliary")
+            if self.gate_training_mode == "coupled":
+                baseline_alpha = config.get("RL_GATE_REWARD_BASELINE_ALPHA", 0.05)
+                self.gate_reward_baseline = ExponentialMovingAverage(alpha=baseline_alpha)
+                self.gate_entropy_weight = 0.0
+            else:
+                self.gate_reward_baseline = None
+                self.gate_entropy_weight = config.get("RL_GATE_ENTROPY_WEIGHT", 0.1)
             self.env.gate_training = True
         else:
             self.gate_optimizer = None
+            self.gate_training_mode = "auxiliary"
+            self.gate_reward_baseline = None
             self.gate_entropy_weight = 0.0
         self.gate_entropy_loss = None
 
@@ -405,16 +414,28 @@ class PPOTrainer:
 
             next_obs, reward, done, info = self.env.step(action)
 
-            # Per-step gate gradient: compute entropy loss, backward
-            # immediately, then free the forward-pass graph.
+            # Per-step gate gradient: compute loss, backward immediately,
+            # then free the forward-pass graph.
             if gate_training_active and self.env.last_logits is not None:
                 step_logits = self.env.last_logits[0, -1, :]  # (vocab_size,)
-                step_probs = torch.nn.functional.softmax(step_logits, dim=-1)
-                step_entropy = -(step_probs * torch.log(step_probs + 1e-10)).sum()
-                step_gate_loss = -self.gate_entropy_weight * step_entropy / num_steps
-                if step_gate_loss.requires_grad:
-                    step_gate_loss.backward()  # accumulates grads, frees graph
-                gate_loss_accum += step_gate_loss.item()
+                if self.gate_training_mode == "coupled":
+                    new_token = info.get("new_token")
+                    if new_token is not None:
+                        log_probs = torch.nn.functional.log_softmax(step_logits, dim=-1)
+                        token_log_prob = log_probs[new_token]
+                        baseline = self.gate_reward_baseline.value if self.gate_reward_baseline.value is not None else 0.0
+                        step_gate_loss = -(reward - baseline) * token_log_prob / num_steps
+                        if step_gate_loss.requires_grad:
+                            step_gate_loss.backward()
+                        gate_loss_accum += step_gate_loss.item()
+                        self.gate_reward_baseline.update(reward)
+                else:
+                    step_probs = torch.nn.functional.softmax(step_logits, dim=-1)
+                    step_entropy = -(step_probs * torch.log(step_probs + 1e-10)).sum()
+                    step_gate_loss = -self.gate_entropy_weight * step_entropy / num_steps
+                    if step_gate_loss.requires_grad:
+                        step_gate_loss.backward()
+                    gate_loss_accum += step_gate_loss.item()
 
             # Compute per-step cost for Lagrangian mode
             step_cost = None
@@ -816,6 +837,8 @@ class PPOTrainer:
             }
             checkpoint_dict["gate_state_dict"] = gate_state
             checkpoint_dict["gate_optimizer_state_dict"] = self.gate_optimizer.state_dict()
+        if self.gate_reward_baseline is not None and self.gate_reward_baseline.value is not None:
+            checkpoint_dict["gate_reward_baseline_value"] = self.gate_reward_baseline.value
         torch.save(checkpoint_dict, checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         if self.metrics_logger is not None:
@@ -841,6 +864,8 @@ class PPOTrainer:
                     param.data.copy_(gate_state[key])
         if self.gate_optimizer is not None and "gate_optimizer_state_dict" in checkpoint:
             self.gate_optimizer.load_state_dict(checkpoint["gate_optimizer_state_dict"])
+        if self.gate_reward_baseline is not None and "gate_reward_baseline_value" in checkpoint:
+            self.gate_reward_baseline.value = checkpoint["gate_reward_baseline_value"]
         print(f"Loaded checkpoint from step {self.global_step}")
 
 
