@@ -3191,7 +3191,7 @@ class TestDynamicGateUnfreezing(TimedTestCase):
     # Test 7: gate_entropy_loss computed during rollout
     # ------------------------------------------------------------------
     def test_gate_loss_computed_during_rollout(self):
-        """After collect_rollouts with gate_params, self.gate_entropy_loss is a non-None tensor."""
+        """After collect_rollouts with gate_params, self.gate_entropy_loss is a non-None float."""
         model, model_config = self._make_frozen_model()
         gate_params = unfreeze_dynamic_gates(model)
         config = self._base_config()
@@ -3227,7 +3227,7 @@ class TestDynamicGateUnfreezing(TimedTestCase):
         )
         trainer.collect_rollouts(16)
         self.assertIsNotNone(trainer.gate_entropy_loss)
-        self.assertIsInstance(trainer.gate_entropy_loss, torch.Tensor)
+        self.assertIsInstance(trainer.gate_entropy_loss, float)
 
     # ------------------------------------------------------------------
     # Test 8: gate_signals passed to model when gate_training=True
