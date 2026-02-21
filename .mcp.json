@@ -7,6 +7,16 @@
         "TIDAL_API_URL": "${TIDAL_API_URL}",
         "TIDAL_API_TOKEN": "${TIDAL_API_TOKEN}"
       }
+    },
+    "plan-review": {
+      "command": "node",
+      "args": ["dashboard/packages/plan-review/dist/index.js"],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "GOOGLE_AI_API_KEY": "${GOOGLE_AI_API_KEY}",
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "TIDAL_ADR_DIR": "${TIDAL_ADR_DIR}"
+      }
     }
   }
 }

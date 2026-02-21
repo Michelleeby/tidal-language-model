@@ -40,6 +40,12 @@ class Trainer:
         self.criterion = None
         self.scaler = GradScaler()
         self.current_epoch_num = 0
+        self.gate_reg_weight = config.get("GATE_REG_WEIGHT", 0.0)
+        if self.gate_reg_weight > 0 and config.get("GATE_MODE", "external") != "input_dependent":
+            raise ValueError(
+                "GATE_REG_WEIGHT > 0 requires GATE_MODE: 'input_dependent'. "
+                "External mode gates produce None activations when gate_signals is not provided."
+            )
 
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
@@ -166,10 +172,19 @@ class Trainer:
             target_sequence_gpu = target_sequence.to(self.device)
 
             with autocast(self.device):
-                logits, (prediction_loss, _), _ = self.model(
+                logits, (prediction_loss, _), viz_data = self.model(
                     input_sequence_gpu, target_sequence_gpu,
+                    return_gate_activations=(self.gate_reg_weight > 0),
                 )
-                loss = prediction_loss / accumulation_steps
+                loss = prediction_loss
+                if self.gate_reg_weight > 0:
+                    gate_activations = viz_data.get("gate_activations", [])
+                    if gate_activations:
+                        gate_loss = sum(
+                            g.mean() for pair in gate_activations for g in pair
+                        ) / (2 * len(gate_activations))
+                        loss = loss + self.gate_reg_weight * gate_loss
+                loss = loss / accumulation_steps
 
             self.scaler.scale(loss).backward()
             if (i + 1) % accumulation_steps == 0:

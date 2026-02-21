@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from .TransformerLM import TransformerLM
 from .DataPipeline import TinyStoriesDataset, get_tokenizer
+from .evaluate_hypothesis import compute_gate_metrics
 
 
 class Evaluator:
@@ -61,6 +62,10 @@ class Evaluator:
             "perplexity": perplexity,
             "samples": samples,
         }
+
+        if self.config.get("GATE_MODE") == "input_dependent":
+            gate_analysis = self.analyze_gate_activations()
+            results["gate_analysis"] = gate_analysis
 
         save_path = os.path.join(self.results_dir, "evaluation_results.json")
         with open(save_path, "w") as f:
@@ -168,3 +173,68 @@ class Evaluator:
             print(f"Generated: {generated_text[:200]}...")
 
         return samples
+
+    def analyze_gate_activations(self, max_batches: int = None) -> dict:
+        """
+        Analyze gate activations across the validation set.
+
+        Runs the model with return_gate_activations=True and accumulates
+        per-gate statistics using compute_gate_metrics.
+
+        Args:
+            max_batches: Optional limit on number of batches.
+
+        Returns:
+            Dict with per_gate_stats, sparsity_fraction, mean_cov.
+        """
+        print("\n--- Analyzing Gate Activations ---")
+        max_length = self.config.get("MAX_CONTEXT_LENGTH", 256)
+        batch_size = self.config.get("EVAL_BATCH_SIZE", self.config.get("BATCH_SIZE", 32))
+
+        val_ds = TinyStoriesDataset(
+            split="validation",
+            max_length=max_length,
+            tokenizer=self.tokenizer,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=min(self.config.get("NUM_CPU_CORE_WORKERS", 4), 4),
+        )
+
+        all_activations = []
+        num_batches = 0
+
+        with torch.no_grad():
+            for input_ids, target_ids in tqdm(val_loader, desc="Gate analysis"):
+                input_ids = input_ids.to(self.device)
+                _, _, viz_data = self.model(
+                    input_ids, return_gate_activations=True,
+                )
+                batch_acts = viz_data.get("gate_activations", [])
+                if not all_activations:
+                    all_activations = [(a.detach().cpu(), f.detach().cpu()) for a, f in batch_acts]
+                else:
+                    for i, (a, f) in enumerate(batch_acts):
+                        prev_a, prev_f = all_activations[i]
+                        all_activations[i] = (
+                            torch.cat([prev_a, a.detach().cpu()], dim=0),
+                            torch.cat([prev_f, f.detach().cpu()], dim=0),
+                        )
+                num_batches += 1
+                if max_batches and num_batches >= max_batches:
+                    break
+
+        result = compute_gate_metrics(all_activations)
+
+        print(f"Sparsity fraction (C2): {result['sparsity_fraction']:.4f}")
+        print(f"Mean CoV (C3): {result['mean_cov']:.4f}")
+        print(f"Analyzed {num_batches} batches")
+
+        save_path = os.path.join(self.results_dir, "gate_analysis.json")
+        with open(save_path, "w") as f:
+            json.dump(result, f, indent=2, default=float)
+        print(f"Gate analysis saved to {save_path}")
+
+        return result
