@@ -357,7 +357,7 @@ class PPOTrainer:
 
     def collect_rollouts(self, num_steps: int) -> Dict[str, float]:
         self.buffer.clear()
-        self.agent.eval()
+        self.agent.eval()  # noqa: PyTorch eval mode
 
         if not hasattr(self.env, "generated_tokens") or len(self.env.generated_tokens) == 0 or self.env.done:
             obs = self.env.reset()
@@ -373,7 +373,16 @@ class PPOTrainer:
         gate_signals_sum = {"modulation": 0.0}
         reward_components_sum = {"perplexity": 0.0, "diversity": 0.0, "sampling": 0.0, "repetition": 0.0, "coherence": 0.0}
 
-        gate_entropy_accum = torch.tensor(0.0, device=self.device) if self.gate_optimizer is not None else None
+        # Per-step gate gradient accumulation: backward each step's gate
+        # loss immediately so only one forward pass graph is retained at a
+        # time.  This avoids OOM from holding all rollout forward-pass graphs
+        # and prevents double-backward errors (PPO's backward would otherwise
+        # free the same graph that a deferred gate backward needs).
+        gate_training_active = self.gate_optimizer is not None
+        gate_loss_accum = 0.0
+
+        if gate_training_active:
+            self.gate_optimizer.zero_grad()
 
         for step in range(num_steps):
             with torch.no_grad():
@@ -396,12 +405,16 @@ class PPOTrainer:
 
             next_obs, reward, done, info = self.env.step(action)
 
-            # Accumulate logit entropy for DynamicGate training
-            if gate_entropy_accum is not None and self.env.last_logits is not None:
+            # Per-step gate gradient: compute entropy loss, backward
+            # immediately, then free the forward-pass graph.
+            if gate_training_active and self.env.last_logits is not None:
                 step_logits = self.env.last_logits[0, -1, :]  # (vocab_size,)
                 step_probs = torch.nn.functional.softmax(step_logits, dim=-1)
                 step_entropy = -(step_probs * torch.log(step_probs + 1e-10)).sum()
-                gate_entropy_accum = gate_entropy_accum + step_entropy
+                step_gate_loss = -self.gate_entropy_weight * step_entropy / num_steps
+                if step_gate_loss.requires_grad:
+                    step_gate_loss.backward()  # accumulates grads, frees graph
+                gate_loss_accum += step_gate_loss.item()
 
             # Compute per-step cost for Lagrangian mode
             step_cost = None
@@ -413,7 +426,7 @@ class PPOTrainer:
                 rollout_costs.append(step_cost)
 
             self.buffer.add(
-                observation=obs_tensor.cpu(),
+                observation=obs_tensor.detach().cpu(),
                 action=action.cpu(),
                 reward=reward,
                 value=value.item() if isinstance(value, torch.Tensor) else value,
@@ -448,8 +461,8 @@ class PPOTrainer:
 
         self.agent.train()
 
-        if gate_entropy_accum is not None:
-            self.gate_entropy_loss = gate_entropy_accum / num_steps
+        if gate_training_active:
+            self.gate_entropy_loss = gate_loss_accum
 
         stats = {
             "mean_reward": np.mean(rollout_rewards),
@@ -679,13 +692,12 @@ class PPOTrainer:
                 cost_advantages=cost_adv, cost_returns=cost_ret,
             )
 
-            # DynamicGate training step
+            # DynamicGate training step: gradients were accumulated per-step
+            # in collect_rollouts, so we just apply them here.
             if self.gate_optimizer is not None and self.gate_entropy_loss is not None:
-                gate_loss = -self.gate_entropy_weight * self.gate_entropy_loss
-                gate_loss.backward()
                 self.gate_optimizer.step()
                 self.gate_optimizer.zero_grad()
-                update_stats["gate_loss"] = gate_loss.item()
+                update_stats["gate_loss"] = self.gate_entropy_loss
 
             if self.entropy_homeostasis is not None:
                 current_entropy_coef = self.entropy_homeostasis.step(update_stats["entropy"])
