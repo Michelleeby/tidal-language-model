@@ -109,15 +109,18 @@ RL_MODULATION_TOP_K_MIN: 5    # At modulation=0: sharp sampling (only top 5 toke
 RL_MODULATION_TOP_K_MAX: 100  # At modulation=1: wide sampling (top 100 tokens)
 
 # ============================================================================
-# DYNAMIC GATE TRAINING (EXPERIMENT 3)
+# DYNAMIC GATE TRAINING (ADR 0007)
 # ============================================================================
 # When enabled, selectively unfreezes DynamicGate MLPs (~24K params) in the
-# frozen TransformerLM. A separate optimizer trains gates to maximize logit
-# entropy (diversity) while the PPO agent controls the modulation signal.
+# frozen TransformerLM. In "coupled" mode (REINFORCE), gates receive the same
+# reward signal as the PPO agent via token log-prob gradients. In "auxiliary"
+# mode, gates maximize logit entropy independently (Experiment 3 legacy).
 
 RL_UNFREEZE_DYNAMIC_GATES: true
-RL_GATE_LR: 1.0e-4           # Learning rate for gate optimizer
-RL_GATE_ENTROPY_WEIGHT: 0.1  # Weight for auxiliary logit entropy loss
+RL_GATE_LR: 1.0e-4                    # Learning rate for gate optimizer
+RL_GATE_TRAINING_MODE: "coupled"       # "coupled" (REINFORCE) or "auxiliary" (entropy)
+RL_GATE_REWARD_BASELINE_ALPHA: 0.05    # EMA smoothing for REINFORCE baseline
+RL_GATE_ENTROPY_WEIGHT: 0.1           # Weight for auxiliary mode only
 
 # ============================================================================
 # REWARD FUNCTION WEIGHTS
