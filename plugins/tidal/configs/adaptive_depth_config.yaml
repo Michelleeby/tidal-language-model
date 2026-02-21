@@ -1,0 +1,9 @@
+# configs/adaptive_depth_config.yaml
+#
+# Adaptive Depth experiment (Direction A).
+# Inherits all values from base_config.yaml, overrides gate settings only.
+# Load as an overlay on top of base_config.yaml.
+
+GATE_MODE: "input_dependent"
+GATE_REG_WEIGHT: 0.0           # Set per-experiment: 0 for Model C, λ* for Model D
+RANDOM_SEED: 42

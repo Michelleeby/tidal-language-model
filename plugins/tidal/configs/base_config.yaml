@@ -20,6 +20,8 @@ FFN_HIDDEN_DIM: 1024
 DROPOUT: 0.1
 MAX_CONTEXT_LENGTH: 256
 GATE_DIM: 1  # Single modulation gate (conservative-to-exploratory axis)
+GATE_MODE: "external"          # "external" (RL-controlled) or "input_dependent" (learned)
+GATE_REG_WEIGHT: 0.0           # L1 regularization weight for gate sparsity (0 = no reg)
 
 # Training Loop
 PATIENCE: 5

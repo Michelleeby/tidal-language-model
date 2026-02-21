@@ -56,6 +56,36 @@ def apply_rope(
     return (x * cos.unsqueeze(0).unsqueeze(0)) + (_rotate_half(x) * sin.unsqueeze(0).unsqueeze(0))
 
 
+class InputDependentGate(nn.Module):
+    """
+    Input-dependent gate that produces a per-token scalar from the hidden state.
+
+    Maps hidden_state (batch, seq_len, embed_dim) -> gate (batch, seq_len, 1).
+    Initialized so sigmoid output is near 1.0 at start (neutral / no skip).
+
+    Design: Single linear projection + sigmoid, matching the NeurIPS 2025
+    Best Paper design (sigmoid(W_g * q)). Produces a scalar per token
+    (uniform scaling across dimensions) for depth-skip decisions.
+    """
+
+    def __init__(self, embed_dim: int):
+        super().__init__()
+        self.proj = nn.Linear(embed_dim, 1)
+        # Initialize so sigmoid(output) is near 1.0: sigmoid(2.0) is about 0.88
+        with torch.no_grad():
+            self.proj.bias.fill_(2.0)
+            self.proj.weight.zero_()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (batch, seq_len, embed_dim) -- the pre-norm hidden state
+        Returns:
+            gate: (batch, seq_len, 1) -- per-token scalar gate in [0, 1]
+        """
+        return torch.sigmoid(self.proj(x))
+
+
 class DynamicGate(nn.Module):
     """
     Small MLP that converts gate signals → per-dimension scaling factors.
@@ -175,20 +205,26 @@ class TransformerBlock(nn.Module):
 
 class GatedTransformerBlock(nn.Module):
     """
-    Transformer block with DynamicGate modules that scale attention and FFN outputs
-    based on a single modulation gate signal on a conservative-to-exploratory axis.
+    Transformer block with gated attention and FFN outputs.
+
+    Supports two gate modes:
+    - "external": DynamicGate modules controlled by an external signal (RL controller).
+      Gate output shape: (batch, 1, embed_dim) — per-dimension scaling.
+    - "input_dependent": InputDependentGate modules driven by the hidden state.
+      Gate output shape: (batch, seq_len, 1) — per-token scalar (depth-skip decision).
 
     Uses manual Q/K/V projections with RoPE and optional KV cache.
-    When gate_signals is None, gates produce unit scaling (no effect).
     """
 
     GATE_DIM = 1
 
     def __init__(self, embed_dim: int, num_heads: int, ffn_hidden_dim: int,
-                 dropout: float = 0.1, max_seq_len: int = 512):
+                 dropout: float = 0.1, max_seq_len: int = 512,
+                 gate_mode: str = "external"):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+        self.gate_mode = gate_mode
 
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
@@ -209,9 +245,13 @@ class GatedTransformerBlock(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
-        # Dynamic gates
-        self.attn_gate = DynamicGate(self.GATE_DIM, embed_dim)
-        self.ffn_gate = DynamicGate(self.GATE_DIM, embed_dim)
+        # Gate modules — type depends on gate_mode
+        if gate_mode == "input_dependent":
+            self.attn_gate = InputDependentGate(embed_dim)
+            self.ffn_gate = InputDependentGate(embed_dim)
+        else:
+            self.attn_gate = DynamicGate(self.GATE_DIM, embed_dim)
+            self.ffn_gate = DynamicGate(self.GATE_DIM, embed_dim)
 
     def forward(
         self,
@@ -221,6 +261,7 @@ class GatedTransformerBlock(nn.Module):
         rope_sin: Optional[torch.Tensor] = None,
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
+        return_gate_activations: bool = False,
     ):
         batch, seq_len, embed_dim = x.shape
         normalized = self.ln1(x)
@@ -254,15 +295,40 @@ class GatedTransformerBlock(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)
         attn_output = self.out_proj(attn_output)
 
-        if gate_signals is not None:
-            attn_output = attn_output * self.attn_gate(gate_signals)
+        # Apply gates based on mode
+        if self.gate_mode == "input_dependent":
+            attn_gate_vals = self.attn_gate(normalized)
+            attn_output = attn_output * attn_gate_vals
+        elif gate_signals is not None:
+            attn_gate_vals = self.attn_gate(gate_signals)
+            attn_output = attn_output * attn_gate_vals
+        else:
+            attn_gate_vals = None
+
         x = x + self.dropout1(attn_output)
 
         normalized = self.ln2(x)
         ffn_output = self.ffn(normalized)
-        if gate_signals is not None:
-            ffn_output = ffn_output * self.ffn_gate(gate_signals)
+
+        if self.gate_mode == "input_dependent":
+            ffn_gate_vals = self.ffn_gate(normalized)
+            ffn_output = ffn_output * ffn_gate_vals
+        elif gate_signals is not None:
+            ffn_gate_vals = self.ffn_gate(gate_signals)
+            ffn_output = ffn_output * ffn_gate_vals
+        else:
+            ffn_gate_vals = None
+
         x = x + self.dropout2(ffn_output)
+
+        if return_gate_activations:
+            gate_data = (
+                attn_gate_vals.detach() if attn_gate_vals is not None else None,
+                ffn_gate_vals.detach() if ffn_gate_vals is not None else None,
+            )
+            if use_cache:
+                return x, present, gate_data
+            return x, gate_data
 
         if use_cache:
             return x, present
@@ -314,6 +380,9 @@ class TransformerLM(nn.Module):
         self.register_buffer("rope_cos", rope_cos)
         self.register_buffer("rope_sin", rope_sin)
 
+        # Gate mode: "external" (RL-controlled) or "input_dependent" (learned depth)
+        self.gate_mode = config.get("GATE_MODE", "external")
+
         # Gated transformer blocks
         self.transformer_blocks = nn.ModuleList([
             GatedTransformerBlock(
@@ -322,6 +391,7 @@ class TransformerLM(nn.Module):
                 ffn_hidden_dim=self.ffn_hidden_dim,
                 dropout=self.dropout,
                 max_seq_len=self.max_context_length,
+                gate_mode=self.gate_mode,
             )
             for _ in range(self.num_transformer_blocks)
         ])
@@ -347,6 +417,7 @@ class TransformerLM(nn.Module):
         return_hidden_states: bool = False,
         use_cache: bool = False,
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+        return_gate_activations: bool = False,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, Optional[Dict]], Dict]:
         """
         Forward pass through the model.
@@ -358,11 +429,12 @@ class TransformerLM(nn.Module):
             return_hidden_states: If True, include hidden states in viz_data
             use_cache: If True, return KV cache in viz_data for incremental decoding
             past_key_values: Cached KV pairs from previous forward pass
+            return_gate_activations: If True, collect gate values in viz_data
 
         Returns:
             logits: (batch_size, seq_len, vocab_size)
             loss_tuple: (total_loss, None)
-            viz_data: Dict with optional hidden_states and past_key_values
+            viz_data: Dict with optional hidden_states, past_key_values, gate_activations
         """
         batch_size, seq_len = input_ids.shape
 
@@ -380,9 +452,29 @@ class TransformerLM(nn.Module):
         rope_sin = self.rope_sin[position_offset:position_offset + seq_len]
 
         presents = [] if use_cache else None
+        all_gate_activations = [] if return_gate_activations else None
+
         for i, block in enumerate(self.transformer_blocks):
             layer_past = past_key_values[i] if past_key_values is not None else None
-            if use_cache:
+
+            if return_gate_activations:
+                if use_cache:
+                    hidden_states, present, gate_data = block(
+                        hidden_states, gate_signals,
+                        rope_cos=rope_cos, rope_sin=rope_sin,
+                        layer_past=layer_past, use_cache=True,
+                        return_gate_activations=True,
+                    )
+                    presents.append(present)
+                else:
+                    hidden_states, gate_data = block(
+                        hidden_states, gate_signals,
+                        rope_cos=rope_cos, rope_sin=rope_sin,
+                        layer_past=layer_past,
+                        return_gate_activations=True,
+                    )
+                all_gate_activations.append(gate_data)
+            elif use_cache:
                 hidden_states, present = block(
                     hidden_states, gate_signals,
                     rope_cos=rope_cos, rope_sin=rope_sin,
@@ -413,6 +505,8 @@ class TransformerLM(nn.Module):
             viz_data["hidden_states"] = final_hidden
         if use_cache:
             viz_data["past_key_values"] = presents
+        if all_gate_activations is not None:
+            viz_data["gate_activations"] = all_gate_activations
 
         return logits, loss_tuple, viz_data
 
