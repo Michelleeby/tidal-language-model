@@ -314,8 +314,9 @@ class TestGateRegularization(TimedTestCase):
     """Tests for gate sparsity regularization loss computation."""
 
     def test_gate_reg_loss_computed(self):
-        """18. Regularization loss is non-zero when gates are active."""
+        """18. Regularization loss is non-zero and retains gradient connectivity."""
         model = TransformerLM(vocab_size=VOCAB_SIZE, config=SMALL_CONFIG_INPUT_DEP)
+        model.train()
         input_ids = torch.randint(0, VOCAB_SIZE, (2, 10))
         target_ids = torch.randint(0, VOCAB_SIZE, (2, 10))
         _, (ce_loss, _), viz_data = model(input_ids, target_ids, return_gate_activations=True)
@@ -327,6 +328,10 @@ class TestGateRegularization(TimedTestCase):
 
         self.assertGreater(gate_loss.item(), 0.0,
                            "Gate reg loss should be > 0 with active gates")
+
+        # gate_loss must retain grad connectivity so regularization actually works
+        self.assertTrue(gate_loss.requires_grad,
+                        "gate_loss must require grad (not detached) for regularization to backpropagate")
 
     def test_gate_reg_zero_when_disabled(self):
         """19. No regularization when GATE_REG_WEIGHT is 0.0."""
@@ -344,6 +349,24 @@ class TestGateRegularization(TimedTestCase):
         total_loss = ce_loss + gate_reg_weight * gate_loss
         # With weight=0, total should equal ce_loss exactly
         self.assertAlmostEqual(total_loss.item(), ce_loss.item(), places=6)
+
+    def test_gate_reg_requires_input_dependent_mode(self):
+        """27. GATE_REG_WEIGHT > 0 with GATE_MODE external raises ValueError."""
+        from plugins.tidal.Trainer import Trainer
+
+        bad_config = {
+            **SMALL_CONFIG_EXTERNAL,
+            "GATE_REG_WEIGHT": 0.01,
+            "GATE_MODE": "external",
+            "BATCH_SIZE": 4,
+            "NUM_EPOCHS": 1,
+            "PATIENCE": 5,
+            "MIN_DELTA": 0.0001,
+            "MAX_GRAD_NORM": 1.0,
+        }
+        with self.assertRaises(ValueError) as ctx:
+            Trainer(bad_config, "/tmp/test_exp")
+        self.assertIn("GATE_MODE", str(ctx.exception))
 
 
 # ── 20-22: Gate analysis ──────────────────────────────────────────────────

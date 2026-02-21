@@ -63,7 +63,11 @@ Standard cross-entropy training of `TransformerLM` on TinyStories (HuggingFace `
 **Phase 2 — RL Gating Controller** (`plugins/tidal/train_rl.py` → `plugins/tidal/RLTrainer.py`):
 A PPO agent (`GatingPolicyAgent`) learns to control 1 gate signal — [modulation] on a conservative-to-exploratory axis — that modulates generation behavior of a **frozen** TransformerLM. The agent observes a 64D vector (token statistics, hidden state summaries, context) and outputs continuous actions in [0, 1] via a Beta distribution. The `GatingModulator` maps actions to generation parameters (temperature, repetition penalty, attention bias). The `RewardComputer` provides dense per-step rewards from perplexity, diversity, repetition, and coherence components.
 
-**Gating mechanism in the model**: Each of the 6 `GatedTransformerBlock` layers contains two `DynamicGate` modules (one for attention output, one for FFN output). These are small MLPs (1→32→embed_dim→sigmoid) that convert the 1D gate signal into per-dimension scaling factors. Initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). When `gate_signals=None`, gates produce unit scaling.
+**Gating mechanism in the model**: Each of the 6 `GatedTransformerBlock` layers contains two gate modules (one for attention output, one for FFN output). The gate type depends on `GATE_MODE` in the config:
+- `"external"` (default): `DynamicGate` — small MLPs (1→32→embed_dim→sigmoid) that convert a 1D external gate signal into per-dimension scaling factors `(batch, 1, embed_dim)`. When `gate_signals=None`, gates produce unit scaling. Used with the RL gating controller (Phase 2).
+- `"input_dependent"`: `InputDependentGate` — a single linear projection `sigmoid(W_g · x + b_g)` that maps the pre-norm hidden state to a per-token scalar `(batch, seq_len, 1)`. Ignores `gate_signals`. Used for adaptive depth experiments (Direction A). L1 regularization on gate activations is controlled by `GATE_REG_WEIGHT` (default: 0.0).
+
+Both gate types are initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). Cross-mode checkpoint loading is not supported and raises `RuntimeError`.
 
 **Key data flow**: `plugins/tidal/DataPipeline.py` loads TinyStories, tokenizes with GPT-2 BPE, flattens all tokens, and chunks into fixed-length sequences. Each sample is `(input_ids, target_ids)` with standard causal LM shift (chunk[:-1], chunk[1:]).
 

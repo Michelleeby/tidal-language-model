@@ -214,13 +214,13 @@ class Evaluator:
                 )
                 batch_acts = viz_data.get("gate_activations", [])
                 if not all_activations:
-                    all_activations = [(a.cpu(), f.cpu()) for a, f in batch_acts]
+                    all_activations = [(a.detach().cpu(), f.detach().cpu()) for a, f in batch_acts]
                 else:
                     for i, (a, f) in enumerate(batch_acts):
                         prev_a, prev_f = all_activations[i]
                         all_activations[i] = (
-                            torch.cat([prev_a, a.cpu()], dim=0),
-                            torch.cat([prev_f, f.cpu()], dim=0),
+                            torch.cat([prev_a, a.detach().cpu()], dim=0),
+                            torch.cat([prev_f, f.detach().cpu()], dim=0),
                         )
                 num_batches += 1
                 if max_batches and num_batches >= max_batches:

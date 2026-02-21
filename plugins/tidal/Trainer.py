@@ -41,6 +41,11 @@ class Trainer:
         self.scaler = GradScaler()
         self.current_epoch_num = 0
         self.gate_reg_weight = config.get("GATE_REG_WEIGHT", 0.0)
+        if self.gate_reg_weight > 0 and config.get("GATE_MODE", "external") != "input_dependent":
+            raise ValueError(
+                "GATE_REG_WEIGHT > 0 requires GATE_MODE: 'input_dependent'. "
+                "External mode gates produce None activations when gate_signals is not provided."
+            )
 
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 

@@ -323,8 +323,8 @@ class GatedTransformerBlock(nn.Module):
 
         if return_gate_activations:
             gate_data = (
-                attn_gate_vals.detach() if attn_gate_vals is not None else None,
-                ffn_gate_vals.detach() if ffn_gate_vals is not None else None,
+                attn_gate_vals if attn_gate_vals is not None else None,
+                ffn_gate_vals if ffn_gate_vals is not None else None,
             )
             if use_cache:
                 return x, present, gate_data
