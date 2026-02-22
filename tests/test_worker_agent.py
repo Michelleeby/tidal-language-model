@@ -1143,5 +1143,181 @@ class TestSpawnAndMonitorExtraEnv(unittest.TestCase):
 
 
 
+# ---------------------------------------------------------------------------
+# _flush_logs — buffer restore on failure
+# ---------------------------------------------------------------------------
+
+class TestFlushLogsBufferRestore(unittest.TestCase):
+    """Tests that _flush_logs restores the buffer when send_logs fails."""
+
+    def _make_agent_with_buffer(self, lines):
+        """Create an agent with a pre-populated log buffer."""
+        transport = _make_http_transport()
+        agent = _make_agent(transport)
+        agent._log_buffer = list(lines)
+        agent._log_lock = __import__('threading').Lock()
+        return agent, transport
+
+    def test_restores_buffer_on_transport_failure(self):
+        """If send_logs raises, the lines are put back into the buffer."""
+        lines = [
+            {"timestamp": 1.0, "stream": "stdout", "line": "hello"},
+            {"timestamp": 2.0, "stream": "stderr", "line": "error"},
+        ]
+        agent, transport = self._make_agent_with_buffer(lines)
+        transport.send_logs = MagicMock(side_effect=Exception("network error"))
+
+        agent._flush_logs()
+
+        # Buffer should be restored with the original lines
+        self.assertEqual(len(agent._log_buffer), 2,
+                         "Buffer should be restored after failed send")
+        self.assertEqual(agent._log_buffer[0]["line"], "hello")
+        self.assertEqual(agent._log_buffer[1]["line"], "error")
+
+    def test_buffer_caps_at_50k_on_repeated_failures(self):
+        """Repeated failures don't grow the buffer beyond 50k lines."""
+        # Start with 49999 lines already in the buffer
+        base_lines = [{"timestamp": float(i), "stream": "stdout", "line": f"line-{i}"}
+                      for i in range(49_999)]
+        agent, transport = self._make_agent_with_buffer(base_lines)
+        transport.send_logs = MagicMock(side_effect=Exception("network"))
+
+        # Flush adds 49999 lines to the front (batch) + 49999 already there after clear
+        # Actually: batch = 49999, clear, fail, restore = batch + empty = 49999
+        # Then add 1 more line manually and flush again:
+        agent._log_buffer.append({"timestamp": 50000.0, "stream": "stdout", "line": "extra"})
+        # Now buffer has 50000 lines
+        agent._flush_logs()
+
+        # After restore: batch(50000) + self._log_buffer(0 because it was cleared before fail)
+        # = 50000 lines, which equals cap → stays at 50000
+        # Let's test with over-cap scenario: add even more
+        for i in range(200):
+            agent._log_buffer.append({"timestamp": float(i + 60000), "stream": "stdout", "line": f"extra-{i}"})
+
+        agent._flush_logs()  # flush batch of (50000+200), fail, restore
+
+        # Buffer should be capped at 50000
+        self.assertLessEqual(len(agent._log_buffer), 50_000,
+                             f"Buffer should be capped at 50k, got {len(agent._log_buffer)}")
+
+    def test_accumulated_lines_sent_after_recovery(self):
+        """After a failed flush, lines accumulate and are sent on next successful flush."""
+        initial_lines = [
+            {"timestamp": 1.0, "stream": "stdout", "line": "first"},
+        ]
+        agent, transport = self._make_agent_with_buffer(initial_lines)
+
+        # First flush fails
+        transport.send_logs = MagicMock(side_effect=Exception("network"))
+        agent._flush_logs()
+        # Buffer restored with "first"
+
+        # Add more lines (simulating continued output)
+        with agent._log_lock:
+            agent._log_buffer.append({"timestamp": 2.0, "stream": "stdout", "line": "second"})
+
+        # Second flush succeeds
+        transport.send_logs = MagicMock()
+        agent._flush_logs()
+
+        # Should have sent both lines
+        transport.send_logs.assert_called_once()
+        sent_lines = transport.send_logs.call_args[0][1]
+        self.assertEqual(len(sent_lines), 2,
+                         f"Should send both accumulated lines, got {len(sent_lines)}")
+        lines_text = [l["line"] for l in sent_lines]
+        self.assertIn("first", lines_text)
+        self.assertIn("second", lines_text)
+
+    def test_successful_flush_clears_buffer(self):
+        """After a successful send, the buffer stays empty (no restore)."""
+        lines = [{"timestamp": 1.0, "stream": "stdout", "line": "hello"}]
+        agent, transport = self._make_agent_with_buffer(lines)
+        transport.send_logs = MagicMock()
+
+        agent._flush_logs()
+
+        # Buffer should be empty (lines were sent successfully)
+        self.assertEqual(agent._log_buffer, [],
+                         "Buffer should be empty after successful flush")
+
+    def test_prepends_batch_before_new_lines_on_restore(self):
+        """Restored batch goes BEFORE any new lines added during the send attempt."""
+        batch_lines = [{"timestamp": 1.0, "stream": "stdout", "line": "batch-line"}]
+        agent, transport = self._make_agent_with_buffer(batch_lines)
+
+        # Simulate a new line arriving while send is in progress
+        def fake_send_logs(job_id, lines):
+            # Add a new line to the buffer during the send (simulates concurrent logging)
+            with agent._log_lock:
+                agent._log_buffer.append({"timestamp": 99.0, "stream": "stdout", "line": "concurrent"})
+            raise Exception("network error")
+
+        transport.send_logs = MagicMock(side_effect=fake_send_logs)
+        agent._flush_logs()
+
+        # Restored buffer: batch (in order) + any new lines appended during failed send
+        self.assertGreaterEqual(len(agent._log_buffer), 2,
+                                "Should have both batch and concurrent lines")
+        # Batch line should come first (restored to front)
+        self.assertEqual(agent._log_buffer[0]["line"], "batch-line",
+                         "Batch lines should be prepended before concurrent lines")
+        self.assertEqual(agent._log_buffer[-1]["line"], "concurrent",
+                         "Concurrent line should come after restored batch")
+
+
+# ---------------------------------------------------------------------------
+# HttpTransport — 429 in retry list
+# ---------------------------------------------------------------------------
+
+class TestHttpTransport429Retry(unittest.TestCase):
+    """Tests that HttpTransport includes 429 in the retry status list."""
+
+    def test_retry_config_includes_429(self):
+        """HttpTransport should configure urllib3 Retry with 429 in status_forcelist."""
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        transport = HttpTransport("https://example.com", "tok")
+
+        # Inspect the adapter's retry config
+        adapter = transport.session.get_adapter("https://example.com")
+        self.assertIsInstance(adapter, HTTPAdapter)
+        retry = adapter.max_retries
+        self.assertIsInstance(retry, Retry)
+
+        self.assertIn(429, retry.status_forcelist,
+                      "429 should be in status_forcelist for retry")
+        self.assertIn(502, retry.status_forcelist)
+        self.assertIn(503, retry.status_forcelist)
+        self.assertIn(504, retry.status_forcelist)
+
+    def test_retry_config_has_increased_backoff(self):
+        """HttpTransport retry should use backoff_factor=2 (was 1)."""
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        transport = HttpTransport("https://example.com", "tok")
+        adapter = transport.session.get_adapter("https://example.com")
+        retry = adapter.max_retries
+
+        self.assertEqual(retry.backoff_factor, 2,
+                         "backoff_factor should be 2 for 429 resilience")
+
+    def test_retry_config_has_increased_total(self):
+        """HttpTransport retry should use total=5 (was 3)."""
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        transport = HttpTransport("https://example.com", "tok")
+        adapter = transport.session.get_adapter("https://example.com")
+        retry = adapter.max_retries
+
+        self.assertEqual(retry.total, 5,
+                         "total retries should be 5 for 429 resilience")
+
+
 if __name__ == "__main__":
     unittest.main()
