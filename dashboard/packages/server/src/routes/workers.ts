@@ -200,6 +200,9 @@ export default async function workerRoutes(fastify: FastifyInstance) {
       const serialized = lines.map((l) => JSON.stringify(l));
       await redis.rpush(key, ...serialized);
       await redis.ltrim(key, -10000, -1);
+      // 7-day fallback TTL — safety net for jobs that crash before reaching
+      // terminal status (which overrides this with a shorter 24h TTL).
+      await redis.expire(key, 604_800);
 
       sseManager.broadcastLogLines(jobId, lines);
 
