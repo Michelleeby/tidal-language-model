@@ -5,12 +5,10 @@ import type {
   ProvisionResult,
 } from "../compute-provider.js";
 import type { GpuTier } from "../job-policy.js";
+import { RateLimiter, type RateLimiterConfig } from "./rate-limiter.js";
 
 const VASTAI_API = "https://console.vast.ai/api/v0";
 const TERMINAL_INSTANCE_STATUSES = new Set(["exited", "offline", "error"]);
-const MIN_INET_DOWN_MBPS = 800;
-const MIN_INET_UP_MBPS = 800;
-const MIN_RELIABILITY = 0.99;
 const MIN_GPU_RAM_MB = 48_000;
 const MIN_CPU_CORES = 16;
 
@@ -18,6 +16,32 @@ const DEFAULT_DOCKER_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime";
 const DEFAULT_GPU_TIERS: Record<string, GpuTierSpec> = {
   standard: { minGpuRamMb: MIN_GPU_RAM_MB, minCpuCores: MIN_CPU_CORES },
 };
+
+/**
+ * Network and reliability constraints for Vast.ai offer search.
+ * Progressive relaxation allows finding GPUs when strict constraints yield nothing.
+ */
+export interface ProvisionConstraints {
+  inetDownMbps: number;
+  inetUpMbps: number;
+  reliability: number;
+}
+
+/** Default 3-tier relaxation schedule. */
+const DEFAULT_RELAXATION_TIERS: ProvisionConstraints[] = [
+  { inetDownMbps: 800, inetUpMbps: 800, reliability: 0.99 }, // Tier 0: strict
+  { inetDownMbps: 400, inetUpMbps: 400, reliability: 0.97 }, // Tier 1: relaxed
+  { inetDownMbps: 200, inetUpMbps: 200, reliability: 0.95 }, // Tier 2: loose
+];
+
+/** Default rate limiter: conservative vs Vast.ai's 4.5 req/sec threshold. */
+const DEFAULT_RATE_LIMITER: RateLimiterConfig = {
+  capacity: 4,
+  refillRatePerMs: 1 / 1000, // 1 token/sec
+};
+
+/** Max retries on 429 responses before giving up. */
+const MAX_429_RETRIES = 3;
 
 export interface VastAIProviderConfig {
   apiKey: string | null;
@@ -27,6 +51,8 @@ export interface VastAIProviderConfig {
   log: FastifyBaseLogger;
   dockerImage?: string;
   gpuTiers?: Record<string, GpuTierSpec>;
+  relaxationTiers?: ProvisionConstraints[];
+  rateLimiter?: RateLimiterConfig;
 }
 
 interface VastOffer {
@@ -67,6 +93,8 @@ export class VastAIProvider implements ComputeProvider {
   private log: FastifyBaseLogger;
   private dockerImage: string;
   private gpuTiers: Record<string, GpuTierSpec>;
+  private relaxationTiers: ProvisionConstraints[];
+  private limiter: RateLimiter;
 
   constructor(config: VastAIProviderConfig) {
     this.apiKey = config.apiKey;
@@ -76,6 +104,8 @@ export class VastAIProvider implements ComputeProvider {
     this.log = config.log;
     this.dockerImage = config.dockerImage ?? DEFAULT_DOCKER_IMAGE;
     this.gpuTiers = config.gpuTiers ?? DEFAULT_GPU_TIERS;
+    this.relaxationTiers = config.relaxationTiers ?? DEFAULT_RELAXATION_TIERS;
+    this.limiter = new RateLimiter(config.rateLimiter ?? DEFAULT_RATE_LIMITER);
   }
 
   async canProvision(): Promise<boolean> {
@@ -94,43 +124,65 @@ export class VastAIProvider implements ComputeProvider {
     }
 
     try {
-      // 1. Search for GPU offers (sorted cheapest-first)
-      const offers = await this.findOffers(gpuTier ?? "standard");
-      if (offers.length === 0) {
-        return { success: false, error: "No suitable vast.ai GPU offers found" };
-      }
-
-      // 2. Build on-start script once (does not depend on the offer)
       const onStartScript = this.buildOnStartScript(job.jobId, job);
 
-      // 3. Try each offer — stale offers may vanish between search and create
-      let lastError: Error | undefined;
-      for (const offer of offers) {
-        this.log.info(
-          { offerId: offer.id, gpu: offer.gpu_name, cost: offer.dph_total },
-          "Trying vast.ai offer",
-        );
+      // Try each constraint tier in order, relaxing on each failure
+      for (let tierIdx = 0; tierIdx < this.relaxationTiers.length; tierIdx++) {
+        const constraints = this.relaxationTiers[tierIdx];
 
-        try {
-          const instanceId = await this.createInstance(offer.id, onStartScript);
-          return {
-            success: true,
-            meta: this.buildProviderMeta(offer, instanceId),
-          };
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err));
-          if (this.isRetryableOfferError(lastError)) {
+        const offers = await this.findOffers(gpuTier ?? "standard", constraints);
+        if (offers.length === 0) {
+          this.log.info(
+            { tierIdx, inetDown: constraints.inetDownMbps, reliability: constraints.reliability },
+            "No vast.ai offers at this constraint tier, relaxing...",
+          );
+          continue;
+        }
+
+        let lastError: Error | undefined;
+        let advanceToNextTier = false;
+
+        for (const offer of offers) {
+          this.log.info(
+            { offerId: offer.id, gpu: offer.gpu_name, cost: offer.dph_total, tierIdx },
+            "Trying vast.ai offer",
+          );
+
+          try {
+            const instanceId = await this.createInstance(offer.id, onStartScript);
+            return {
+              success: true,
+              meta: this.buildProviderMeta(offer, instanceId, tierIdx),
+            };
+          } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            if (this.isRetryableOfferError(lastError)) {
+              this.log.warn(
+                { offerId: offer.id, err: lastError.message },
+                "Offer unavailable, trying next",
+              );
+              continue;
+            }
+            // Non-retryable offer error — skip remaining offers in this tier
             this.log.warn(
-              { offerId: offer.id, err: lastError.message },
-              "Offer unavailable, trying next",
+              { offerId: offer.id, tierIdx, err: lastError.message },
+              "Non-retryable offer error, moving to next constraint tier",
             );
-            continue;
+            advanceToNextTier = true;
+            break;
           }
-          throw lastError;
+        }
+
+        if (!advanceToNextTier && lastError) {
+          // All retryable offers exhausted — move to next tier
+          this.log.info({ tierIdx }, "All offers in tier exhausted, relaxing constraints...");
         }
       }
 
-      throw lastError ?? new Error("All vast.ai offers exhausted");
+      return {
+        success: false,
+        error: "No suitable vast.ai GPU offers found after all constraint tiers",
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, jobId: job.jobId }, "vast.ai provision failed");
@@ -143,7 +195,7 @@ export class VastAIProvider implements ComputeProvider {
     if (!instanceId || !this.apiKey) return;
 
     try {
-      const res = await fetch(`${VASTAI_API}/instances/${instanceId}/`, {
+      const res = await this.fetch(`${VASTAI_API}/instances/${instanceId}/`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${this.apiKey}` },
       });
@@ -165,7 +217,7 @@ export class VastAIProvider implements ComputeProvider {
 
     // No try/catch -- let network errors propagate as throws so callers
     // can distinguish "confirmed dead" (false) from "inconclusive" (throw).
-    const res = await fetch(`${VASTAI_API}/instances/${instanceId}/`, {
+    const res = await this.fetch(`${VASTAI_API}/instances/${instanceId}/`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
     });
 
@@ -182,22 +234,55 @@ export class VastAIProvider implements ComputeProvider {
     return !TERMINAL_INSTANCE_STATUSES.has(data.actual_status);
   }
 
-  private async findOffers(tier: GpuTier): Promise<VastOffer[]> {
+  /**
+   * Rate-limited fetch wrapper with 429 retry.
+   * Acquires a token from the rate limiter before each attempt,
+   * and retries up to MAX_429_RETRIES times on 429 responses.
+   */
+  private async fetch(
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> {
+    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+      await this.limiter.acquire();
+      const res = await globalThis.fetch(input, init);
+
+      if (res.status !== 429) {
+        return res;
+      }
+
+      if (attempt >= MAX_429_RETRIES) {
+        throw new Error(
+          `vast.ai API rate limited after ${MAX_429_RETRIES} retries (429 Too Many Requests)`,
+        );
+      }
+
+      const retryAfter = res.headers.get("Retry-After") ?? undefined;
+      const delay = this.limiter.backoff429(attempt, retryAfter);
+      this.log.warn({ attempt, delay, retryAfter }, "vast.ai 429 — backing off before retry");
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+
+    // Unreachable but satisfies TypeScript
+    throw new Error("vast.ai fetch: unexpected loop exit");
+  }
+
+  private async findOffers(tier: GpuTier, constraints: ProvisionConstraints): Promise<VastOffer[]> {
     const tierSpec = this.gpuTiers[tier] ?? DEFAULT_GPU_TIERS["standard"];
     const query = JSON.stringify({
       gpu_ram: { gte: tierSpec.minGpuRamMb },
       cpu_cores_effective: { gte: tierSpec.minCpuCores },
-      inet_down: { gte: MIN_INET_DOWN_MBPS },
-      inet_up: { gte: MIN_INET_UP_MBPS },
+      inet_down: { gte: constraints.inetDownMbps },
+      inet_up: { gte: constraints.inetUpMbps },
       rentable: { eq: true },
       num_gpus: { eq: 1 },
-      reliability2: { gte: MIN_RELIABILITY },
+      reliability2: { gte: constraints.reliability },
       order: [["dph_total", "asc"]],
       type: "on-demand",
       limit: 10,
     });
 
-    const res = await fetch(`${VASTAI_API}/bundles?q=${encodeURIComponent(query)}`, {
+    const res = await this.fetch(`${VASTAI_API}/bundles?q=${encodeURIComponent(query)}`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
     });
 
@@ -210,7 +295,7 @@ export class VastAIProvider implements ComputeProvider {
   }
 
   private async createInstance(offerId: number, onStartScript: string): Promise<number> {
-    const res = await fetch(`${VASTAI_API}/asks/${offerId}/`, {
+    const res = await this.fetch(`${VASTAI_API}/asks/${offerId}/`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -241,7 +326,11 @@ export class VastAIProvider implements ComputeProvider {
     return err.message.includes("no_such_ask");
   }
 
-  private buildProviderMeta(offer: VastOffer, instanceId: number): Record<string, unknown> {
+  private buildProviderMeta(
+    offer: VastOffer,
+    instanceId: number,
+    constraintTier: number,
+  ): Record<string, unknown> {
     return {
       instanceId,
       offerId: offer.id,
@@ -267,6 +356,7 @@ export class VastAIProvider implements ComputeProvider {
       cudaMaxGood: offer.cuda_max_good ?? null,
       reliability: offer.reliability2 ?? null,
       costPerHour: offer.dph_total,
+      constraintTier,
       capturedAt: Date.now(),
     };
   }
