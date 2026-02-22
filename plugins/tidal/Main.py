@@ -27,6 +27,8 @@ def main():
     torch.set_float32_matmul_precision("high")
     parser = argparse.ArgumentParser(description="Train and evaluate a TransformerLM.")
     parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file.")
+    parser.add_argument("--overlay", type=str, default=None,
+                        help="Optional YAML overlay merged on top of --config.")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to an existing experiment directory to resume training from.")
     args = parser.parse_args()
@@ -37,6 +39,14 @@ def main():
         sys.exit(1)
     with open(args.config, "r") as f:
         config = yaml.load(f)
+
+    if args.overlay:
+        if not os.path.exists(args.overlay):
+            print(f"Error: Overlay config file not found at {args.overlay}")
+            sys.exit(1)
+        with open(args.overlay, "r") as f:
+            overlay = yaml.load(f)
+        config.update(overlay)
 
     # 2. Resolve Experiment Directory
     if args.resume:

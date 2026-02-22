@@ -46,7 +46,14 @@ class Trainer:
                 "GATE_REG_WEIGHT > 0 requires GATE_MODE: 'input_dependent'. "
                 "External mode gates produce None activations when gate_signals is not provided."
             )
+        if config.get("FREEZE_GATES", False) and config.get("GATE_MODE", "external") != "input_dependent":
+            raise ValueError(
+                "FREEZE_GATES requires GATE_MODE: 'input_dependent'. "
+                "Only InputDependentGate parameters are named '.attn_gate.' / '.ffn_gate.' "
+                "and can be selectively frozen."
+            )
 
+        self.trainable_params = None  # populated in _setup_model
         self.tags = self.config.get("TENSORBOARD_TAGS", {})
 
         tensorboard_dir = os.path.join(self.exp_dir, "tensorboard_logs")
@@ -135,9 +142,18 @@ class Trainer:
             except Exception as e:
                 self.logger.warning(f"torch.compile failed, using eager mode: {e}")
 
+        # Freeze gate parameters if configured (Model B: fixed-gate baseline)
+        if self.config.get("FREEZE_GATES", False):
+            for name, param in self.model.named_parameters():
+                if ".attn_gate." in name or ".ffn_gate." in name:
+                    param.requires_grad = False
+
+        # Only optimize trainable (unfrozen) parameters
+        self.trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+
         self.criterion = nn.CrossEntropyLoss()
         base_lr = self.config.get("LEARNING_RATE_SCHEDULER", {}).get("BASE_LR", 0.001)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=base_lr)
+        self.optimizer = optim.Adam(self.trainable_params, lr=base_lr)
         self.scheduler = DynamicLRScheduler(self.optimizer, self.config, total_foundational_steps)
 
     def _get_data_loader(self, dataset):
@@ -189,7 +205,7 @@ class Trainer:
             self.scaler.scale(loss).backward()
             if (i + 1) % accumulation_steps == 0:
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["MAX_GRAD_NORM"])
+                torch.nn.utils.clip_grad_norm_(self.trainable_params, max_norm=self.config["MAX_GRAD_NORM"])
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()

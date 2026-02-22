@@ -1,0 +1,5 @@
+# ADR 0008 Model B — fixed-gate baseline (InputDependentGate frozen at init)
+# Gates are frozen at sigmoid(2.0) ≈ 0.88 for all inputs.
+GATE_MODE: "input_dependent"
+FREEZE_GATES: true
+RANDOM_SEED: 42

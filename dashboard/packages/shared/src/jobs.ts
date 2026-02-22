@@ -24,6 +24,7 @@ export interface JobConfig {
   type: JobType;
   plugin: string;
   configPath: string;
+  overlayConfigPath?: string;
   resumeExpDir?: string;
   checkpoint?: string;
   rlConfigPath?: string;
@@ -54,6 +55,7 @@ export interface CreateJobRequest {
   type: JobType;
   plugin: string;
   configPath: string;
+  overlayConfigPath?: string;
   provider?: ComputeProviderType;
   resumeExpDir?: string;
   checkpoint?: string;

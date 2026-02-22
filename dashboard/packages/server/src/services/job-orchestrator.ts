@@ -95,6 +95,7 @@ export class JobOrchestrator {
         type: request.type,
         plugin: request.plugin,
         configPath: request.configPath,
+        overlayConfigPath: request.overlayConfigPath,
         resumeExpDir: request.resumeExpDir,
         checkpoint: request.checkpoint,
         rlConfigPath: request.rlConfigPath,

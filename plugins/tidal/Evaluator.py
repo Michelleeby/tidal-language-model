@@ -87,11 +87,13 @@ class Evaluator:
         print("\n--- Computing Perplexity ---")
         max_length = self.config.get("MAX_CONTEXT_LENGTH", 256)
         batch_size = self.config.get("EVAL_BATCH_SIZE", self.config.get("BATCH_SIZE", 32))
+        val_subset = self.config.get("VAL_SUBSET", None)
 
         val_ds = TinyStoriesDataset(
             split="validation",
             max_length=max_length,
             tokenizer=self.tokenizer,
+            subset=val_subset,
         )
         val_loader = DataLoader(
             val_ds,
@@ -190,11 +192,13 @@ class Evaluator:
         print("\n--- Analyzing Gate Activations ---")
         max_length = self.config.get("MAX_CONTEXT_LENGTH", 256)
         batch_size = self.config.get("EVAL_BATCH_SIZE", self.config.get("BATCH_SIZE", 32))
+        val_subset = self.config.get("VAL_SUBSET", None)
 
         val_ds = TinyStoriesDataset(
             split="validation",
             max_length=max_length,
             tokenizer=self.tokenizer,
+            subset=val_subset,
         )
         val_loader = DataLoader(
             val_ds,

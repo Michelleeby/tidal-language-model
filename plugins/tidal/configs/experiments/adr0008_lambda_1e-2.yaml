@@ -1,0 +1,6 @@
+# ADR 0008 lambda sweep — lambda = 1e-2
+# Stage 1: evaluated on val_tune (first_half) for lambda selection.
+GATE_MODE: "input_dependent"
+GATE_REG_WEIGHT: 0.01
+RANDOM_SEED: 42
+VAL_SUBSET: "first_half"
