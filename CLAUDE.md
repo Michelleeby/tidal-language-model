@@ -92,6 +92,13 @@ Both gate types are initialized with bias=2.0 so sigmoid output starts near 1.0 
 - `GATE_MODE` in config controls gate architecture: `"external"` (default, for RL gating) or `"input_dependent"` (for adaptive depth). Cross-mode checkpoint loading raises a RuntimeError.
 - `GATE_REG_WEIGHT` controls L1 regularization on gate activations (input-dependent mode). Default 0.0 (no regularization).
 
+## Worktree Agent Workflow
+
+After ExitPlanMode with an approved implementation plan, invoke `/implement` to launch a
+background worktree agent instead of coding directly in this session. This keeps the main
+session free for conversation. Do NOT begin writing code after plan approval — the agent
+handles implementation. Use `/check-agents` to monitor progress.
+
 ## MUST USE INSTRUCTIONS
 
 - You ALWAYS use Test Driven Development (TDD),
