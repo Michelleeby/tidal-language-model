@@ -49,6 +49,8 @@ implement-kv-cache.md
 refactor-absolute-embeddings-to-rotary-positional.md
 CLAUDE.md
 local/scripts/*
+!local/scripts/code_review_agent.sh
+!local/scripts/test_code_review_agent.sh
 .claude/
 
 # Ignore all cached data (datasets, vocabularies)
