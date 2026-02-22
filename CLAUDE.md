@@ -75,21 +75,21 @@ A PPO agent (`GatingPolicyAgent`) learns to control 1 gate signal — [modulatio
 - `"external"` (default): `DynamicGate` — small MLPs (1→32→embed_dim→sigmoid) that convert a 1D external gate signal into per-dimension scaling factors `(batch, 1, embed_dim)`. When `gate_signals=None`, gates produce unit scaling. Used with the RL gating controller (Phase 2).
 - `"input_dependent"`: `InputDependentGate` — a single linear projection `sigmoid(W_g · x + b_g)` that maps the pre-norm hidden state to a per-token scalar `(batch, seq_len, 1)`. Ignores `gate_signals`. Used for adaptive depth experiments (Direction A). L1 regularization on gate activations is controlled by `GATE_REG_WEIGHT` (default: 0.0).
 
-Both gate types are initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). Cross-mode checkpoint loading is not supported and raises `RuntimeError`.
+Both gate types are initialized with bias=2.0 so sigmoid output starts near 1.0 (neutral). Cross-mode checkpoint loading is not supported and raises a RuntimeError.
 
 **Key data flow**: `plugins/tidal/DataPipeline.py` loads TinyStories, tokenizes with GPT-2 BPE, flattens all tokens, and chunks into fixed-length sequences. Each sample is `(input_ids, target_ids)` with standard causal LM shift (chunk[:-1], chunk[1:]).
 
-**Plugin system**: Model-specific code lives in `plugins/tidal/` with a `manifest.yaml` describing training phases, checkpoint patterns, generation config, metrics config, and infrastructure requirements. The dashboard reads the manifest via `PluginRegistry` instead of hardcoding model knowledge. Shared infrastructure (`worker_agent.py`, `MetricsLogger.py`, `experiment_utils.py`) stays at the project root.
+**Plugin system**: Model-specific code lives in `plugins/tidal/` with a `manifest.yaml` describing training phases, checkpoint patterns, generation config, metrics config, and infrastructure requirements. The dashboard reads the manifest via `loadTidalManifest` instead of hardcoding model knowledge. Shared infrastructure (`worker_agent.py`, `MetricsLogger.py`, `experiment_utils.py`) stays at the project root.
 
 ## Important Notes
 
-- `Trainer.py` saves checkpoints as raw `model.state_dict()` (handles `torch.compile` via `_orig_mod`). `Evaluator` and `Generator` load them directly with `model.load_state_dict()`.
-- RL checkpoints (from `RLTrainer`) are dicts with keys: `agent_state_dict`, `optimizer_state_dict`, `global_step`, `config`.
+- `Trainer.py` saves checkpoints as raw `model.state_dict()` (handles `torch.compile` via `_orig_mod`). `Evaluator` and `Generator.py` load them directly with `model.load_state_dict()`.
+- RL checkpoints (from `RLTrainer.py`) are dicts with keys: `agent_state_dict`, `optimizer_state_dict`, `global_step`, `config`.
 - `Evaluator.__init__` creates its own `TransformerLM` using `config.get("VOCAB_SIZE")` — this must match the checkpoint.
 - `MetricsLogger` writes to both Redis (real-time SSE) and JSONL on disk (archival). Redis is optional — gracefully degrades to disk-only if unavailable.
 - `research/legacy/dashboard.py` is the deprecated Streamlit dashboard. The replacement is in `dashboard/` (Fastify + React).
 - Legacy physics-based architecture lives in `research/legacy/` — do not import from there.
-- `GATE_MODE` in config controls gate architecture: `"external"` (default, for RL gating) or `"input_dependent"` (for adaptive depth). Cross-mode checkpoint loading raises `RuntimeError`.
+- `GATE_MODE` in config controls gate architecture: `"external"` (default, for RL gating) or `"input_dependent"` (for adaptive depth). Cross-mode checkpoint loading raises a RuntimeError.
 - `GATE_REG_WEIGHT` controls L1 regularization on gate activations (input-dependent mode). Default 0.0 (no regularization).
 
 ## MUST USE INSTRUCTIONS
