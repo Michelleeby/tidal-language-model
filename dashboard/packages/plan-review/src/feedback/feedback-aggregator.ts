@@ -5,8 +5,8 @@
 import type {
   FeedbackItem,
   AggregatedFeedbackItem,
+  AnyDimension,
   Severity,
-  ReviewDimension,
 } from "../types.js";
 
 const JACCARD_THRESHOLD = 0.45;
@@ -19,12 +19,15 @@ const SEVERITY_WEIGHT: Record<Severity, number> = {
 
 const SEVERITY_LEVELS: Severity[] = ["suggestion", "warning", "critical"];
 
-const DIMENSION_PRIORITY: Record<ReviewDimension, number> = {
+const DIMENSION_PRIORITY: Record<string, number> = {
   regression_risk: 5,
   blind_spots: 4,
   completeness: 3,
   test_coverage: 2,
   hypothesis_scope: 1,
+  bugs: 5,
+  hypothesis_alignment: 4,
+  adr_compliance: 3,
 };
 
 function normalizeToWords(text: string): Set<string> {
@@ -82,7 +85,7 @@ export function aggregateFeedback(
   // Build clusters of similar items
   const clusters: Array<{
     items: FeedbackItem[];
-    dimension: ReviewDimension;
+    dimension: AnyDimension;
   }> = [];
 
   for (const item of items) {

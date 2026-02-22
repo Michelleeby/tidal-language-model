@@ -2,19 +2,19 @@
 // LLM Provider abstraction + registry
 // ---------------------------------------------------------------------------
 
-import type { FeedbackItem, ReviewDimension, ProviderName } from "../types.js";
+import type { FeedbackItem, AnyDimension, ProviderName } from "../types.js";
 
 export interface ReviewRequest {
   systemPrompt: string;
   userPrompt: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
 }
 
 export interface ReviewResponse {
   feedback: FeedbackItem[];
   provider: ProviderName;
   model: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
 }
 
 export interface LLMProvider {

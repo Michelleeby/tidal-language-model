@@ -11,6 +11,13 @@ export type ReviewDimension =
   | "test_coverage"
   | "hypothesis_scope";
 
+export type CodeReviewDimension =
+  | "bugs"
+  | "hypothesis_alignment"
+  | "adr_compliance";
+
+export type AnyDimension = ReviewDimension | CodeReviewDimension;
+
 export type ProviderName = "openai" | "google" | "anthropic";
 
 export type Budget = "minimal" | "standard" | "thorough";
@@ -20,7 +27,7 @@ export interface FeedbackItem {
   description: string;
   affected_files: string[];
   reasoning: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
   source: ProviderName;
 }
 
@@ -29,7 +36,7 @@ export interface AggregatedFeedbackItem {
   description: string;
   affected_files: string[];
   reasoning: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
   corroborated_by: ProviderName[];
   score: number;
 }
@@ -48,14 +55,14 @@ export interface ADRSummary {
 export interface ReviewRequest {
   systemPrompt: string;
   userPrompt: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
 }
 
 export interface ReviewResponse {
   feedback: FeedbackItem[];
   provider: ProviderName;
   model: string;
-  dimension: ReviewDimension;
+  dimension: AnyDimension;
 }
 
 export interface CostEstimate {

@@ -14,6 +14,7 @@ import { OpenAIProvider } from "./providers/openai-provider.js";
 import { GoogleProvider } from "./providers/google-provider.js";
 import { AnthropicProvider } from "./providers/anthropic-provider.js";
 import { registerReviewTools } from "./tools/review-tools.js";
+import { registerCodeReviewTools } from "./tools/code-review-tools.js";
 
 const server = new McpServer({
   name: "plan-review",
@@ -40,8 +41,9 @@ if (available.length === 0) {
 // ADR directory from env or default
 const adrDir = process.env.TIDAL_ADR_DIR ?? null;
 
-// Register all 6 tools
+// Register all 6 plan-review tools + 1 code-review tool
 registerReviewTools(server, registry, adrDir);
+registerCodeReviewTools(server, registry, adrDir);
 
 // Connect via stdio
 const transport = new StdioServerTransport();
