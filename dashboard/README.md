@@ -56,6 +56,19 @@ The dashboard is organized as a scientific notebook. An experiment sidebar on th
 
 Every chart has a CSV/JSON export button. Full experiment reports can be exported as self-contained HTML or Markdown.
 
+### Generation Modes
+
+The Generation playground supports four gating modes for text generation:
+
+| Mode | Description |
+|------|-------------|
+| **No Gating** | Standard generation without gate modulation |
+| **Random Gating** | Random gate signals each step (useful for baselines) |
+| **Fixed Gating** | User-specified constant modulation value in [0, 1] |
+| **Learned Gating (RL)** | PPO agent controls modulation (requires RL checkpoint) |
+
+These modes apply to models trained with external gating (`GATE_MODE: "external"`). Models trained with input-dependent gating ([ADR 0008](../research/adrs/0008-input-dependent-gating-adaptive-depth.md)) generate normally — their gates are driven by the hidden state, not external signals.
+
 ## Scripts
 
 | Command | Description |

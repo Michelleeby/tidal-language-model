@@ -7,9 +7,10 @@ name: tidal
 displayName: Tidal Gated Transformer LM
 version: 1.0.0
 description: >
-  A gated transformer language model (~30.7M params) trained on TinyStories
-  with PPO-based RL gating control via a single modulation gate on a
-  conservative-to-exploratory axis.
+  A gated transformer language model (~30.6M params) trained on TinyStories
+  with dual gate modes: external RL-controlled gating (DynamicGate + PPO agent)
+  for modulating generation behavior, or input-dependent gating (InputDependentGate)
+  for adaptive depth via learned per-token skip decisions.
 
 # ── Training phases ──────────────────────────────────────────────────
 
@@ -71,6 +72,9 @@ generation:
   modes:
     - id: none
       displayName: No Gating
+      requiresRLCheckpoint: false
+    - id: random
+      displayName: Random Gating
       requiresRLCheckpoint: false
     - id: fixed
       displayName: Fixed Gating

@@ -40,6 +40,14 @@ python3 plugins/tidal/Generator.py \
     --rl-agent --rl-checkpoint <rl_checkpoint> \
     --prompt "Once upon a time"
 
+# Train with input-dependent gating (adaptive depth)
+python3 plugins/tidal/Main.py --config plugins/tidal/configs/adaptive_depth_config.yaml
+
+# Evaluate gate sparsity hypothesis after adaptive depth training
+python3 plugins/tidal/evaluate_hypothesis.py \
+    --config plugins/tidal/configs/adaptive_depth_config.yaml \
+    --checkpoint experiments/<experiment_id>/checkpoint_foundational_epoch_1.pth
+
 # Start dashboard (Redis via Docker Compose + Fastify + Vite)
 cd dashboard && docker compose up -d && npm run dev
 
@@ -81,6 +89,8 @@ Both gate types are initialized with bias=2.0 so sigmoid output starts near 1.0 
 - `MetricsLogger` writes to both Redis (real-time SSE) and JSONL on disk (archival). Redis is optional — gracefully degrades to disk-only if unavailable.
 - `research/legacy/dashboard.py` is the deprecated Streamlit dashboard. The replacement is in `dashboard/` (Fastify + React).
 - Legacy physics-based architecture lives in `research/legacy/` — do not import from there.
+- `GATE_MODE` in config controls gate architecture: `"external"` (default, for RL gating) or `"input_dependent"` (for adaptive depth). Cross-mode checkpoint loading raises `RuntimeError`.
+- `GATE_REG_WEIGHT` controls L1 regularization on gate activations (input-dependent mode). Default 0.0 (no regularization).
 
 ## MUST USE INSTRUCTIONS
 

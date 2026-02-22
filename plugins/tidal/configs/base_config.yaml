@@ -12,14 +12,14 @@ DATASET: "roneneldan/TinyStories"
 TOKENIZER: "gpt2"
 VOCAB_SIZE: 50257
 
-# Transformer Architecture (~20M params)
+# Transformer Architecture (~30.6M params)
 EMBED_DIM: 256
 NUM_TRANSFORMER_BLOCKS: 6
 NUM_ATTENTION_HEADS: 8
 FFN_HIDDEN_DIM: 1024
 DROPOUT: 0.1
 MAX_CONTEXT_LENGTH: 256
-GATE_DIM: 1  # Single modulation gate (conservative-to-exploratory axis)
+GATE_DIM: 1  # Single modulation gate, external mode only (conservative-to-exploratory axis)
 GATE_MODE: "external"          # "external" (RL-controlled) or "input_dependent" (learned)
 GATE_REG_WEIGHT: 0.0           # L1 regularization weight for gate sparsity (0 = no reg)
 

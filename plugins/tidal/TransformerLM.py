@@ -337,17 +337,21 @@ class GatedTransformerBlock(nn.Module):
 
 class TransformerLM(nn.Module):
     """
-    Gated Transformer language model (~20M parameters).
+    Gated Transformer language model (~30.6M parameters).
 
     Architecture:
-        Input tokens → Token Embeddings (256D) + Position Embeddings
-        → 6 × GatedTransformerBlock(gate_signals)
+        Input tokens → Token Embeddings (256D) + RoPE
+        → 6 × GatedTransformerBlock
         → LayerNorm → Output Projection → Logits
 
-    Gate signals (1D): [modulation] on a conservative-to-exploratory axis.
-        Provided by a PPO agent (GatingPolicyAgent).
-        Each block has DynamicGate modules that convert the signal → per-dim scaling.
-        When gate_signals=None, gates produce unit scaling (no effect).
+    Gate modes (controlled by GATE_MODE config):
+        "external" (default): DynamicGate MLPs convert a 1D modulation signal
+            → per-dimension scaling (batch, 1, embed_dim). Provided by a PPO
+            agent (GatingPolicyAgent). When gate_signals=None, gates produce
+            unit scaling (no effect).
+        "input_dependent": InputDependentGate linear projections map hidden
+            state → per-token scalar (batch, seq_len, 1). Ignores gate_signals.
+            Used for adaptive depth experiments (ADR 0008).
     """
 
     def __init__(self, vocab_size: int, config: dict):

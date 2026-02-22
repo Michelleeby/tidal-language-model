@@ -1,6 +1,6 @@
 # Tidal Language Model
 
-A **Gated Transformer** language model (~30.7M parameters) with an **RL-learned gating controller** that modulates generation behavior at inference time. The model is pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) using GPT-2 BPE tokenization (50,257 vocab), then a PPO agent learns to control a single **modulation** gate on a conservative-to-exploratory axis that dynamically scales attention and FFN outputs across all transformer layers.
+A **Gated Transformer** language model (~30.6M parameters) with dual gate modes for controlling layer behavior. The model is pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) using GPT-2 BPE tokenization (50,257 vocab). Two gate architectures are supported: **external gating** where a PPO agent learns to control a single **modulation** gate on a conservative-to-exploratory axis, and **input-dependent gating** where each layer learns per-token skip decisions for adaptive depth.
 
 ## Architecture
 
@@ -8,16 +8,21 @@ A **Gated Transformer** language model (~30.7M parameters) with an **RL-learned 
 
 ```
 Input tokens
-  → Token Embeddings (256D) + Positional Embeddings
+  → Token Embeddings (256D) + Rotary Positional Embeddings (RoPE)
   → 6 × GatedTransformerBlock
   → LayerNorm → Output Projection → Logits (50,257)
 ```
 
-Each `GatedTransformerBlock` contains two `DynamicGate` modules (one for attention, one for FFN). These are small MLPs (`1 → 32 → 256 → sigmoid`) that convert a 1D modulation signal into per-dimension scaling factors applied to the residual stream. Initialized with bias = 2.0 so `sigmoid(output) ≈ 1.0` at the start (neutral — no effect). When no gate signals are provided, gates produce unit scaling.
+Each `GatedTransformerBlock` contains two gate modules (one for attention output, one for FFN output). The gate type depends on the `GATE_MODE` config setting:
+
+- **`"external"` (default)**: `DynamicGate` — small MLPs (`1 → 32 → 256 → sigmoid`) that convert a 1D external modulation signal into per-dimension scaling factors `(batch, 1, embed_dim)` applied to the residual stream. When no gate signals are provided, gates produce unit scaling. Used with the RL gating controller (Phase 2).
+- **`"input_dependent"`**: `InputDependentGate` — a single linear projection `sigmoid(W_g · x + b_g)` that maps the pre-norm hidden state to a per-token scalar `(batch, seq_len, 1)`. Ignores external gate signals. Used for adaptive depth experiments ([ADR 0008](research/adrs/0008-input-dependent-gating-adaptive-depth.md)). L1 regularization on gate activations is controlled by `GATE_REG_WEIGHT`.
+
+Both gate types are initialized with bias = 2.0 so `sigmoid(output) ≈ 1.0` at the start (neutral — no effect).
 
 Training uses cross-entropy loss with gradient accumulation, mixed-precision (AMP), cosine LR annealing with warmup, and `torch.compile`.
 
-### Phase 2 — RL Gating Controller (`GatingPolicyAgent`)
+### Phase 2 — RL Gating Controller (`GatingPolicyAgent`) [Optional]
 
 A PPO actor-critic agent observes a **64D** vector (token statistics, chunked hidden-state summaries, generation context) and outputs a single continuous action in `[0, 1]` via a Beta distribution — the **modulation** signal:
 
@@ -106,6 +111,7 @@ tidal-language-model/
 │   ├── RLTrainer.py             # PPO training loop (with entropy homeostasis)
 │   ├── Generator.py             # Text generation (with optional RL gating)
 │   ├── Evaluator.py             # Model evaluation
+│   ├── evaluate_hypothesis.py   # Hypothesis evaluation (gate sparsity analysis)
 │   ├── DataPipeline.py          # TinyStories loading + GPT-2 BPE (uint16 cache)
 │   ├── TrajectoryAnalyzer.py    # Gate signal trajectory analysis
 │   ├── DynamicLRScheduler.py    # Cosine annealing with warmup
@@ -113,7 +119,9 @@ tidal-language-model/
 │   ├── inference_server.py      # Inference server for dashboard
 │   ├── Utils.py                 # Shared utilities
 │   ├── manifest.yaml            # Plugin descriptor (phases, checkpoints, metrics)
-│   ├── configs/                 # YAML config files (gitignored)
+│   ├── configs/                 # YAML config files
+│   │   ├── base_config.yaml             # Model architecture + LM training
+│   │   └── adaptive_depth_config.yaml   # Input-dependent gating overrides
 │   └── tests/                   # Model unit tests (unittest)
 ├── MetricsLogger.py             # Redis + JSONL metrics logging
 ├── worker_agent.py              # Job worker (spawns training subprocesses)
@@ -170,9 +178,17 @@ python3 plugins/tidal/Main.py --config plugins/tidal/configs/base_config.yaml
 
 Checkpoints are saved as raw `state_dict` files to `experiments/<experiment_id>/`.
 
-### Train the RL Gating Agent (Phase 2)
+### Train with Input-Dependent Gating (Adaptive Depth)
 
-Requires a trained TransformerLM checkpoint:
+Uses `InputDependentGate` modules that learn per-token skip decisions:
+
+```bash
+python3 plugins/tidal/Main.py --config plugins/tidal/configs/adaptive_depth_config.yaml
+```
+
+### Train the RL Gating Agent (Phase 2) [Optional]
+
+Requires a trained TransformerLM checkpoint (external gate mode only):
 
 ```bash
 python3 plugins/tidal/train_rl.py \
