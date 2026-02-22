@@ -1,0 +1,4 @@
+# ADR 0008 Model A — ungated baseline (default external gate mode)
+# GATE_MODE stays "external" (inherited from base_config).
+# Gates produce unit scaling when gate_signals=None (no RL agent).
+RANDOM_SEED: 42

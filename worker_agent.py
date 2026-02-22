@@ -271,6 +271,7 @@ class WorkerAgent:
         # Map from manifest arg key to config field name
         ARG_CONFIG_MAP = {
             "config": "configPath",
+            "overlay": "overlayConfigPath",
             "resume": "resumeExpDir",
             "rlConfig": "rlConfigPath",
             "checkpoint": "checkpoint",
@@ -280,7 +281,7 @@ class WorkerAgent:
         # Keys whose values are file paths relative to the plugin directory.
         # If the value doesn't already start with a known prefix (like
         # "plugins/" or "user-plugins/"), resolve it against plugin_dir.
-        PATH_KEYS = {"configPath", "rlConfigPath", "checkpoint"}
+        PATH_KEYS = {"configPath", "overlayConfigPath", "rlConfigPath", "checkpoint"}
 
         for arg_key, cli_flag in phase.get("args", {}).items():
             config_key = ARG_CONFIG_MAP.get(arg_key, arg_key)

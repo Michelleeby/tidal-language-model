@@ -26,6 +26,18 @@ trainingPhases:
     concurrency: 1
     gpuTier: standard
 
+  - id: lm-experiment
+    displayName: LM Experiment Run
+    entrypoint: Main.py
+    configFiles:
+      - configs/base_config.yaml
+    args:
+      config: "--config"
+      overlay: "--overlay"
+      resume: "--resume"
+    concurrency: 10
+    gpuTier: standard
+
   - id: rl-training
     displayName: RL Gating Controller
     entrypoint: train_rl.py

@@ -76,6 +76,7 @@ class TinyStoriesDataset(Dataset):
         max_length: int = 256,
         tokenizer=None,
         dataset_name: str = "roneneldan/TinyStories",
+        subset: str = None,
     ):
         """
         Args:
@@ -83,6 +84,9 @@ class TinyStoriesDataset(Dataset):
             max_length: Sequence length for each sample (model context length).
             tokenizer: GPT-2 tokenizer instance. Created if not provided.
             dataset_name: HuggingFace dataset identifier.
+            subset: Optional split of the loaded chunks.  "first_half" returns
+                the first n//2 chunks; "second_half" returns the remainder.
+                Used for the two-stage lambda-selection protocol (ADR 0008).
         """
         super().__init__()
         self.max_length = max_length
@@ -101,6 +105,7 @@ class TinyStoriesDataset(Dataset):
                     f"Stale cache at {cache_path} has dtype {self.chunks.dtype}; "
                     "delete it to rebuild as uint16."
                 )
+            self._apply_subset(subset)
             return
 
         # Cache miss — build chunks from HF dataset (one-time).
@@ -144,6 +149,29 @@ class TinyStoriesDataset(Dataset):
         os.makedirs(CACHE_DIR, exist_ok=True)
         torch.save(self.chunks, cache_path)
         logger.info(f"Cached {num_chunks:,} chunks to {cache_path}")
+        self._apply_subset(subset)
+
+    def _apply_subset(self, subset: str | None):
+        """Slice self.chunks to a half for the two-stage validation protocol.
+
+        Args:
+            subset: "first_half", "second_half", or None (no-op).
+
+        Raises:
+            ValueError: if subset is not a recognised value.
+        """
+        if subset is None:
+            return
+        n = self.chunks.size(0)
+        mid = n // 2
+        if subset == "first_half":
+            self.chunks = self.chunks[:mid]
+        elif subset == "second_half":
+            self.chunks = self.chunks[mid:]
+        else:
+            raise ValueError(
+                f"Unknown subset '{subset}'. Use 'first_half' or 'second_half'."
+            )
 
     def __len__(self) -> int:
         return self.chunks.size(0)

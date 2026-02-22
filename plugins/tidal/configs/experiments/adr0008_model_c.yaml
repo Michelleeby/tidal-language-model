@@ -1,0 +1,5 @@
+# ADR 0008 Model C — learned gates, no regularization
+# InputDependentGate trained freely; lambda=0 control group.
+GATE_MODE: "input_dependent"
+GATE_REG_WEIGHT: 0.0
+RANDOM_SEED: 42
