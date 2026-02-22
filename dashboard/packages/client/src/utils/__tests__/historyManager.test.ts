@@ -36,20 +36,14 @@ describe("HistoryManager.push()", () => {
     hm.push(1);
     hm.push(2);
     hm.push(3);
-    hm.push(4); // Should drop snapshot 1
+    hm.push(4); // Oldest (1) is dropped; undoStack = [2, 3, 4]
 
-    // After 4 pushes with max=3, we should only be able to undo 3 times
-    // undo returns: 3, 2, 1 but NOT the original snapshot before 1
-    const r1 = hm.undo(4);
-    expect(r1).toBe(3);
-    const r2 = hm.undo(3);
-    expect(r2).toBe(2);
-    // Only 3 snapshots in undo stack, so 3rd undo is the last
-    const r3 = hm.undo(2);
-    expect(r3).toBe(1);
-    // No more history
-    const r4 = hm.undo(1);
-    expect(r4).toBeNull();
+    // After 4 pushes with max=3, can undo 3 times returning 4, 3, 2.
+    // Snapshot 1 (oldest) was dropped and is no longer accessible.
+    expect(hm.undo(5)).toBe(4); // current=5 (state after all pushes), returns 4
+    expect(hm.undo(4)).toBe(3); // current=4, returns 3
+    expect(hm.undo(3)).toBe(2); // current=3, returns 2 (oldest retained)
+    expect(hm.undo(2)).toBeNull(); // stack empty — can't undo further
   });
 });
 
