@@ -15,6 +15,13 @@ export interface ExperimentsResponse {
   experiments: ExperimentSummary[];
 }
 
+/** DELETE /api/experiments/:expId */
+export interface DeleteExperimentResponse {
+  diskDeleted: boolean;
+  redisKeysRemoved: number;
+  analysesRemoved: number;
+}
+
 /** GET /api/experiments/:expId/metrics query params */
 export interface MetricsQuery {
   mode: "recent" | "historical";

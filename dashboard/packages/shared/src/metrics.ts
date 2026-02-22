@@ -86,6 +86,8 @@ export interface ExperimentSummary {
   experimentType: ExperimentType;
   sourceExperimentId: string | null;
   sourceCheckpoint: string | null;
+  /** True when experiment checkpoints have been archived to object storage (Phase 3). */
+  isArchived?: boolean;
 }
 
 /** Checkpoint file info. */
