@@ -71,6 +71,23 @@ export function validateConfig(config: ServerConfig): ConfigWarning[] {
     });
   }
 
+  // Validate Spaces config: partial config is an error
+  const spacesVars = [
+    config.spacesEndpoint,
+    config.spacesKey,
+    config.spacesSecret,
+    config.spacesBucket,
+    config.spacesRegion,
+  ];
+  const spacesSet = spacesVars.filter(Boolean).length;
+  if (spacesSet > 0 && spacesSet < spacesVars.length) {
+    issues.push({
+      level: "error",
+      message:
+        "DO_SPACES_* is partially configured — set all 5 variables (ENDPOINT, KEY, SECRET, BUCKET, REGION) or none",
+    });
+  }
+
   return issues;
 }
 
@@ -97,6 +114,14 @@ export interface ServerConfig {
   dashboardUrl: string | null;
   githubAdminUser: string | null;
   devMode: boolean;
+  // DigitalOcean Spaces
+  spacesEndpoint: string | null;
+  spacesKey: string | null;
+  spacesSecret: string | null;
+  spacesBucket: string | null;
+  spacesRegion: string | null;
+  // Experiment archival
+  archiveDelayMs: number;
 }
 
 export function loadConfig(): ServerConfig {
@@ -140,5 +165,11 @@ export function loadConfig(): ServerConfig {
         : null),
     githubAdminUser: process.env.GITHUB_ADMIN_USER ?? null,
     devMode: process.env.TIDAL_DEV_MODE === "true",
+    spacesEndpoint: process.env.DO_SPACES_ENDPOINT ?? null,
+    spacesKey: process.env.DO_SPACES_KEY ?? null,
+    spacesSecret: process.env.DO_SPACES_SECRET ?? null,
+    spacesBucket: process.env.DO_SPACES_BUCKET ?? null,
+    spacesRegion: process.env.DO_SPACES_REGION ?? null,
+    archiveDelayMs: parseInt(process.env.ARCHIVE_DELAY_MS ?? "300000", 10),
   };
 }

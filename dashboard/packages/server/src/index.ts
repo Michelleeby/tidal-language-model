@@ -7,6 +7,7 @@ import type { PluginManifest } from "@tidal/shared";
 import { loadTidalManifest } from "./services/tidal-manifest-loader.js";
 import { migrateLegacyReports } from "./services/report-migration.js";
 import redisPlugin from "./plugins/redis.js";
+import objectStorePlugin from "./plugins/object-store.js";
 import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
 import authPlugin from "./plugins/auth.js";
@@ -92,6 +93,7 @@ async function main() {
   await fastify.register(corsPlugin);
   await fastify.register(databasePlugin);
   await fastify.register(redisPlugin, { url: config.redisUrl });
+  await fastify.register(objectStorePlugin);
   await fastify.register(ssePlugin);
   await fastify.register(authPlugin);
   await fastify.register(rateLimitPlugin);

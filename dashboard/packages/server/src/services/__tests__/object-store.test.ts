@@ -1,82 +1,75 @@
-import { describe, it, mock, before } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { ObjectStore } from "../object-store.js";
 
 // ---------------------------------------------------------------------------
-// Mock S3 SDK before any imports that use it
+// Mock S3 client via constructor injection
 // ---------------------------------------------------------------------------
 
-interface MockCommand {
+interface SpyEntry {
+  command: string;
   input: Record<string, unknown>;
 }
 
-// We'll track calls to the mock S3Client
-let sendSpy: Array<{ command: string; input: Record<string, unknown> }> = [];
+let sendSpy: SpyEntry[] = [];
 let mockSendResult: unknown = {};
 let mockSendError: Error | null = null;
 
-class MockS3Client {
-  async send(command: MockCommand) {
-    const commandName = command.constructor.name;
-    sendSpy.push({ command: commandName, input: command.input });
-    if (mockSendError) throw mockSendError;
-    return mockSendResult;
-  }
+function makeCommand(cmdName: string) {
+  const cls = class {
+    readonly _name = cmdName;
+    constructor(public input: Record<string, unknown>) {}
+  };
+  Object.defineProperty(cls, "name", { value: cmdName, writable: false });
+  return cls;
 }
 
-function makeCommand(name: string) {
-  return class {
-    constructor(public input: Record<string, unknown>) {}
-    get [Symbol.toStringTag]() { return name; }
+// Exported command constructors for assertions
+const Commands = {
+  PutObject: makeCommand("PutObjectCommand"),
+  DeleteObject: makeCommand("DeleteObjectCommand"),
+  DeleteObjects: makeCommand("DeleteObjectsCommand"),
+  ListObjectsV2: makeCommand("ListObjectsV2Command"),
+  HeadObject: makeCommand("HeadObjectCommand"),
+  GetObject: makeCommand("GetObjectCommand"),
+};
+
+function buildMockClient() {
+  return {
+    send: async (command: { _name: string; input: Record<string, unknown> }) => {
+      sendSpy.push({ command: command._name, input: command.input });
+      if (mockSendError) throw mockSendError;
+      return mockSendResult;
+    },
   };
 }
 
-const MockPutObjectCommand = makeCommand("PutObjectCommand");
-const MockDeleteObjectCommand = makeCommand("DeleteObjectCommand");
-const MockDeleteObjectsCommand = makeCommand("DeleteObjectsCommand");
-const MockListObjectsV2Command = makeCommand("ListObjectsV2Command");
-const MockHeadObjectCommand = makeCommand("HeadObjectCommand");
-const MockGetObjectCommand = makeCommand("GetObjectCommand");
-
-before(() => {
-  mock.module("@aws-sdk/client-s3", {
-    namedExports: {
-      S3Client: MockS3Client,
-      PutObjectCommand: MockPutObjectCommand,
-      DeleteObjectCommand: MockDeleteObjectCommand,
-      DeleteObjectsCommand: MockDeleteObjectsCommand,
-      ListObjectsV2Command: MockListObjectsV2Command,
-      HeadObjectCommand: MockHeadObjectCommand,
-      GetObjectCommand: MockGetObjectCommand,
+/**
+ * Build an ObjectStore with a mock S3 client.
+ * We inject the mock client AND patch the module-level dynamic imports
+ * by providing overrides via the clientOverride param and also injecting
+ * the command constructors via the store's _commandOverrides.
+ */
+function makeConfiguredStore() {
+  const store = new ObjectStore(
+    {
+      endpoint: "https://sfo3.digitaloceanspaces.com",
+      region: "sfo3",
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+      bucket: "tidal-experiments",
     },
-  });
-  mock.module("@aws-sdk/lib-storage", {
-    namedExports: {
-      Upload: class MockUpload {
-        constructor(public opts: Record<string, unknown>) {}
-        async done() { return {}; }
-      },
-    },
-  });
-});
+    buildMockClient() as any,
+    Commands as any,
+  );
+  return store;
+}
 
-// Import AFTER mock is registered
-const { ObjectStore } = await import("../object-store.js");
-
-function resetMock() {
+beforeEach(() => {
   sendSpy = [];
   mockSendResult = {};
   mockSendError = null;
-}
-
-function makeConfiguredStore() {
-  return new ObjectStore({
-    endpoint: "https://sfo3.digitaloceanspaces.com",
-    region: "sfo3",
-    accessKeyId: "test-key",
-    secretAccessKey: "test-secret",
-    bucket: "tidal-experiments",
-  });
-}
+});
 
 // ---------------------------------------------------------------------------
 // isConfigured()
@@ -144,7 +137,6 @@ describe("ObjectStore — unconfigured methods", () => {
 
 describe("ObjectStore.putObject()", () => {
   it("calls PutObjectCommand with correct bucket/key", async () => {
-    resetMock();
     const store = makeConfiguredStore();
     await store.putObject("experiments/exp-1/model.pth", "data", "application/octet-stream");
 
@@ -162,7 +154,6 @@ describe("ObjectStore.putObject()", () => {
 
 describe("ObjectStore.deletePrefix()", () => {
   it("lists objects then batch deletes", async () => {
-    resetMock();
     mockSendResult = {
       Contents: [
         { Key: "experiments/exp-1/model.pth" },
@@ -184,7 +175,6 @@ describe("ObjectStore.deletePrefix()", () => {
   });
 
   it("is a no-op when prefix has no objects", async () => {
-    resetMock();
     mockSendResult = { Contents: [], IsTruncated: false };
     const store = makeConfiguredStore();
     await store.deletePrefix("experiments/empty/");
@@ -200,7 +190,6 @@ describe("ObjectStore.deletePrefix()", () => {
 
 describe("ObjectStore.headObject()", () => {
   it("returns exists:true when object found", async () => {
-    resetMock();
     mockSendResult = { ContentLength: 1024 };
     const store = makeConfiguredStore();
     const result = await store.headObject("experiments/exp-1/model.pth");
@@ -209,7 +198,6 @@ describe("ObjectStore.headObject()", () => {
   });
 
   it("returns exists:false on NoSuchKey error", async () => {
-    resetMock();
     const err = new Error("NoSuchKey") as Error & { name: string };
     err.name = "NoSuchKey";
     mockSendError = err;
@@ -219,7 +207,6 @@ describe("ObjectStore.headObject()", () => {
   });
 
   it("returns exists:false on 404 Not Found", async () => {
-    resetMock();
     const err = new Error("Not Found") as Error & { $metadata?: { httpStatusCode: number } };
     (err as any).$metadata = { httpStatusCode: 404 };
     mockSendError = err;
