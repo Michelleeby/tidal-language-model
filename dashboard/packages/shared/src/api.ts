@@ -22,6 +22,18 @@ export interface DeleteExperimentResponse {
   analysesRemoved: number;
 }
 
+/** POST /api/experiments/:expId/archive */
+export interface ArchiveExperimentResponse {
+  expId: string;
+  state: "complete" | "failed" | "already_archived";
+}
+
+/** POST /api/experiments/:expId/retrieve/:filename */
+export interface RetrieveCheckpointResponse {
+  expId: string;
+  filename: string;
+}
+
 /** GET /api/experiments/:expId/metrics query params */
 export interface MetricsQuery {
   mode: "recent" | "historical";

@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type Redis from "ioredis";
 import type { Database } from "./database.js";
+import type { ObjectStore } from "./object-store.js";
 import { JobStore } from "./job-store.js";
 
 const STALENESS_THRESHOLD_S = 300; // 5 minutes
@@ -29,6 +30,7 @@ export class ExperimentDeleter {
     private redis: Redis | null,
     private experimentsDir: string,
     private db: Database,
+    private objectStore?: ObjectStore | null,
   ) {
     this.jobStore = new JobStore(redis);
   }
@@ -100,9 +102,24 @@ export class ExperimentDeleter {
     let redisKeysRemoved = 0;
     let analysesRemoved = 0;
 
-    // 1. Delete from disk
     const expDir = path.join(this.experimentsDir, expId);
     const dirExisted = await fsp.access(expDir).then(() => true).catch(() => false);
+
+    // 0. Delete from Spaces if archived (read manifest before deleting disk)
+    if (dirExisted && this.objectStore?.isConfigured()) {
+      const manifestPath = path.join(expDir, "_archive_manifest.json");
+      try {
+        const raw = await fsp.readFile(manifestPath, "utf-8");
+        const manifest = JSON.parse(raw) as { state: string; spacesPrefix: string };
+        if (manifest.state === "complete" && manifest.spacesPrefix) {
+          await this.objectStore.deletePrefix(manifest.spacesPrefix).catch(() => {});
+        }
+      } catch {
+        // No manifest or not archived
+      }
+    }
+
+    // 1. Delete from disk
     if (dirExisted) {
       try {
         await fsp.rm(expDir, { recursive: true, force: true });

@@ -143,6 +143,17 @@ export class ExperimentDiscovery {
         experimentType = hasOnlyRL ? "rl" : hasFoundational ? "lm" : "unknown";
       }
 
+      // Check for archive manifest
+      let isArchived = false;
+      const archiveManifestPath = path.join(expPath, "_archive_manifest.json");
+      try {
+        const manifestRaw = await fsp.readFile(archiveManifestPath, "utf-8");
+        const manifest = JSON.parse(manifestRaw) as { state: string };
+        isArchived = manifest.state === "complete";
+      } catch {
+        // No manifest — not archived
+      }
+
       return {
         id,
         path: expPath,
@@ -156,6 +167,7 @@ export class ExperimentDiscovery {
         experimentType,
         sourceExperimentId,
         sourceCheckpoint,
+        isArchived,
       };
     } catch {
       // No local directory -- try Redis (remote experiment)
@@ -195,6 +207,7 @@ export class ExperimentDiscovery {
         experimentType: "unknown",
         sourceExperimentId: null,
         sourceCheckpoint: null,
+        isArchived: false,
       };
     } catch {
       return null;
