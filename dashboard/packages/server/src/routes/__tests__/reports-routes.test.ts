@@ -9,6 +9,7 @@ import { SignJWT } from "jose";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../../config.js";
 import { Database } from "../../services/database.js";
+import { ObjectStore } from "../../services/object-store.js";
 import authPlugin from "../../plugins/auth.js";
 import reportsRoutes from "../reports.js";
 import type { GenerateReportRequest } from "@tidal/shared";
@@ -35,7 +36,9 @@ after(async () => {
   for (const fn of cleanups) await fn();
 });
 
-async function buildApp(): Promise<{ app: FastifyInstance; db: Database }> {
+async function buildApp(
+  objectStore?: ObjectStore,
+): Promise<{ app: FastifyInstance; db: Database }> {
   const dir = await freshTmpDir();
   const db = new Database(path.join(dir, "test.db"));
 
@@ -46,6 +49,7 @@ async function buildApp(): Promise<{ app: FastifyInstance; db: Database }> {
     jwtSecret: JWT_SECRET,
   } as unknown as ServerConfig);
   app.decorate("db", db);
+  app.decorate("objectStore", objectStore ?? new ObjectStore(null));
 
   await app.register(cookie);
   await app.register(authPlugin);
@@ -412,6 +416,51 @@ describe("DELETE /api/reports/:id", () => {
     });
 
     assert.equal(resp.statusCode, 404);
+
+    await app.close();
+  });
+
+  it("cleans up Spaces objects when objectStore is configured", async () => {
+    const deletedPrefixes: string[] = [];
+    const mockClient = { send: async () => ({}) };
+    const mockCommands = {
+      PutObject: class { constructor(public input: Record<string, unknown>) {} },
+      DeleteObject: class { constructor(public input: Record<string, unknown>) {} },
+      DeleteObjects: class { constructor(public input: Record<string, unknown>) {} },
+      ListObjectsV2: class { constructor(public input: Record<string, unknown>) {} },
+      HeadObject: class { constructor(public input: Record<string, unknown>) {} },
+      GetObject: class { constructor(public input: Record<string, unknown>) {} },
+    };
+
+    const store = new ObjectStore(
+      { endpoint: "https://test.example.com", region: "us-east-1", accessKeyId: "key", secretAccessKey: "secret", bucket: "test-bucket" },
+      mockClient,
+      mockCommands as any,
+    );
+
+    // Spy on deletePrefix
+    const originalDeletePrefix = store.deletePrefix.bind(store);
+    store.deletePrefix = async (prefix: string) => {
+      deletedPrefixes.push(prefix);
+      return originalDeletePrefix(prefix);
+    };
+
+    const { app } = await buildApp(store);
+
+    const report = await createReport(app);
+
+    const delResp = await app.inject({
+      method: "DELETE",
+      url: `/api/reports/${report.id}`,
+      headers: { authorization: AUTH_HEADER },
+    });
+
+    assert.equal(delResp.statusCode, 200);
+    assert.equal(delResp.json().deleted, true);
+
+    // Verify Spaces cleanup was called with the correct prefix
+    assert.equal(deletedPrefixes.length, 1);
+    assert.equal(deletedPrefixes[0], `reports/${report.id}/`);
 
     await app.close();
   });
