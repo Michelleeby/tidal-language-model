@@ -62,12 +62,10 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry();
     registry.register(createMockProvider("openai", true));
     registry.register(createMockProvider("google", false));
-    registry.register(createMockProvider("anthropic", true));
 
     const available = registry.available();
-    assert.equal(available.length, 2);
+    assert.equal(available.length, 1);
     assert.ok(available.some((p) => p.name === "openai"));
-    assert.ok(available.some((p) => p.name === "anthropic"));
     assert.ok(!available.some((p) => p.name === "google"));
   });
 

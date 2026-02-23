@@ -18,7 +18,12 @@ export type CodeReviewDimension =
 
 export type AnyDimension = ReviewDimension | CodeReviewDimension;
 
-export type ProviderName = "openai" | "google" | "anthropic";
+export type ProviderName = "openai" | "google";
+
+export interface ModelAssignment {
+  provider: ProviderName;
+  model?: string;
+}
 
 export type Budget = "minimal" | "standard" | "thorough";
 

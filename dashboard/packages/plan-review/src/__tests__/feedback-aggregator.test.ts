@@ -64,7 +64,7 @@ describe("aggregateFeedback", () => {
     affected_files: ["src/checkpoint.py"],
     reasoning: "Format incompatibility",
     dimension: "regression_risk",
-    source: "anthropic",
+    source: "google",
   };
 
   it("deduplicates similar items using Jaccard threshold", () => {
@@ -131,7 +131,7 @@ describe("aggregateFeedback", () => {
     const items: FeedbackItem[] = [
       { severity: "suggestion", description: "Minor style issue", affected_files: [], reasoning: "Style", dimension: "completeness", source: "openai" },
       { severity: "critical", description: "Security vulnerability in auth", affected_files: ["auth.ts"], reasoning: "Security", dimension: "blind_spots", source: "google" },
-      { severity: "warning", description: "Missing test for edge case", affected_files: ["test.ts"], reasoning: "Coverage", dimension: "test_coverage", source: "anthropic" },
+      { severity: "warning", description: "Missing test for edge case", affected_files: ["test.ts"], reasoning: "Coverage", dimension: "test_coverage", source: "google" },
     ];
     const result = aggregateFeedback(items);
     for (let i = 1; i < result.length; i++) {
@@ -145,11 +145,11 @@ describe("aggregateFeedback", () => {
   });
 
   it("caps severity promotion at critical", () => {
-    // 3 sources all saying the same critical thing
+    // 3 items from 2 sources all saying the same critical thing
     const items: FeedbackItem[] = [
       { severity: "critical", description: "Critical breaking change in API", affected_files: ["api.ts"], reasoning: "Break", dimension: "regression_risk", source: "openai" },
       { severity: "critical", description: "Critical breaking change in API endpoint", affected_files: ["api.ts"], reasoning: "Break", dimension: "regression_risk", source: "google" },
-      { severity: "critical", description: "Critical breaking change in the API contract", affected_files: ["api.ts"], reasoning: "Break", dimension: "regression_risk", source: "anthropic" },
+      { severity: "critical", description: "Critical breaking change in the API contract", affected_files: ["api.ts"], reasoning: "Break", dimension: "regression_risk", source: "openai" },
     ];
     const result = aggregateFeedback(items);
     assert.equal(result.length, 1);

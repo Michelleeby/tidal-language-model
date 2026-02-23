@@ -10,6 +10,7 @@ import type {
   CodeReviewDimension,
   ProviderName,
   Budget,
+  ModelAssignment,
 } from "../types.js";
 import { ProviderRegistry } from "../providers/provider.js";
 import {
@@ -29,8 +30,14 @@ import { join } from "node:path";
 
 type CodeReviewDimensionAssignment = {
   dimension: CodeReviewDimension;
-  providers: ProviderName[];
+  assignments: ModelAssignment[];
 };
+
+const THOROUGH_ASSIGNMENTS: ModelAssignment[] = [
+  { provider: "openai", model: "gpt-4o" },
+  { provider: "openai", model: "o3-mini" },
+  { provider: "google" },
+];
 
 function assignCodeReviewProviders(
   dimensions: CodeReviewDimension[],
@@ -40,24 +47,26 @@ function assignCodeReviewProviders(
   // bugs: GPT-4o is strong at defect detection; adr_compliance: Gemini Flash cheapest for structured comparison
   const STANDARD_MAP: Record<CodeReviewDimension, [ProviderName, ProviderName]> = {
     bugs: ["openai", "google"],
-    hypothesis_alignment: ["openai", "anthropic"],
+    hypothesis_alignment: ["openai", "google"],
     adr_compliance: ["google", "openai"],
   };
 
   return dimensions.map((dim) => {
-    let providers: ProviderName[];
+    let assignments: ModelAssignment[];
     if (budget === "thorough") {
-      providers = available;
+      assignments = THOROUGH_ASSIGNMENTS.filter((ma) => available.includes(ma.provider));
     } else if (budget === "minimal") {
       const preferred = STANDARD_MAP[dim]?.[0] ?? available[0];
-      providers = available.includes(preferred) ? [preferred] : [available[0]];
+      const provider = available.includes(preferred) ? preferred : available[0];
+      assignments = [{ provider }];
     } else {
       // standard
       const mapped = STANDARD_MAP[dim] ?? [available[0]];
-      providers = mapped.filter((p) => available.includes(p));
-      if (providers.length === 0) providers = [available[0]];
+      const filtered = mapped.filter((p) => available.includes(p));
+      const providers = filtered.length > 0 ? filtered : [available[0]];
+      assignments = providers.map((provider) => ({ provider }));
     }
-    return { dimension: dim, providers };
+    return { dimension: dim, assignments };
   });
 }
 
@@ -108,7 +117,7 @@ export async function handleReviewCode(
   const available = registry.available();
   if (available.length === 0) {
     return errorResult(
-      "No providers available. Set at least one API key (OPENAI_API_KEY, GOOGLE_AI_API_KEY, or ANTHROPIC_API_KEY).",
+      "No providers available. Set at least one API key (OPENAI_API_KEY or GOOGLE_AI_API_KEY).",
     );
   }
 
@@ -142,8 +151,8 @@ export async function handleReviewCode(
   > = [];
 
   for (const assignment of assignments) {
-    for (const provName of assignment.providers) {
-      const provider = registry.get(provName);
+    for (const ma of assignment.assignments) {
+      const provider = registry.get(ma.provider);
       if (!provider?.available) continue;
 
       const systemPrompt = getCodeReviewDimensionPrompt(assignment.dimension);
@@ -151,16 +160,16 @@ export async function handleReviewCode(
 
       allPromises.push(
         provider
-          .review({ systemPrompt, userPrompt, dimension: assignment.dimension })
+          .review({ systemPrompt, userPrompt, dimension: assignment.dimension }, ma.model)
           .then((response) => ({
             dimension: assignment.dimension,
             feedback: response.feedback,
-            provider: provName,
+            provider: ma.provider,
           }))
           .catch(() => ({
             dimension: assignment.dimension,
             feedback: [],
-            provider: provName,
+            provider: ma.provider,
           })),
       );
     }

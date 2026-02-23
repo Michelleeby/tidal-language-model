@@ -10,6 +10,7 @@ import {
   handleAggregateFeedback,
   handleListProviders,
   handleGetReviewCosts,
+  assignProviders,
 } from "../tools/review-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -24,13 +25,13 @@ function createMockProvider(
   return {
     name,
     available,
-    models: ["mock-model"],
-    async review(request: ReviewRequest): Promise<ReviewResponse> {
+    models: name === "openai" ? ["gpt-4o", "o3-mini"] : ["gemini-2.0-flash"],
+    async review(request: ReviewRequest, model?: string): Promise<ReviewResponse> {
       return {
         feedback: feedback ?? [
           {
             severity: "warning",
-            description: `Feedback from ${name}: missing error handling`,
+            description: `Feedback from ${name}/${model ?? "default"}: missing error handling`,
             affected_files: ["src/main.ts"],
             reasoning: `${name} found this issue`,
             dimension: request.dimension,
@@ -38,7 +39,7 @@ function createMockProvider(
           },
         ],
         provider: name,
-        model: "mock-model",
+        model: model ?? "mock-model",
         dimension: request.dimension,
       };
     },
@@ -55,6 +56,90 @@ function makeRegistry(...providers: LLMProvider[]): ProviderRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// assignProviders — direct unit tests
+// ---------------------------------------------------------------------------
+
+describe("assignProviders", () => {
+  it("standard budget maps all dimensions to openai and google only", () => {
+    const assignments = assignProviders(
+      ["completeness", "blind_spots", "regression_risk", "test_coverage", "hypothesis_scope"],
+      ["openai", "google"],
+      "standard",
+    );
+
+    for (const a of assignments) {
+      const providers = a.assignments.map((m) => m.provider);
+      assert.ok(providers.includes("openai") || providers.includes("google"),
+        `${a.dimension} should use openai or google`);
+      for (const ma of a.assignments) {
+        assert.ok(
+          ma.provider === "openai" || ma.provider === "google",
+          `${a.dimension} has unexpected provider: ${ma.provider}`,
+        );
+      }
+      assert.equal(a.assignments.length, 2, `${a.dimension} should have 2 assignments at standard`);
+    }
+  });
+
+  it("thorough budget returns 3 model assignments with specific models", () => {
+    const assignments = assignProviders(
+      ["completeness"],
+      ["openai", "google"],
+      "thorough",
+    );
+
+    assert.equal(assignments.length, 1);
+    const a = assignments[0];
+    assert.equal(a.assignments.length, 3, "thorough should have 3 model calls");
+
+    // Verify the specific model assignments
+    const models = a.assignments.map((m) => `${m.provider}/${m.model ?? "default"}`);
+    assert.ok(models.includes("openai/gpt-4o"), "should include openai/gpt-4o");
+    assert.ok(models.includes("openai/o3-mini"), "should include openai/o3-mini");
+    assert.ok(
+      a.assignments.some((m) => m.provider === "google"),
+      "should include google",
+    );
+  });
+
+  it("minimal budget uses 1 call per dimension", () => {
+    const assignments = assignProviders(
+      ["completeness", "blind_spots", "regression_risk", "test_coverage", "hypothesis_scope"],
+      ["openai", "google"],
+      "minimal",
+    );
+
+    for (const a of assignments) {
+      assert.equal(a.assignments.length, 1, `${a.dimension} should have 1 assignment at minimal`);
+    }
+  });
+
+  it("minimal budget alternates between openai and google", () => {
+    const assignments = assignProviders(
+      ["completeness", "blind_spots", "regression_risk", "test_coverage", "hypothesis_scope"],
+      ["openai", "google"],
+      "minimal",
+    );
+
+    const providers = assignments.map((a) => a.assignments[0].provider);
+    assert.ok(providers.includes("openai"), "should use openai for some dimensions");
+    assert.ok(providers.includes("google"), "should use google for some dimensions");
+  });
+
+  it("falls back to available providers when preferred is missing", () => {
+    const assignments = assignProviders(
+      ["completeness"],
+      ["google"],
+      "standard",
+    );
+
+    assert.equal(assignments.length, 1);
+    assert.ok(assignments[0].assignments.length > 0, "should have at least one assignment");
+    assert.equal(assignments[0].assignments[0].provider, "google");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleListProviders
 // ---------------------------------------------------------------------------
 
@@ -63,16 +148,27 @@ describe("handleListProviders", () => {
     const registry = makeRegistry(
       createMockProvider("openai", true),
       createMockProvider("google", false),
-      createMockProvider("anthropic", true),
     );
     const result = await handleListProviders(registry);
     assert.equal(result.isError, undefined);
 
     const parsed = JSON.parse(result.content[0].text as string);
-    assert.equal(parsed.available.length, 2);
+    assert.equal(parsed.available.length, 1);
     assert.equal(parsed.unavailable.length, 1);
     assert.ok(parsed.available.includes("openai"));
     assert.ok(parsed.unavailable.includes("google"));
+  });
+
+  it("does not include anthropic in any list", async () => {
+    const registry = makeRegistry(
+      createMockProvider("openai", true),
+      createMockProvider("google", true),
+    );
+    const result = await handleListProviders(registry);
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    const all = [...parsed.available, ...parsed.unavailable];
+    assert.ok(!all.includes("anthropic"), "anthropic should not appear");
   });
 });
 
@@ -95,6 +191,22 @@ describe("handleGetReviewCosts", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     assert.ok(parsed.estimates);
     assert.ok(parsed.totalEstimatedCostUsd >= 0);
+  });
+
+  it("has no anthropic cost line", async () => {
+    const registry = makeRegistry(
+      createMockProvider("openai", true),
+      createMockProvider("google", true),
+    );
+    const result = await handleGetReviewCosts(registry, {
+      plan: "A short test plan",
+      budget: "thorough",
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    for (const estimate of parsed.estimates) {
+      assert.notEqual(estimate.provider, "anthropic", "no anthropic cost line");
+    }
   });
 });
 
@@ -236,7 +348,7 @@ describe("handleAggregateFeedback", () => {
         affected_files: ["checkpoint.py"],
         reasoning: "Incompatible format",
         dimension: "regression_risk",
-        source: "anthropic",
+        source: "google",
       },
     ];
     const result = await handleAggregateFeedback({ feedback: items });

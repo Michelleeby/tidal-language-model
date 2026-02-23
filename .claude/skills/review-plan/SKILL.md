@@ -1,11 +1,11 @@
 ---
 name: review-plan
-description: Review an implementation plan using multiple AI models (GPT-4o, Gemini Flash, Claude Sonnet) across 5 dimensions. Use when the user mentions "/review-plan", asks to review a plan, or after creating an implementation plan that would benefit from external validation.
+description: Review an implementation plan using multiple AI models (GPT-4o, Gemini Flash) across 5 dimensions. Use when the user mentions "/review-plan", asks to review a plan, or after creating an implementation plan that would benefit from external validation.
 ---
 
 # Plan Review
 
-Send an implementation plan to external AI models for structured review across 5 dimensions: completeness, blind spots, regression risk, test coverage, and hypothesis scope. Feedback is deduplicated and ranked by severity.
+Send an implementation plan to external AI models for structured review across 5 dimensions: completeness, blind spots, regression risk, test coverage, and hypothesis scope. Uses OpenAI (GPT-4o) and Google (Gemini Flash) only — no Anthropic tokens consumed. Feedback is deduplicated and ranked by severity.
 
 ## 1. Identify the Plan
 
@@ -23,15 +23,15 @@ Read files mentioned in the plan to provide additional context to reviewers:
 ## 3. Check Provider Availability
 
 Call `list_review_providers` to see which API keys are configured. Report to the user:
-- Which providers are available (OpenAI, Google, Anthropic)
+- Which providers are available (OpenAI, Google)
 - If none are available, inform the user they need to set API keys
 
 ## 4. Auto-Select Budget
 
 Based on plan size:
-- **Small plan** (<50 lines): `minimal` (1 model per dimension, ~$0.02-0.05)
-- **Medium plan** (50-200 lines): `standard` (2 models per dimension, ~$0.05-0.15)
-- **Large plan** (>200 lines): `thorough` (all 3 providers, ~$0.15-0.30)
+- **Small plan** (<50 lines): `minimal` (1 model per dimension, ~$0.01-0.03)
+- **Medium plan** (50-200 lines): `standard` (2 models per dimension, ~$0.03-0.08)
+- **Large plan** (>200 lines): `thorough` (3 model calls per dimension using gpt-4o, o3-mini, gemini-flash, ~$0.08-0.20)
 
 ## 5. Auto-Select Dimensions
 

@@ -17,13 +17,13 @@ function createMockProvider(
   return {
     name,
     available,
-    models: ["mock-model"],
-    async review(request: ReviewRequest): Promise<ReviewResponse> {
+    models: name === "openai" ? ["gpt-4o", "o3-mini"] : ["gemini-2.0-flash"],
+    async review(request: ReviewRequest, model?: string): Promise<ReviewResponse> {
       return {
         feedback: feedback ?? [
           {
             severity: "warning",
-            description: `Code feedback from ${name}: potential bug`,
+            description: `Code feedback from ${name}/${model ?? "default"}: potential bug`,
             affected_files: ["src/main.py"],
             reasoning: `${name} found this issue`,
             dimension: request.dimension,
@@ -31,7 +31,7 @@ function createMockProvider(
           },
         ],
         provider: name,
-        model: "mock-model",
+        model: model ?? "mock-model",
         dimension: request.dimension,
       };
     },
@@ -56,7 +56,6 @@ describe("handleReviewCode", () => {
     const registry = makeRegistry(
       createMockProvider("openai", true),
       createMockProvider("google", true),
-      createMockProvider("anthropic", true),
     );
     const result = await handleReviewCode(registry, {
       diff: "diff --git a/src/main.py b/src/main.py\n+some code change",
@@ -130,10 +129,10 @@ describe("handleReviewCode", () => {
     assert.ok(parsed.providers_used.includes("google"));
   });
 
-  it("routes hypothesis_alignment to openai and anthropic at standard budget", async () => {
+  it("routes hypothesis_alignment to openai and google at standard budget", async () => {
     const registry = makeRegistry(
       createMockProvider("openai", true),
-      createMockProvider("anthropic", true),
+      createMockProvider("google", true),
     );
     const result = await handleReviewCode(registry, {
       diff: "some diff",
@@ -145,14 +144,13 @@ describe("handleReviewCode", () => {
 
     const parsed = JSON.parse(result.content[0].text as string);
     assert.ok(parsed.providers_used.includes("openai"));
-    assert.ok(parsed.providers_used.includes("anthropic"));
+    assert.ok(parsed.providers_used.includes("google"));
   });
 
   it("uses single provider per dimension at minimal budget", async () => {
     const registry = makeRegistry(
       createMockProvider("openai", true),
       createMockProvider("google", true),
-      createMockProvider("anthropic", true),
     );
     const result = await handleReviewCode(registry, {
       diff: "some diff",
@@ -167,12 +165,55 @@ describe("handleReviewCode", () => {
     assert.equal(parsed.providers_used.length, 1);
   });
 
-  it("uses all providers per dimension at thorough budget", async () => {
-    const registry = makeRegistry(
-      createMockProvider("openai", true),
-      createMockProvider("google", true),
-      createMockProvider("anthropic", true),
-    );
+  it("thorough budget makes 3 model calls per dimension", async () => {
+    // Track calls to verify 3 distinct calls are made
+    const calls: Array<{ provider: string; model?: string }> = [];
+    const openaiProvider: LLMProvider = {
+      name: "openai",
+      available: true,
+      models: ["gpt-4o", "o3-mini"],
+      async review(request: ReviewRequest, model?: string): Promise<ReviewResponse> {
+        calls.push({ provider: "openai", model });
+        return {
+          feedback: [{
+            severity: "warning",
+            description: `OpenAI ${model} feedback`,
+            affected_files: [],
+            reasoning: "test",
+            dimension: request.dimension,
+            source: "openai",
+          }],
+          provider: "openai",
+          model: model ?? "gpt-4o",
+          dimension: request.dimension,
+        };
+      },
+      estimateTokens: (t) => Math.ceil(t.length / 4),
+    };
+    const googleProvider: LLMProvider = {
+      name: "google",
+      available: true,
+      models: ["gemini-2.0-flash"],
+      async review(request: ReviewRequest, model?: string): Promise<ReviewResponse> {
+        calls.push({ provider: "google", model });
+        return {
+          feedback: [{
+            severity: "suggestion",
+            description: `Google ${model} feedback`,
+            affected_files: [],
+            reasoning: "test",
+            dimension: request.dimension,
+            source: "google",
+          }],
+          provider: "google",
+          model: model ?? "gemini-2.0-flash",
+          dimension: request.dimension,
+        };
+      },
+      estimateTokens: (t) => Math.ceil(t.length / 4),
+    };
+
+    const registry = makeRegistry(openaiProvider, googleProvider);
     const result = await handleReviewCode(registry, {
       diff: "some diff",
       dimensions: ["bugs"],
@@ -181,8 +222,12 @@ describe("handleReviewCode", () => {
     });
     assert.equal(result.isError, undefined);
 
+    // Should have made 3 calls for 1 dimension
+    assert.equal(calls.length, 3, "thorough should make 3 calls per dimension");
+
+    // Verify 2 distinct providers used
     const parsed = JSON.parse(result.content[0].text as string);
-    // thorough = all 3 providers
-    assert.equal(parsed.providers_used.length, 3);
+    assert.ok(parsed.providers_used.includes("openai"));
+    assert.ok(parsed.providers_used.includes("google"));
   });
 });

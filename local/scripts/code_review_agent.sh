@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# code_review_agent.sh — Launch a background code review agent for a PR or branch.
+# code_review_agent.sh — Launch a background code review for a PR or branch.
+#
+# Uses the plan-review CLI directly (no Claude agent orchestrator).
 #
 # Usage: code_review_agent.sh <target> [--dry-run]
 #   target: PR number (e.g. "42") or branch name (e.g. "impl/my-feature")
@@ -33,12 +35,18 @@ REVIEW_BASE="$REPO_DIR/.claude/reviews"
 REVIEW_DIR="$REVIEW_BASE/$TARGET"
 TMUX_SESSION="review-$TARGET"
 STATUS_FILE="$REVIEW_DIR/.agent-status"
-PROMPT_FILE="$REVIEW_DIR/.agent-prompt.txt"
-RUNNER_FILE="$REVIEW_DIR/.agent-runner.sh"
 OUTPUT_LOG="$REVIEW_DIR/.agent-output.log"
+REVIEW_OUTPUT="$REVIEW_DIR/.review-output.md"
 STARTED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-MCP_CONFIG_FILE="$REPO_DIR/.mcp.json"
+
+# Load env file if it exists
 ENV_FILE="$REPO_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -a
+  source "$ENV_FILE" 2>/dev/null || true
+  set +a
+fi
 
 # ---------------------------------------------------------------------------
 # Create review directory
@@ -47,109 +55,20 @@ ENV_FILE="$REPO_DIR/.env"
 mkdir -p "$REVIEW_DIR"
 
 # ---------------------------------------------------------------------------
-# Write agent prompt
+# Determine target type
 # ---------------------------------------------------------------------------
 
-# Determine if target looks like a PR number (all digits) or a branch name
 if [[ "$TARGET" =~ ^[0-9]+$ ]]; then
-  DIFF_CMD="gh pr diff $TARGET"
-  POST_CMD="gh pr comment $TARGET --body-file .claude/reviews/$TARGET/.review-output.md"
   TARGET_TYPE="pr"
 else
-  DIFF_CMD="git diff main...$TARGET"
-  POST_CMD=""
   TARGET_TYPE="branch"
 fi
 
-cat > "$PROMPT_FILE" << PROMPT_EOF
-You are a code review agent. Your job is to review changes and produce a structured review report.
-
-## Target
-
-Review target: $TARGET (type: $TARGET_TYPE)
-
-## Steps
-
-1. Get the diff:
-   - If PR: \`$DIFF_CMD\`
-   - If branch: \`$DIFF_CMD\`
-
-2. Read the contents of up to 5 most-changed files for context.
-
-3. Call \`list_review_providers\` (from the plan-review MCP) to confirm which providers are available.
-
-4. Call \`summarize_adrs\` to get relevant ADR context. Use keywords from the diff.
-
-5. Call \`review_code\` with:
-   - diff: the full diff output
-   - context: relevant file contents joined together
-   - include_adrs: true
-   - budget: "standard"
-
-6. Format the results as a markdown report with:
-   - ## Summary (1-2 sentences)
-   - ## Critical Issues (if any)
-   - ## Warnings
-   - ## Suggestions
-   - ## ADR Compliance
-   - Each item: severity badge, description, affected files, reasoning
-
-7. Write the report to: .claude/reviews/$TARGET/.review-output.md
-
-8. If target is a PR number, post the report as a PR comment:
-   \`gh pr comment $TARGET --body-file .claude/reviews/$TARGET/.review-output.md\`
-
-## Important
-
-- This is a READ-ONLY review. Do not modify any source files.
-- Write output ONLY to .claude/reviews/$TARGET/
-- If any step fails gracefully, continue with available information.
-PROMPT_EOF
-
 # ---------------------------------------------------------------------------
-# Build MCP config with env var substitution
+# Write runner script
 # ---------------------------------------------------------------------------
 
-MCP_CONFIG='{}'
-if [ -f "$MCP_CONFIG_FILE" ]; then
-  # Load env file if it exists
-  if [ -f "$ENV_FILE" ]; then
-    # shellcheck disable=SC1090
-    set -a
-    source "$ENV_FILE" 2>/dev/null || true
-    set +a
-  fi
-
-  # Inline the plan-review MCP server config
-  OPENAI_KEY="${OPENAI_API_KEY:-}"
-  GOOGLE_KEY="${GOOGLE_AI_API_KEY:-}"
-  ANTHROPIC_KEY="${ANTHROPIC_API_KEY:-}"
-  ADR_DIR="${TIDAL_ADR_DIR:-}"
-
-  MCP_CONFIG=$(python3 - <<PYTHON_EOF
-import json
-config = {
-    "mcpServers": {
-        "plan-review": {
-            "command": "node",
-            "args": ["dashboard/packages/plan-review/dist/index.js"],
-            "env": {
-                "OPENAI_API_KEY": "$OPENAI_KEY",
-                "GOOGLE_AI_API_KEY": "$GOOGLE_KEY",
-                "ANTHROPIC_API_KEY": "$ANTHROPIC_KEY",
-                "TIDAL_ADR_DIR": "$ADR_DIR"
-            }
-        }
-    }
-}
-print(json.dumps(config))
-PYTHON_EOF
-)
-fi
-
-# ---------------------------------------------------------------------------
-# Write agent runner script
-# ---------------------------------------------------------------------------
+RUNNER_FILE="$REVIEW_DIR/.review-runner.sh"
 
 cat > "$RUNNER_FILE" << RUNNER_EOF
 #!/usr/bin/env bash
@@ -157,20 +76,28 @@ set -euo pipefail
 
 cd "$REPO_DIR"
 
-# Unset CLAUDECODE to avoid nested session guard
-unset CLAUDECODE
-
 EXIT_CODE=0
-claude --model sonnet -p "\$(cat '$PROMPT_FILE')" \\
-  --allowedTools "Read" "Glob" "Grep" \\
-    "Bash(gh pr diff:*)" "Bash(gh pr view:*)" "Bash(gh pr comment:*)" \\
-    "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)" \\
-    "Bash(ls:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" \\
-    "Write(.claude/reviews/*)" \\
-  --no-session-persistence \\
-  --disable-slash-commands \\
-  --strict-mcp-config --mcp-config '$MCP_CONFIG' \\
-  > '$OUTPUT_LOG' 2>&1 || EXIT_CODE=\$?
+
+if [ "$TARGET_TYPE" = "pr" ]; then
+  node "$REPO_DIR/dashboard/packages/plan-review/dist/cli.js" \\
+    review-pr "$TARGET" \\
+    --output "$REVIEW_OUTPUT" \\
+    --post-comment \\
+    --budget standard \\
+    > "$OUTPUT_LOG" 2>&1 || EXIT_CODE=\$?
+else
+  # For branch reviews, create a temp diff file and use review-plan with context
+  DIFF_FILE="\$(mktemp)"
+  git diff main...$TARGET > "\$DIFF_FILE" 2>/dev/null || true
+
+  node "$REPO_DIR/dashboard/packages/plan-review/dist/cli.js" \\
+    review-pr "$TARGET" \\
+    --output "$REVIEW_OUTPUT" \\
+    --budget standard \\
+    > "$OUTPUT_LOG" 2>&1 || EXIT_CODE=\$?
+
+  rm -f "\$DIFF_FILE"
+fi
 
 FINISHED=\$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 if [ "\$EXIT_CODE" -eq 0 ]; then
@@ -180,7 +107,7 @@ else
 fi
 
 python3 -c "
-import json, sys
+import json
 status = {
     'type': 'review',
     'status': '\$FINAL_STATUS',
@@ -206,7 +133,7 @@ python3 - << STATUS_EOF
 import json
 status = {
     "type": "review",
-    "status": "pending" if True else "pending",
+    "status": "pending",
     "target": "$TARGET",
     "started": "$STARTED",
     "review_dir": "$REVIEW_DIR",
@@ -223,7 +150,6 @@ STATUS_EOF
 if [ "$DRY_RUN" = "true" ]; then
   echo "Dry-run: review dir created at $REVIEW_DIR"
   echo "  Status: $STATUS_FILE"
-  echo "  Prompt: $PROMPT_FILE"
   echo "  Runner: $RUNNER_FILE"
   echo "  Log:    $OUTPUT_LOG (not created yet)"
   echo ""
@@ -244,10 +170,10 @@ RUNNING_EOF
 # Launch in tmux
 if command -v tmux &>/dev/null; then
   tmux new-session -d -s "$TMUX_SESSION" "bash $RUNNER_FILE"
-  echo "Review agent launched in tmux session: $TMUX_SESSION"
+  echo "Review launched in tmux session: $TMUX_SESSION"
   echo "  Monitor: tmux attach -t $TMUX_SESSION"
   echo "  Log:     tail -f $OUTPUT_LOG"
-  echo "  Output:  $REVIEW_DIR/.review-output.md"
+  echo "  Output:  $REVIEW_OUTPUT"
 else
   echo "tmux not found — running inline"
   bash "$RUNNER_FILE"

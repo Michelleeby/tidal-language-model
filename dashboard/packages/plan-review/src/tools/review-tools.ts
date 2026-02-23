@@ -11,6 +11,7 @@ import type {
   ProviderName,
   Budget,
   CostEstimate,
+  ModelAssignment,
 } from "../types.js";
 import { ProviderRegistry } from "../providers/provider.js";
 import type { LLMProvider } from "../providers/provider.js";
@@ -26,35 +27,43 @@ import { join } from "node:path";
 // Model-to-dimension mapping per budget tier
 // ---------------------------------------------------------------------------
 
-type DimensionAssignment = { dimension: ReviewDimension; providers: ProviderName[] };
+type DimensionAssignment = { dimension: ReviewDimension; assignments: ModelAssignment[] };
 
-function assignProviders(
+const THOROUGH_ASSIGNMENTS: ModelAssignment[] = [
+  { provider: "openai", model: "gpt-4o" },
+  { provider: "openai", model: "o3-mini" },
+  { provider: "google" },
+];
+
+export function assignProviders(
   dimensions: ReviewDimension[],
   available: ProviderName[],
   budget: Budget,
 ): DimensionAssignment[] {
   const STANDARD_MAP: Record<ReviewDimension, [ProviderName, ProviderName]> = {
     completeness: ["openai", "google"],
-    blind_spots: ["openai", "anthropic"],
-    regression_risk: ["google", "anthropic"],
+    blind_spots: ["openai", "google"],
+    regression_risk: ["google", "openai"],
     test_coverage: ["google", "openai"],
-    hypothesis_scope: ["anthropic", "openai"],
+    hypothesis_scope: ["google", "openai"],
   };
 
   return dimensions.map((dim) => {
-    let providers: ProviderName[];
+    let assignments: ModelAssignment[];
     if (budget === "thorough") {
-      providers = available;
+      assignments = THOROUGH_ASSIGNMENTS.filter((ma) => available.includes(ma.provider));
     } else if (budget === "minimal") {
       const preferred = STANDARD_MAP[dim]?.[0] ?? available[0];
-      providers = available.includes(preferred) ? [preferred] : [available[0]];
+      const provider = available.includes(preferred) ? preferred : available[0];
+      assignments = [{ provider }];
     } else {
       // standard
       const mapped = STANDARD_MAP[dim] ?? [available[0]];
-      providers = mapped.filter((p) => available.includes(p));
-      if (providers.length === 0) providers = [available[0]];
+      const filtered = mapped.filter((p) => available.includes(p));
+      const providers = filtered.length > 0 ? filtered : [available[0]];
+      assignments = providers.map((provider) => ({ provider }));
     }
-    return { dimension: dim, providers };
+    return { dimension: dim, assignments };
   });
 }
 
@@ -99,18 +108,17 @@ export async function handleGetReviewCosts(
     "gpt-4o": { input: 0.0025, output: 0.01 },
     "o3-mini": { input: 0.0011, output: 0.0044 },
     "gemini-2.0-flash": { input: 0.0001, output: 0.0004 },
-    "claude-sonnet-4-6": { input: 0.003, output: 0.015 },
     "mock-model": { input: 0.001, output: 0.004 },
   };
 
   for (const assignment of assignments) {
-    for (const provName of assignment.providers) {
-      const provider = registry.get(provName);
+    for (const ma of assignment.assignments) {
+      const provider = registry.get(ma.provider);
       if (!provider) continue;
-      const model = provider.models[0];
+      const model = ma.model ?? provider.models[0];
       const costs = COST_PER_1K[model] ?? { input: 0.003, output: 0.015 };
       estimates.push({
-        provider: provName,
+        provider: ma.provider,
         model,
         estimatedInputTokens: inputPerCall,
         estimatedOutputTokens: responseTokens,
@@ -212,7 +220,7 @@ export async function handleReviewPlan(
 
   if (requestedProviders.length === 0) {
     return errorResult(
-      "No providers available. Set at least one API key (OPENAI_API_KEY, GOOGLE_AI_API_KEY, or ANTHROPIC_API_KEY).",
+      "No providers available. Set at least one API key (OPENAI_API_KEY or GOOGLE_AI_API_KEY).",
     );
   }
 
@@ -242,8 +250,8 @@ export async function handleReviewPlan(
   > = [];
 
   for (const assignment of assignments) {
-    for (const provName of assignment.providers) {
-      const provider = registry.get(provName);
+    for (const ma of assignment.assignments) {
+      const provider = registry.get(ma.provider);
       if (!provider?.available) continue;
 
       const systemPrompt = getDimensionPrompt(assignment.dimension);
@@ -253,16 +261,17 @@ export async function handleReviewPlan(
         provider
           .review(
             { systemPrompt, userPrompt, dimension: assignment.dimension },
+            ma.model,
           )
           .then((response) => ({
             dimension: assignment.dimension,
             feedback: response.feedback,
-            provider: provName,
+            provider: ma.provider,
           }))
           .catch(() => ({
             dimension: assignment.dimension,
             feedback: [],
-            provider: provName,
+            provider: ma.provider,
           })),
       );
     }
@@ -369,7 +378,7 @@ export function registerReviewTools(
         .optional()
         .describe("Inject relevant ADR summaries as context (default: true)"),
       providers: z
-        .array(z.enum(["openai", "google", "anthropic"]))
+        .array(z.enum(["openai", "google"]))
         .optional()
         .describe("Providers to use (default: all available)"),
       budget: z
@@ -398,7 +407,7 @@ export function registerReviewTools(
         ])
         .describe("The review dimension"),
       provider: z
-        .enum(["openai", "google", "anthropic"])
+        .enum(["openai", "google"])
         .describe("The provider to use"),
       context: z.string().optional().describe("Additional context"),
       model: z.string().optional().describe("Specific model to use"),
@@ -434,7 +443,7 @@ export function registerReviewTools(
               "test_coverage",
               "hypothesis_scope",
             ]),
-            source: z.enum(["openai", "google", "anthropic"]),
+            source: z.enum(["openai", "google"]),
           }),
         )
         .describe("Raw feedback items to aggregate"),
