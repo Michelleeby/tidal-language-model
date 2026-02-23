@@ -59,6 +59,11 @@ services:
       - TIDAL_DASHBOARD_URL=${TIDAL_DASHBOARD_URL:-http://${TIDAL_DROPLET_IP:-localhost}}
       - DO_API_KEY=${DO_API_KEY:-}
       - DO_SSH_KEY=${DO_SSH_KEY:-}
+      - DO_SPACES_ENDPOINT=${DO_SPACES_ENDPOINT:-}
+      - DO_SPACES_KEY=${DO_SPACES_KEY:-}
+      - DO_SPACES_SECRET=${DO_SPACES_SECRET:-}
+      - DO_SPACES_BUCKET=${DO_SPACES_BUCKET:-}
+      - DO_SPACES_REGION=${DO_SPACES_REGION:-}
       - GITHUB_ADMIN_USER=${GITHUB_ADMIN_USER:-}
       - USER_PLUGINS_DIR=/data/user-plugins
     volumes:
