@@ -18,13 +18,16 @@ interface S3ClientLike {
   send(command: unknown): Promise<unknown>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type CommandCtor = new (input: any) => any;
+
 interface S3Commands {
-  PutObject: new (input: Record<string, unknown>) => object;
-  DeleteObject: new (input: Record<string, unknown>) => object;
-  DeleteObjects: new (input: Record<string, unknown>) => object;
-  ListObjectsV2: new (input: Record<string, unknown>) => object;
-  HeadObject: new (input: Record<string, unknown>) => object;
-  GetObject: new (input: Record<string, unknown>) => object;
+  PutObject: CommandCtor;
+  DeleteObject: CommandCtor;
+  DeleteObjects: CommandCtor;
+  ListObjectsV2: CommandCtor;
+  HeadObject: CommandCtor;
+  GetObject: CommandCtor;
 }
 
 /**
@@ -122,7 +125,7 @@ export class ObjectStore {
     const { createReadStream } = await import("node:fs");
 
     const upload = new Upload({
-      client,
+      client: client as unknown as import("@aws-sdk/client-s3").S3Client,
       params: {
         Bucket: cfg.bucket,
         Key: key,
