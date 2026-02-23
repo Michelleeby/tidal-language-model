@@ -79,7 +79,7 @@ export class ObjectStore {
         accessKeyId: cfg.accessKeyId,
         secretAccessKey: cfg.secretAccessKey,
       },
-      forcePathStyle: false,
+      forcePathStyle: true,
     });
     return this._client;
   }
