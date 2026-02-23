@@ -10,7 +10,7 @@ import { buildPatternBlocks } from "@tidal/shared";
 import { ReportRepository } from "../services/report-repository.js";
 
 export default async function reportsRoutes(fastify: FastifyInstance) {
-  const repo = new ReportRepository(fastify.db, fastify.objectStore);
+  const repo = new ReportRepository(fastify.db, fastify.objectStore, fastify.log);
   // List all reports (summaries only)
   fastify.get("/api/reports", async () => {
     const reports = fastify.db.listReports();
@@ -62,14 +62,18 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
     "/api/reports/:id/save",
     { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
-      const report = await repo.save(request.params.id, {
+      const result = await repo.save(request.params.id, {
         title: request.body?.title,
         blocks: request.body?.blocks,
       });
-      if (!report) {
+      if (!result) {
         return reply.status(404).send({ error: "Report not found" });
       }
-      return { report };
+      return {
+        report: result.report,
+        spacesWritten: result.spacesWritten,
+        ...(result.spacesError ? { spacesError: result.spacesError } : {}),
+      };
     },
   );
 

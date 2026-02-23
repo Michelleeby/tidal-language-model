@@ -62,6 +62,8 @@ export interface SaveReportRequest {
 
 export interface SaveReportResponse {
   report: Report;
+  spacesWritten: boolean;
+  spacesError?: string;
 }
 
 /** GET /api/reports/:id/versions (Phase 4). */

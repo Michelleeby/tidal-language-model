@@ -1,6 +1,13 @@
 import type { Database } from "./database.js";
 import type { ObjectStore } from "./object-store.js";
 import type { Report, ReportSummary, ReportVersion } from "@tidal/shared";
+import type { FastifyBaseLogger } from "fastify";
+
+export interface SaveResult {
+  report: Report;
+  spacesWritten: boolean;
+  spacesError?: string;
+}
 
 const MAX_VERSIONS = 5;
 
@@ -16,10 +23,15 @@ const MAX_VERSIONS = 5;
  * When Spaces is not configured, save() behaves like autoSave() — graceful degradation.
  */
 export class ReportRepository {
+  private log?: FastifyBaseLogger;
+
   constructor(
     private db: Database,
     private store: ObjectStore,
-  ) {}
+    log?: FastifyBaseLogger,
+  ) {
+    this.log = log;
+  }
 
   private currentKey(reportId: string): string {
     return `reports/${reportId}/current.json`;
@@ -57,36 +69,41 @@ export class ReportRepository {
   /**
    * Explicit save: writes to SQLite and Spaces.
    * Creates a versioned snapshot and prunes versions beyond MAX_VERSIONS.
-   * 503-resilient: Spaces failure is caught — SQLite write still succeeds.
+   * Spaces failure is non-fatal — SQLite write still succeeds, but the error
+   * is reported via SaveResult so the caller can surface it.
    */
   async save(
     id: string,
     patch: { title?: string; blocks?: Record<string, unknown>[] },
-  ): Promise<Report | null> {
+  ): Promise<SaveResult | null> {
     // 1. Write to SQLite
     const report = this.db.updateReport(id, patch);
     if (!report) return null;
 
     // 2. Write to Spaces (best-effort)
-    if (this.store.isConfigured()) {
-      try {
-        const payload = JSON.stringify(report);
-        const timestamp = report.updatedAt;
-
-        // Write current.json
-        await this.store.putObject(this.currentKey(id), payload, "application/json");
-
-        // Write versioned snapshot
-        await this.store.putObject(this.versionKey(id, timestamp), payload, "application/json");
-
-        // Prune to MAX_VERSIONS
-        await this.pruneVersions(id);
-      } catch {
-        // Spaces failure is non-fatal — SQLite write already succeeded
-      }
+    if (!this.store.isConfigured()) {
+      return { report, spacesWritten: false };
     }
 
-    return report;
+    try {
+      const payload = JSON.stringify(report);
+      const timestamp = report.updatedAt;
+
+      // Write current.json
+      await this.store.putObject(this.currentKey(id), payload, "application/json");
+
+      // Write versioned snapshot
+      await this.store.putObject(this.versionKey(id, timestamp), payload, "application/json");
+
+      // Prune to MAX_VERSIONS
+      await this.pruneVersions(id);
+
+      return { report, spacesWritten: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log?.error({ err, reportId: id }, "Failed to write report to Spaces: %s", message);
+      return { report, spacesWritten: false, spacesError: message };
+    }
   }
 
   /**
