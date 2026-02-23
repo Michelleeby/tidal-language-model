@@ -13,6 +13,7 @@ export type { GpuInstanceResponse } from "./gpu-instance.js";
 /** GET /api/experiments */
 export interface ExperimentsResponse {
   experiments: ExperimentSummary[];
+  spacesAvailable?: boolean;
 }
 
 /** DELETE /api/experiments/:expId */

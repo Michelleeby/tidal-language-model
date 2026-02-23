@@ -34,6 +34,7 @@ export interface ReportSummary {
 
 export interface ReportsListResponse {
   reports: ReportSummary[];
+  spacesAvailable?: boolean;
 }
 
 export interface ReportResponse {

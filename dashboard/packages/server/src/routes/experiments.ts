@@ -41,7 +41,7 @@ export default async function experimentsRoutes(fastify: FastifyInstance) {
     "/api/experiments",
     async () => {
       const experiments = await discovery.listExperiments();
-      return { experiments };
+      return { experiments, spacesAvailable: fastify.objectStore.isConfigured() };
     },
   );
 
