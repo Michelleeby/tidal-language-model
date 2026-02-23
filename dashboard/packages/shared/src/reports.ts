@@ -13,6 +13,8 @@ export interface Report {
   blocks: BlockContent[];
   createdAt: number; // epoch ms
   updatedAt: number; // epoch ms
+  /** True when the report has been explicitly saved to Spaces (Phase 4). */
+  savedToSpaces?: boolean;
 }
 
 /** Lightweight summary for list views (no blocks payload). */
@@ -22,6 +24,8 @@ export interface ReportSummary {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** True when the report has local changes not yet saved to Spaces (Phase 4). */
+  isDraft?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +51,31 @@ export interface UpdateReportRequest {
 
 export interface DeleteReportResponse {
   deleted: boolean;
+}
+
+/** POST /api/reports/:id/save — explicit Spaces save (Phase 4). */
+export interface SaveReportRequest {
+  title?: string;
+  blocks?: BlockContent[];
+}
+
+export interface SaveReportResponse {
+  report: Report;
+}
+
+/** GET /api/reports/:id/versions (Phase 4). */
+export interface ReportVersion {
+  timestamp: number;
+  spacesKey: string;
+}
+
+export interface ReportVersionsResponse {
+  versions: ReportVersion[];
+}
+
+/** POST /api/reports/:id/restore (Phase 4). */
+export interface RestoreVersionRequest {
+  timestamp: number;
 }
 
 // ---------------------------------------------------------------------------

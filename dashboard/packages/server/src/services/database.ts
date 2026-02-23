@@ -254,6 +254,9 @@ export class Database {
         "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC",
       ),
       deleteAnalysis: this.db.prepare("DELETE FROM analysis_results WHERE id = ?"),
+      deleteAnalysesByExperiment: this.db.prepare(
+        "DELETE FROM analysis_results WHERE experiment_id = ?",
+      ),
     };
   }
 
@@ -462,6 +465,11 @@ export class Database {
   deleteAnalysis(id: string): boolean {
     const result = this.stmts.deleteAnalysis.run(id);
     return result.changes > 0;
+  }
+
+  deleteAnalysesByExperiment(experimentId: string): number {
+    const result = this.stmts.deleteAnalysesByExperiment.run(experimentId);
+    return result.changes;
   }
 
   // -------------------------------------------------------------------------

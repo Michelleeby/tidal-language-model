@@ -7,6 +7,7 @@ import type { PluginManifest } from "@tidal/shared";
 import { loadTidalManifest } from "./services/tidal-manifest-loader.js";
 import { migrateLegacyReports } from "./services/report-migration.js";
 import redisPlugin from "./plugins/redis.js";
+import objectStorePlugin from "./plugins/object-store.js";
 import corsPlugin from "./plugins/cors.js";
 import ssePlugin from "./plugins/sse.js";
 import authPlugin from "./plugins/auth.js";
@@ -33,6 +34,8 @@ import analyzeRoutes from "./routes/analyze.js";
 import analysesRoutes from "./routes/analyses.js";
 import allCheckpointsRoutes from "./routes/all-checkpoints.js";
 import adminRoutes from "./routes/admin.js";
+import { SpacesArchiver } from "./services/spaces-archiver.js";
+import { ArchiveScheduler } from "./services/archive-scheduler.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -92,6 +95,7 @@ async function main() {
   await fastify.register(corsPlugin);
   await fastify.register(databasePlugin);
   await fastify.register(redisPlugin, { url: config.redisUrl });
+  await fastify.register(objectStorePlugin);
   await fastify.register(ssePlugin);
   await fastify.register(authPlugin);
   await fastify.register(rateLimitPlugin);
@@ -167,11 +171,30 @@ async function main() {
     return reply.sendFile("index.html");
   });
 
+  // Register ArchiveScheduler if Spaces is configured
+  let archiveScheduler: ArchiveScheduler | null = null;
+  if (fastify.objectStore.isConfigured()) {
+    const archiver = new SpacesArchiver(fastify.objectStore, config.experimentsDir);
+    archiveScheduler = new ArchiveScheduler(
+      archiver,
+      config.experimentsDir,
+      fastify.redis,
+      fastify.log,
+    );
+    fastify.addHook("onClose", async () => {
+      archiveScheduler!.stop();
+    });
+  }
+
   // Start
   await fastify.listen({ port: config.port, host: config.host });
   fastify.log.info(
     `Dashboard server listening on http://localhost:${config.port}`,
   );
+
+  if (archiveScheduler) {
+    archiveScheduler.start();
+  }
 }
 
 main().catch((err) => {

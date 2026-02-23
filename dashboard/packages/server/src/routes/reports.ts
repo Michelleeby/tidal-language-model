@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { CreateReportRequest, UpdateReportRequest, GenerateReportRequest } from "@tidal/shared";
 import { buildPatternBlocks } from "@tidal/shared";
+import { ReportRepository } from "../services/report-repository.js";
 
 export default async function reportsRoutes(fastify: FastifyInstance) {
+  const repo = new ReportRepository(fastify.db, fastify.objectStore);
   // List all reports (summaries only)
   fastify.get("/api/reports", async () => {
     const reports = fastify.db.listReports();
@@ -88,12 +90,12 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // Delete a report
+  // Delete a report (SQLite + Spaces cleanup)
   fastify.delete<{ Params: { id: string } }>(
     "/api/reports/:id",
     { preHandler: [fastify.verifyAuth] },
     async (request, reply) => {
-      const deleted = fastify.db.deleteReport(request.params.id);
+      const deleted = await repo.delete(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Report not found" });
       }
