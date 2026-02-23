@@ -27,6 +27,12 @@ import type {
   CreateReportRequest,
   UpdateReportRequest,
   DeleteReportResponse,
+  SaveReportRequest,
+  SaveReportResponse,
+  ReportVersionsResponse,
+  RestoreVersionRequest,
+  DeleteExperimentResponse,
+  ArchiveExperimentResponse,
   PluginFileTreeResponse,
   PluginFileReadResponse,
   AnalysisListResponse,
@@ -183,6 +189,33 @@ export const api = {
   deleteReport: (id: string) =>
     fetchJson<DeleteReportResponse>(`${BASE}/reports/${id}`, {
       method: "DELETE",
+    }),
+
+  saveReport: (id: string, body: SaveReportRequest) =>
+    fetchJson<SaveReportResponse>(`${BASE}/reports/${id}/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  getReportVersions: (id: string) =>
+    fetchJson<ReportVersionsResponse>(`${BASE}/reports/${id}/versions`),
+
+  restoreReportVersion: (id: string, timestamp: number) =>
+    fetchJson<ReportResponse>(`${BASE}/reports/${id}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timestamp } satisfies RestoreVersionRequest),
+    }),
+
+  deleteExperiment: (expId: string) =>
+    fetchJson<DeleteExperimentResponse>(`${BASE}/experiments/${expId}`, {
+      method: "DELETE",
+    }),
+
+  archiveExperiment: (expId: string) =>
+    fetchJson<ArchiveExperimentResponse>(`${BASE}/experiments/${expId}/archive`, {
+      method: "POST",
     }),
 
   // Model source (read-only)
