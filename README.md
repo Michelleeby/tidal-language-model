@@ -268,6 +268,8 @@ Design decisions are documented in [`research/adrs/`](research/adrs/):
 | [0006](research/adrs/0006-ppo-lagrangian-diversity-constraint.md) | PPO-Lagrangian diversity constraint |
 | [0007](research/adrs/0007-coupled-dynamicgate-training.md) | Coupled DynamicGate training (REINFORCE through gates) |
 | [0008](research/adrs/0008-input-dependent-gating-adaptive-depth.md) | Input-dependent gating for adaptive depth |
+| [0009](research/adrs/0009-digitalocean-spaces-experiment-archival.md) | DigitalOcean Spaces for experiment archival |
+| [0010](research/adrs/0010-vastai-rate-limiting-and-constraint-relaxation.md) | Vast.ai rate limiting and progressive constraint relaxation |
 
 ## Legacy
 
