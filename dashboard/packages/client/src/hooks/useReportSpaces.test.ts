@@ -94,6 +94,14 @@ describe("useReportVersions", () => {
     callArgs.queryFn();
     expect(api.getReportVersions).toHaveBeenCalledWith("r-2");
   });
+
+  it("queryFn throws when id is null (defensive guard)", () => {
+    useReportVersions(null);
+    const callArgs = mockUseQuery.mock.calls[0][0];
+    // Even though enabled:false prevents react-query from calling queryFn,
+    // a defensive guard should throw if called with null id
+    expect(() => callArgs.queryFn()).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

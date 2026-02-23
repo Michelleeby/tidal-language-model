@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useExperimentStore } from "../stores/experimentStore.js";
 import { useReport, useUpdateReport, useReports } from "../hooks/useReports.js";
 import { useSaveReport, useReportVersions, useRestoreReportVersion } from "../hooks/useReportSpaces.js";
+import { useSpacesStatus } from "../hooks/useSpacesStatus.js";
 import BlockEditor from "../components/reports/BlockEditor.js";
 import type { ReportBlock } from "../components/reports/BlockEditor.js";
 import {
@@ -27,6 +28,7 @@ export default function ReportEditor() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+  const { spacesStatus, showStatus: showSpacesStatus } = useSpacesStatus();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blocksRef = useRef<ReportBlock[]>([]);
   const titleRef = useRef(title);
@@ -83,16 +85,28 @@ export default function ReportEditor() {
 
   const handleSaveToSpaces = () => {
     if (!selectedReportId) return;
-    saveReport.mutate({
-      id: selectedReportId,
-      title: titleRef.current,
-      blocks: blocksRef.current,
-    });
+    saveReport.mutate(
+      {
+        id: selectedReportId,
+        title: titleRef.current,
+        blocks: blocksRef.current,
+      },
+      {
+        onSuccess: () => showSpacesStatus("success", "Saved to Spaces"),
+        onError: () => showSpacesStatus("error", "Failed to save to Spaces"),
+      },
+    );
   };
 
   const handleRestoreVersion = (timestamp: number) => {
     if (!selectedReportId) return;
-    restoreVersion.mutate({ id: selectedReportId, timestamp });
+    restoreVersion.mutate(
+      { id: selectedReportId, timestamp },
+      {
+        onSuccess: () => showSpacesStatus("success", "Version restored"),
+        onError: () => showSpacesStatus("error", "Failed to restore version"),
+      },
+    );
   };
 
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -190,6 +204,17 @@ export default function ReportEditor() {
             >
               {saveReport.isPending ? "Saving..." : "Save to Spaces"}
             </button>
+          )}
+          {spacesStatus && (
+            <span
+              className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${
+                spacesStatus.type === "success"
+                  ? "text-green-400 bg-green-900/30"
+                  : "text-red-400 bg-red-900/30"
+              }`}
+            >
+              {spacesStatus.message}
+            </span>
           )}
 
           {/* Export dropdown */}

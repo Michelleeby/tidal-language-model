@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { useExperiments } from "../../hooks/useExperiments.js";
 import { useExperimentStore } from "../../stores/experimentStore.js";
 import { useDeleteExperiment, useArchiveExperiment } from "../../hooks/useExperimentActions.js";
+import { useConfirmDelete } from "../../hooks/useConfirmDelete.js";
 import type { ExperimentSummary } from "@tidal/shared";
 
 function statusColor(exp: ExperimentSummary): string {
@@ -50,7 +50,7 @@ export default function ExperimentSidebar() {
   const { data: expData, isLoading } = useExperiments();
   const deleteExperiment = useDeleteExperiment();
   const archiveExperiment = useArchiveExperiment();
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const { confirmDeleteId, requestConfirm, clearConfirm } = useConfirmDelete();
 
   const experiments = expData?.experiments ?? [];
   const spacesAvailable = expData?.spacesAvailable ?? false;
@@ -61,13 +61,12 @@ export default function ExperimentSidebar() {
       deleteExperiment.mutate(expId, {
         onSuccess: () => {
           if (selectedExpId === expId) setSelectedExpId(null);
-          setConfirmDeleteId(null);
+          clearConfirm();
         },
-        onError: () => setConfirmDeleteId(null),
+        onError: () => clearConfirm(),
       });
     } else {
-      setConfirmDeleteId(expId);
-      setTimeout(() => setConfirmDeleteId(null), 3000);
+      requestConfirm(expId);
     }
   };
 

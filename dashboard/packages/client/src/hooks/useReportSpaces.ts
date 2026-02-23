@@ -20,7 +20,10 @@ export function useSaveReport() {
 export function useReportVersions(id: string | null) {
   return useQuery({
     queryKey: ["reportVersions", id],
-    queryFn: () => api.getReportVersions(id!),
+    queryFn: () => {
+      if (!id) throw new Error("useReportVersions: id is required");
+      return api.getReportVersions(id);
+    },
     enabled: !!id,
   });
 }
