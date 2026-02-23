@@ -543,6 +543,7 @@ describe("POST /api/reports/:id/save", () => {
     const body = resp.json();
     assert.ok(body.report);
     assert.equal(body.report.title, "Saved Title");
+    assert.equal(body.spacesWritten, false, "Spaces not configured in test env");
 
     await app.close();
   });

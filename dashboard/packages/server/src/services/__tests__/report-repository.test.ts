@@ -125,7 +125,8 @@ describe("ReportRepository.save()", () => {
     });
 
     // SQLite was updated
-    assert.equal(saved?.title, "Updated Title");
+    assert.equal(saved?.report.title, "Updated Title");
+    assert.equal(saved?.spacesWritten, true);
     const fromDb = db.getReport(created.id);
     assert.equal(fromDb?.title, "Updated Title");
 
@@ -219,7 +220,9 @@ describe("ReportRepository.save()", () => {
     const saved = await repo.save(created.id, { title: "Updated", blocks: [] });
 
     // SQLite update should have worked despite Spaces failure
-    assert.equal(saved?.title, "Updated");
+    assert.equal(saved?.report.title, "Updated");
+    assert.equal(saved?.spacesWritten, false);
+    assert.ok(saved?.spacesError, "Should include error message");
     const fromDb = db.getReport(created.id);
     assert.equal(fromDb?.title, "Updated");
 
@@ -413,7 +416,8 @@ describe("ReportRepository — Spaces not configured", () => {
 
     const created = repo.create("Report Without Spaces");
     const saved = await repo.save(created.id, { title: "Saved Without Spaces" });
-    assert.equal(saved?.title, "Saved Without Spaces");
+    assert.equal(saved?.report.title, "Saved Without Spaces");
+    assert.equal(saved?.spacesWritten, false);
 
     db.close();
   });

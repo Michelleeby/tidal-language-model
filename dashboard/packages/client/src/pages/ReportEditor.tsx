@@ -92,7 +92,13 @@ export default function ReportEditor() {
         blocks: blocksRef.current,
       },
       {
-        onSuccess: () => showSpacesStatus("success", "Saved to Spaces"),
+        onSuccess: (data) => {
+          if (data.spacesWritten) {
+            showSpacesStatus("success", "Saved to Spaces");
+          } else {
+            showSpacesStatus("error", data.spacesError ?? "Spaces write failed");
+          }
+        },
         onError: () => showSpacesStatus("error", "Failed to save to Spaces"),
       },
     );
