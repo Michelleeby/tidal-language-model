@@ -467,6 +467,171 @@ describe("DELETE /api/reports/:id", () => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/reports — spacesAvailable field
+// ---------------------------------------------------------------------------
+
+describe("GET /api/reports — spacesAvailable", () => {
+  it("returns spacesAvailable: false when objectStore is not configured", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({ method: "GET", url: "/api/reports" });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().spacesAvailable, false);
+
+    await app.close();
+  });
+
+  it("returns spacesAvailable: true when objectStore is configured", async () => {
+    const mockClient = { send: async () => ({}) };
+    const mockCommands = {
+      PutObject: class { constructor(public input: Record<string, unknown>) {} },
+      DeleteObject: class { constructor(public input: Record<string, unknown>) {} },
+      DeleteObjects: class { constructor(public input: Record<string, unknown>) {} },
+      ListObjectsV2: class { constructor(public input: Record<string, unknown>) {} },
+      HeadObject: class { constructor(public input: Record<string, unknown>) {} },
+      GetObject: class { constructor(public input: Record<string, unknown>) {} },
+    };
+    const store = new ObjectStore(
+      { endpoint: "https://test.example.com", region: "us-east-1", accessKeyId: "key", secretAccessKey: "secret", bucket: "test-bucket" },
+      mockClient,
+      mockCommands as any,
+    );
+
+    const { app } = await buildApp(store);
+
+    const resp = await app.inject({ method: "GET", url: "/api/reports" });
+
+    assert.equal(resp.statusCode, 200);
+    assert.equal(resp.json().spacesAvailable, true);
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/reports/:id/save
+// ---------------------------------------------------------------------------
+
+describe("POST /api/reports/:id/save", () => {
+  it("returns 401 without auth", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/reports/${report.id}/save`,
+      payload: { title: "Saved" },
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("saves and returns the report", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app, "Original");
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/reports/${report.id}/save`,
+      headers: { authorization: AUTH_HEADER },
+      payload: { title: "Saved Title" },
+    });
+
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.ok(body.report);
+    assert.equal(body.report.title, "Saved Title");
+
+    await app.close();
+  });
+
+  it("returns 404 for non-existent report", async () => {
+    const { app } = await buildApp();
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/reports/nonexistent/save",
+      headers: { authorization: AUTH_HEADER },
+      payload: {},
+    });
+
+    assert.equal(resp.statusCode, 404);
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/reports/:id/versions
+// ---------------------------------------------------------------------------
+
+describe("GET /api/reports/:id/versions", () => {
+  it("returns empty versions array when Spaces not configured", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/reports/${report.id}/versions`,
+    });
+
+    assert.equal(resp.statusCode, 200);
+    assert.deepEqual(resp.json().versions, []);
+
+    await app.close();
+  });
+
+  it("does not require auth", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "GET",
+      url: `/api/reports/${report.id}/versions`,
+    });
+
+    assert.equal(resp.statusCode, 200);
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/reports/:id/restore
+// ---------------------------------------------------------------------------
+
+describe("POST /api/reports/:id/restore", () => {
+  it("returns 401 without auth", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/reports/${report.id}/restore`,
+      payload: { timestamp: 12345 },
+    });
+
+    assert.equal(resp.statusCode, 401);
+    await app.close();
+  });
+
+  it("returns 404 when Spaces not configured (nothing to restore)", async () => {
+    const { app } = await buildApp();
+    const report = await createReport(app);
+
+    const resp = await app.inject({
+      method: "POST",
+      url: `/api/reports/${report.id}/restore`,
+      headers: { authorization: AUTH_HEADER },
+      payload: { timestamp: 12345 },
+    });
+
+    assert.equal(resp.statusCode, 404);
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/reports/generate
 // ---------------------------------------------------------------------------
 

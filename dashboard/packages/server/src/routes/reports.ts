@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import type { CreateReportRequest, UpdateReportRequest, GenerateReportRequest } from "@tidal/shared";
+import type {
+  CreateReportRequest,
+  UpdateReportRequest,
+  GenerateReportRequest,
+  SaveReportRequest,
+  RestoreVersionRequest,
+} from "@tidal/shared";
 import { buildPatternBlocks } from "@tidal/shared";
 import { ReportRepository } from "../services/report-repository.js";
 
@@ -8,7 +14,7 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
   // List all reports (summaries only)
   fastify.get("/api/reports", async () => {
     const reports = fastify.db.listReports();
-    return { reports };
+    return { reports, spacesAvailable: fastify.objectStore.isConfigured() };
   });
 
   // Get a single report by id
@@ -46,6 +52,45 @@ export default async function reportsRoutes(fastify: FastifyInstance) {
       });
       if (!report) {
         return reply.status(404).send({ error: "Report not found" });
+      }
+      return { report };
+    },
+  );
+
+  // Explicit save to Spaces (creates versioned snapshot)
+  fastify.post<{ Params: { id: string }; Body: SaveReportRequest }>(
+    "/api/reports/:id/save",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const report = await repo.save(request.params.id, {
+        title: request.body?.title,
+        blocks: request.body?.blocks,
+      });
+      if (!report) {
+        return reply.status(404).send({ error: "Report not found" });
+      }
+      return { report };
+    },
+  );
+
+  // List saved versions from Spaces
+  fastify.get<{ Params: { id: string } }>(
+    "/api/reports/:id/versions",
+    async (request) => {
+      const versions = await repo.listVersions(request.params.id);
+      return { versions };
+    },
+  );
+
+  // Restore a historical version from Spaces
+  fastify.post<{ Params: { id: string }; Body: RestoreVersionRequest }>(
+    "/api/reports/:id/restore",
+    { preHandler: [fastify.verifyAuth] },
+    async (request, reply) => {
+      const { timestamp } = request.body ?? {};
+      const report = await repo.restoreVersion(request.params.id, timestamp);
+      if (!report) {
+        return reply.status(404).send({ error: "Version not found" });
       }
       return { report };
     },

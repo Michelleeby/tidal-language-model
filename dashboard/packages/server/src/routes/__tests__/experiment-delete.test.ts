@@ -8,6 +8,7 @@ import cookie from "@fastify/cookie";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../../config.js";
 import { Database } from "../../services/database.js";
+import { ObjectStore } from "../../services/object-store.js";
 import authPlugin from "../../plugins/auth.js";
 import experimentsRoutes from "../experiments.js";
 
@@ -88,6 +89,7 @@ async function buildApp(opts?: {
   app.decorate("redis", redisMock as any);
   app.decorate("tidalManifest", null);
   app.decorate("db", db);
+  app.decorate("objectStore", new ObjectStore(null));
 
   await app.register(cookie);
   await app.register(authPlugin);
