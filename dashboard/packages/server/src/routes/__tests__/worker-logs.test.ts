@@ -178,6 +178,117 @@ function seedJob(
 // POST /api/workers/:jobId/logs
 // ---------------------------------------------------------------------------
 
+describe("POST /api/workers/:jobId/logs — 7-day fallback TTL", () => {
+  it("sets a 7-day fallback TTL on the log key during ingestion", async () => {
+    const app = Fastify({ logger: false });
+
+    const jobStore = new Map<string, string>();
+    const lists = new Map<string, string[]>();
+    const expireCalls: Array<{ key: string; ttl: number }> = [];
+
+    const redisMock = {
+      hget: async (_hash: string, jobId: string) => jobStore.get(jobId) ?? null,
+      hset: async () => 0,
+      get: async () => null,
+      set: async () => "OK",
+      del: async () => 0,
+      sadd: async () => 0,
+      srem: async () => 0,
+      rpush: async (key: string, ...values: string[]) => {
+        if (!lists.has(key)) lists.set(key, []);
+        lists.get(key)!.push(...values);
+        return lists.get(key)!.length;
+      },
+      ltrim: async (key: string, start: number, stop: number) => {
+        const list = lists.get(key);
+        if (!list) return "OK";
+        const len = list.length;
+        const s = start < 0 ? Math.max(0, len + start) : start;
+        const e = stop < 0 ? len + stop : stop;
+        lists.set(key, list.slice(s, e + 1));
+        return "OK";
+      },
+      lrange: async (key: string, start: number, stop: number) => {
+        const list = lists.get(key) ?? [];
+        const len = list.length;
+        const s = start < 0 ? Math.max(0, len + start) : start;
+        const e = stop < 0 ? len + stop : stop;
+        return list.slice(s, e + 1);
+      },
+      llen: async (key: string) => lists.get(key)?.length ?? 0,
+      // Track expire calls for assertion
+      expire: async (key: string, ttl: number) => {
+        expireCalls.push({ key, ttl });
+        return 1;
+      },
+      publish: async () => 0,
+      pipeline: () => ({
+        exec: async () => [],
+        rpush: () => redisMock.pipeline(),
+        ltrim: () => redisMock.pipeline(),
+        set: () => redisMock.pipeline(),
+      }),
+      duplicate: () => ({
+        subscribe: async () => {},
+        on: () => {},
+        disconnect: () => {},
+      }),
+    };
+
+    app.decorate("redis", redisMock as unknown as Redis);
+    app.decorate("serverConfig", {
+      experimentsDir: "/tmp/tidal-test-experiments",
+    } as unknown as ServerConfig);
+    app.decorate("sseManager", {
+      broadcastJobUpdate: () => {},
+      broadcastLogLines: () => {},
+    } as unknown as SSEManager);
+    app.decorate("tidalManifest", null);
+    app.decorate("provisioningChain", { getProvider: () => undefined } as any);
+    app.decorate("workerSpawner", {} as any);
+    app.decorate("verifyAuth", async () => {});
+
+    await app.register(workerRoutes);
+
+    jobStore.set(
+      "job-ttl-test",
+      JSON.stringify({
+        jobId: "job-ttl-test",
+        type: "lm-training",
+        status: "running",
+        provider: "local",
+        config: { type: "lm-training", plugin: "tidal", configPath: "configs/base.yaml" },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/workers/job-ttl-test/logs",
+      payload: {
+        lines: [{ timestamp: 1000, stream: "stdout", line: "hello" }],
+      },
+    });
+
+    assert.equal(resp.statusCode, 200, `Expected 200, got ${resp.statusCode}: ${resp.body}`);
+
+    // The log key should have had expire() called with 7-day TTL (604_800 seconds)
+    const logKeyExpire = expireCalls.find((c) => c.key === "tidal:logs:job-ttl-test");
+    assert.ok(
+      logKeyExpire,
+      `Expected expire() to be called for 'tidal:logs:job-ttl-test', calls were: ${JSON.stringify(expireCalls)}`,
+    );
+    assert.equal(
+      logKeyExpire!.ttl,
+      604_800,
+      `Expected 7-day TTL (604800), got ${logKeyExpire!.ttl}`,
+    );
+
+    await app.close();
+  });
+});
+
 describe("POST /api/workers/:jobId/logs", () => {
   it("ingests log lines to Redis list", async () => {
     const app = await buildApp();

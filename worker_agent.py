@@ -140,9 +140,9 @@ class HttpTransport(Transport):
             "User-Agent": "TidalWorker/1.0",
         })
         retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[502, 503, 504],
+            total=5,
+            backoff_factor=2,
+            status_forcelist=[429, 502, 503, 504],
         )
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("http://", adapter)
@@ -501,7 +501,13 @@ class WorkerAgent:
         return self.process.returncode or 0
 
     def _flush_logs(self):
-        """Send buffered log lines to the transport."""
+        """Send buffered log lines to the transport.
+
+        The batch is cleared from the buffer before the send so that new lines
+        can accumulate concurrently.  On failure, the batch is prepended back
+        so no lines are permanently lost; the buffer is capped at 50k lines to
+        prevent unbounded growth during prolonged transport outages.
+        """
         with self._log_lock:
             if not self._log_buffer:
                 return
@@ -510,7 +516,11 @@ class WorkerAgent:
         try:
             self.transport.send_logs(self.job_id, batch)
         except Exception as e:
-            print(f"Failed to flush logs: {e}", file=sys.stderr)
+            print(f"Failed to flush logs (will retry): {e}", file=sys.stderr)
+            with self._log_lock:
+                self._log_buffer = batch + self._log_buffer
+                if len(self._log_buffer) > 50_000:
+                    self._log_buffer = self._log_buffer[-50_000:]
 
     def _get_stderr_tail(self, lines: int = 10) -> str:
         """Return the last N lines of captured stderr."""

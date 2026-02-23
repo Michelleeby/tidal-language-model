@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { TrainingJob } from "@tidal/shared";
-import { VastAIProvider, type VastAIProviderConfig } from "../vastai-provider.js";
+import { VastAIProvider, type VastAIProviderConfig, type ProvisionConstraints } from "../vastai-provider.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +38,9 @@ function silentLogger() {
   } as unknown as VastAIProviderConfig["log"];
 }
 
+// Fast limiter config prevents real waits during tests
+const FAST_LIMITER = { capacity: 100, refillRatePerMs: 100 };
+
 function makeProvider(overrides: Partial<VastAIProviderConfig> = {}): VastAIProvider {
   return new VastAIProvider({
     apiKey: "test-key",
@@ -45,6 +48,7 @@ function makeProvider(overrides: Partial<VastAIProviderConfig> = {}): VastAIProv
     authToken: "test-token",
     repoUrl: "https://github.com/test/repo.git",
     log: silentLogger(),
+    rateLimiter: FAST_LIMITER,
     ...overrides,
   });
 }
@@ -385,5 +389,250 @@ describe("VastAIProvider.provision()", () => {
     assert.equal(meta.cudaMaxGood, null);
     assert.equal(meta.reliability, null);
     assert.equal(typeof meta.capturedAt, "number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Constraint relaxation tiers
+// ---------------------------------------------------------------------------
+
+describe("VastAIProvider.provision() — constraint relaxation tiers", () => {
+  let restoreFetch: (() => void) | undefined;
+
+  afterEach(() => {
+    restoreFetch?.();
+    restoreFetch = undefined;
+  });
+
+  it("succeeds on tier 0 (strict) without relaxation and sets constraintTier=0", async () => {
+    const offers = [makeOffer(700)];
+    restoreFetch = installFakeFetch({
+      offers,
+      createResponses: new Map([[700, { ok: true, status: 200, body: { new_contract: 8000 } }]]),
+    });
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    assert.equal(result.meta?.instanceId, 8000);
+    assert.equal(result.meta?.constraintTier, 0, "Should record tier 0 when strict constraints match");
+  });
+
+  it("falls back to tier 1 when tier 0 yields no offers", async () => {
+    let bundleCallCount = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/bundles")) {
+        bundleCallCount++;
+        // Tier 0: no offers; Tier 1+: one offer
+        const offers = bundleCallCount === 1 ? [] : [makeOffer(800)];
+        return new Response(JSON.stringify({ offers }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const askMatch = url.match(/\/asks\/(\d+)\//);
+      if (askMatch && init?.method === "PUT") {
+        return new Response(JSON.stringify({ new_contract: 9100 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return originalFetch(input, init as RequestInit);
+    }) as typeof globalThis.fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    assert.equal(result.meta?.instanceId, 9100);
+    assert.equal(result.meta?.constraintTier, 1, "Should record tier 1 when falling back");
+    assert.ok(bundleCallCount >= 2, "Should have searched at least twice (once per tier)");
+  });
+
+  it("fails after all tiers are exhausted with no offers", async () => {
+    restoreFetch = installFakeFetch({
+      offers: [], // No offers at any tier
+      createResponses: new Map(),
+    });
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, false);
+    assert.ok(result.error, "Should return an error message");
+  });
+
+  it("non-retryable offer error in tier 0 still tries tier 1", async () => {
+    let bundleCallCount = 0;
+    const createCalls: number[] = [];
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/bundles")) {
+        bundleCallCount++;
+        // Both tiers return offers
+        return new Response(JSON.stringify({ offers: [makeOffer(900)] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const askMatch = url.match(/\/asks\/(\d+)\//);
+      if (askMatch && init?.method === "PUT") {
+        const offerId = Number(askMatch[1]);
+        createCalls.push(offerId);
+        if (bundleCallCount === 1) {
+          // Tier 0: non-retryable auth error
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        // Tier 1: success
+        return new Response(JSON.stringify({ new_contract: 9200 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return originalFetch(input, init as RequestInit);
+    }) as typeof globalThis.fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true, "Should succeed on tier 1 even if tier 0 had non-retryable error");
+    assert.equal(result.meta?.constraintTier, 1);
+  });
+
+  it("provider meta includes constraintTier on success", async () => {
+    const offers = [makeRichOffer(1000, 0.55)];
+    restoreFetch = installFakeFetch({
+      offers,
+      createResponses: new Map([
+        [1000, { ok: true, status: 200, body: { new_contract: 9999 } }],
+      ]),
+    });
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    assert.equal(typeof result.meta?.constraintTier, "number");
+    assert.ok(result.meta!.constraintTier >= 0, "constraintTier should be non-negative");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 429 rate limit retry
+// ---------------------------------------------------------------------------
+
+describe("VastAIProvider.provision() — 429 retry via this.fetch wrapper", () => {
+  let restoreFetch: (() => void) | undefined;
+
+  afterEach(() => {
+    restoreFetch?.();
+    restoreFetch = undefined;
+  });
+
+  it("retries on 429 and succeeds after backoff", async () => {
+    let searchCallCount = 0;
+    let createCallCount = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/bundles")) {
+        searchCallCount++;
+        if (searchCallCount === 1) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: { "Content-Type": "text/plain", "Retry-After": "0" },
+          });
+        }
+        return new Response(JSON.stringify({ offers: [makeOffer(1100)] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const askMatch = url.match(/\/asks\/(\d+)\//);
+      if (askMatch && init?.method === "PUT") {
+        createCallCount++;
+        return new Response(JSON.stringify({ new_contract: 9300 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return originalFetch(input, init as RequestInit);
+    }) as typeof globalThis.fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, true);
+    assert.equal(result.meta?.instanceId, 9300);
+    assert.ok(searchCallCount >= 2, "Should have retried the search after 429");
+  });
+
+  it("fails after max 429 retries are exhausted", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/bundles")) {
+        return new Response("Too Many Requests", {
+          status: 429,
+          headers: { "Content-Type": "text/plain", "Retry-After": "0" },
+        });
+      }
+
+      return originalFetch(input);
+    }) as typeof globalThis.fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+
+    const provider = makeProvider();
+    const result = await provider.provision(makeJob());
+
+    assert.equal(result.success, false);
+    assert.ok(result.error, "Should return an error after max retries");
   });
 });
